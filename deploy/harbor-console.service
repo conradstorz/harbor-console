@@ -1,0 +1,22 @@
+[Unit]
+Description=Harbor Console dashboard
+After=systemd-user-sessions.service network-online.target
+Wants=network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/opt/harbor-console/.venv/bin/harbor-console
+Restart=always
+RestartSec=2
+User=root
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=journal
+TTYReset=yes
+TTYVHangup=yes
+Environment=TERM=linux
+
+[Install]
+WantedBy=multi-user.target
