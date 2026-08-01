@@ -36,14 +36,16 @@ physical keyboard, even if the dashboard crash-loops.
 
 ## Update
 
-Re-run `sudo deploy/install.sh`, or manually:
+Re-run the installer from an **updated checkout of the repository**:
 
 ```bash
-cd /opt/harbor-console
-sudo git pull        # if deployed from a clone
-sudo uv sync
-sudo systemctl restart harbor-console
+sudo deploy/install.sh
 ```
+
+It re-syncs `/opt/harbor-console`, rebuilds the virtualenv with `uv sync`, and
+restarts the service so the new code takes effect. Note: `/opt/harbor-console`
+is a copy, not a git clone — pull updates in your checkout, then re-run the
+installer.
 
 ## Uninstall
 

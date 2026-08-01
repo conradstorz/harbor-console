@@ -3,6 +3,7 @@ Description=Harbor Console dashboard
 After=systemd-user-sessions.service network-online.target
 Wants=network-online.target
 Conflicts=getty@tty1.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
