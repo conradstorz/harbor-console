@@ -147,8 +147,9 @@ systemctl daemon-reload
 echo "==> Masking getty@tty1 (disables the login prompt on tty1 only)"
 systemctl mask getty@tty1.service
 
-echo "==> Enabling and starting ${UNIT_NAME}"
-systemctl enable --now "${UNIT_NAME}"
+echo "==> Enabling ${UNIT_NAME} and (re)starting it to load current code"
+systemctl enable "${UNIT_NAME}"
+systemctl restart "${UNIT_NAME}"
 
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
