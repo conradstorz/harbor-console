@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harbor-console"
+version = "0.1.0"
+description = "Lightweight terminal dashboard for Linux servers"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "rich>=13.7",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+harbor-console = "harbor_console.app:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
