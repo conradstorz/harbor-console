@@ -15,6 +15,7 @@ the reasoning, including reasoning we later moved away from.
 | 0002 | [Refresh once per second](0002-refresh-once-per-second.md)  | Accepted |
 | 0003 | [No plugins (and no config) in the MVP](0003-no-plugins-in-mvp.md) | Accepted |
 | 0004 | [Run as a systemd service that owns tty1](0004-systemd-tty1-service.md) | Accepted |
+| 0005 | [Run as a dedicated `harbor` user, not root](0005-run-as-harbor-user.md) | Accepted |
 
 ## Adding a new ADR
 

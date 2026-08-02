@@ -4,7 +4,7 @@ Date: 2026-08-01
 
 ## Status
 
-Accepted
+Accepted — the run-as-root aspect is amended by [ADR 5](0005-run-as-harbor-user.md).
 
 ## Context
 

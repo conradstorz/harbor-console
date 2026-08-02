@@ -23,6 +23,8 @@ The installer is idempotent — re-run it any time to update.
 ### What it changes
 
 - Copies the repo to `/opt/harbor-console` and builds `.venv` with `uv sync`.
+- Creates a `harbor` system user (added to the `docker` group) that owns
+  `/opt/harbor-console` and runs the service.
 - Installs `/etc/systemd/system/harbor-console.service`.
 - Masks `getty@tty1.service` (removes the login prompt on **tty1 only**).
 - Enables and starts `harbor-console.service`.
@@ -51,7 +53,7 @@ installer.
 
 ```bash
 sudo deploy/uninstall.sh          # restores the tty1 login prompt
-sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console
+sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console and the harbor user
 ```
 
 ## Troubleshooting
@@ -67,6 +69,8 @@ sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console
 1. Validate the unit: `systemd-analyze verify deploy/harbor-console.service`
    → no output, exit 0.
 2. Reboot → the dashboard appears on the attached monitor (tty1).
-3. `sudo systemctl kill harbor-console` → the dashboard returns within ~2s.
-4. Press Ctrl+Alt+F2 → a normal login prompt is available.
-5. `sudo deploy/uninstall.sh` → the login prompt returns on tty1.
+3. Confirm the Docker container count is correct (not stuck at 0) — verifies the
+   `harbor` user's `docker`-group access.
+4. `sudo systemctl kill harbor-console` → the dashboard returns within ~2s.
+5. Press Ctrl+Alt+F2 → a normal login prompt is available.
+6. `sudo deploy/uninstall.sh` → the login prompt returns on tty1.

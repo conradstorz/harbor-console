@@ -1,5 +1,11 @@
 # Harbor Console Deployment Implementation Plan
 
+> **Amended 2026-08-01:** the service runs as a dedicated `harbor` user with
+> conservative systemd hardening rather than `root` — see
+> [ADR 5](../../adr/0005-run-as-harbor-user.md) and
+> [the dedicated-user increment plan](2026-08-01-deployment-nonroot.md). The
+> `User=root` and install/uninstall snippets below reflect the original design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Harbor Console start automatically on boot and take over the physical console (`tty1`), fulfilling the MVP's "automatically starts" release criterion.
