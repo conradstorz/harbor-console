@@ -9,6 +9,7 @@ and removal.
 - A systemd-based Linux host.
 - Root access (`sudo`).
 - [`uv`](https://docs.astral.sh/uv/) and `rsync` installed on the host.
+- Docker installed — the service user joins the `docker` group, and the unit will not start without it.
 
 ## Install
 

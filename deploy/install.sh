@@ -28,6 +28,11 @@ require_root
 require_cmd uv "Install it first: https://docs.astral.sh/uv/"
 require_cmd rsync "Install it with your package manager (e.g. apt install rsync)."
 
+if ! getent group docker >/dev/null 2>&1; then
+  echo "Error: the 'docker' group does not exist. The service unit sets SupplementaryGroups=docker and will not start without it. Install Docker first." >&2
+  exit 1
+fi
+
 echo "==> Syncing repository to ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"
 rsync -a --delete \
@@ -43,14 +48,10 @@ echo "==> Building virtualenv with uv sync"
 
 echo "==> Ensuring 'harbor' service user exists"
 if ! id -u harbor >/dev/null 2>&1; then
-  useradd --system --no-create-home --home-dir "${INSTALL_DIR}" --shell /usr/sbin/nologin harbor
+  useradd --system --user-group --no-create-home --home-dir "${INSTALL_DIR}" --shell /usr/sbin/nologin harbor
 fi
 
-if getent group docker >/dev/null 2>&1; then
-  usermod -aG docker harbor
-else
-  echo "Note: 'docker' group not found — Docker container count will show 0." >&2
-fi
+usermod -aG docker harbor
 
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"

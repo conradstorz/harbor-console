@@ -23,7 +23,7 @@ the change is mostly operational hygiene plus modest defense-in-depth.
 ## Decision
 
 Run the service as a dedicated **system** user `harbor`
-(`useradd --system --no-create-home --shell /usr/sbin/nologin`), added to the
+(`useradd --system --user-group --no-create-home --home-dir /opt/harbor-console --shell /usr/sbin/nologin`), added to the
 `docker` group so the container count keeps working. The unit sets
 `User=harbor` / `Group=harbor` / `SupplementaryGroups=docker` and a conservative
 slice of sandboxing: `NoNewPrivileges=yes`, `ProtectHome=yes`, `PrivateTmp=yes`.
@@ -39,7 +39,7 @@ slice of sandboxing: `NoNewPrivileges=yes`, `ProtectHome=yes`, `PrivateTmp=yes`.
   is limited; the win is primarily hygiene and defense-in-depth.
 - `SupplementaryGroups=docker` requires the `docker` group to exist on the host,
   or the unit fails to start; the target runs Docker, so this holds. `install.sh`
-  warns if the group is absent.
+  treats the docker group as a prerequisite and fails fast if it is absent.
 - Heavier sandboxing (`ProtectSystem=strict`, `RestrictAddressFamilies`, …) is
   intentionally deferred and should be tuned on the box with
   `systemd-analyze security harbor-console.service` — it can subtly break the

@@ -9,7 +9,7 @@
 ## Global Constraints
 
 - Service user: `harbor`, a **system** user (`useradd --system --no-create-home --home-dir /opt/harbor-console --shell /usr/sbin/nologin`), no login.
-- `harbor` must be added to the `docker` group (Docker count matters on the target); if the `docker` group is absent, warn and continue (count degrades to 0).
+- `harbor` must be added to the `docker` group (Docker count matters on the target); the `docker` group is a prerequisite — `install.sh` fails fast if it is absent, because the unit's `SupplementaryGroups=docker` will not start without it.
 - Conservative hardening ONLY: `NoNewPrivileges=yes`, `ProtectHome=yes`, `PrivateTmp=yes`. **Never** add `PrivateDevices` (severs `/dev/tty1`) or `PrivateNetwork` (breaks the IPv4 probe).
 - Keep everything else from the shipped unit (tty1 binding, `Restart=always`, `RestartSec=2`, `StartLimitIntervalSec=0`, `Environment=TERM=linux`).
 - All scripts remain `#!/usr/bin/env bash` + `set -euo pipefail`, idempotent, fail-fast.
