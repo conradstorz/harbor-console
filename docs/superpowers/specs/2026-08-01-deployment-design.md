@@ -1,7 +1,7 @@
 # Harbor Console — Deployment Design
 
 Date: 2026-08-01
-Status: Approved (design), pending implementation
+Status: Implemented on branch feat/deployment (PR #2)
 
 ## Purpose
 
@@ -46,8 +46,7 @@ No changes to `src/` or `tests/`.
 ```ini
 [Unit]
 Description=Harbor Console dashboard
-After=systemd-user-sessions.service network-online.target
-Wants=network-online.target
+After=systemd-user-sessions.service
 Conflicts=getty@tty1.service
 
 [Service]
@@ -82,10 +81,10 @@ Rationale for the non-obvious directives:
 - **`Conflicts=getty@tty1.service`** — declares the mutual exclusion with the
   login prompt; the installer additionally masks getty so it never starts on
   `tty1`.
-- **`Wants=network-online.target` (not `Requires`)** — a slow or absent network
-  must not block boot. `get_ipv4_address()` falls back to `127.0.0.1` and the
-  Docker count to `0`, and both self-heal on the next one-second refresh once the
-  network is up.
+- **No network ordering** — the unit does not wait for network to be ready, so
+  the dashboard appears immediately at boot. IPv4 detection falls back to
+  `127.0.0.1` and the Docker count to `0`, and both self-heal on the next
+  one-second refresh, so a slow or absent network never delays startup.
 - **`TTYReset=yes`, `TTYVHangup=yes`** — reset the console and hang up any stray
   sessions on start/stop so the display is clean.
 

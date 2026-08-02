@@ -42,8 +42,7 @@ Create `deploy/harbor-console.service`:
 ```ini
 [Unit]
 Description=Harbor Console dashboard
-After=systemd-user-sessions.service network-online.target
-Wants=network-online.target
+After=systemd-user-sessions.service
 Conflicts=getty@tty1.service
 StartLimitIntervalSec=0
 

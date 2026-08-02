@@ -67,7 +67,7 @@ sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console and the har
 
 ## Smoke test (run once on the target)
 
-1. Validate the unit: `systemd-analyze verify deploy/harbor-console.service`
+1. Validate the installed unit: `systemd-analyze verify /etc/systemd/system/harbor-console.service`
    → no output, exit 0.
 2. Reboot → the dashboard appears on the attached monitor (tty1).
 3. Confirm the Docker container count is correct (not stuck at 0) — verifies the
