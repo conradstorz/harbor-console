@@ -31,8 +31,12 @@ systemctl start getty@tty1.service 2>/dev/null || true
 if [[ ${PURGE} -eq 1 ]]; then
   echo "==> Purging ${INSTALL_DIR}"
   rm -rf "${INSTALL_DIR}"
+  if id -u harbor >/dev/null 2>&1; then
+    echo "==> Removing 'harbor' service user"
+    userdel harbor 2>/dev/null || true
+  fi
 else
-  echo "==> Leaving ${INSTALL_DIR} in place (use --purge to remove it)"
+  echo "==> Leaving ${INSTALL_DIR} and 'harbor' user in place (use --purge to remove them)"
 fi
 
 echo "Harbor Console has been uninstalled."

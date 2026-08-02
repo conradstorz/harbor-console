@@ -41,6 +41,20 @@ rsync -a --delete \
 echo "==> Building virtualenv with uv sync"
 ( cd "${INSTALL_DIR}" && uv sync )
 
+echo "==> Ensuring 'harbor' service user exists"
+if ! id -u harbor >/dev/null 2>&1; then
+  useradd --system --no-create-home --home-dir "${INSTALL_DIR}" --shell /usr/sbin/nologin harbor
+fi
+
+if getent group docker >/dev/null 2>&1; then
+  usermod -aG docker harbor
+else
+  echo "Note: 'docker' group not found — Docker container count will show 0." >&2
+fi
+
+echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
+chown -R harbor:harbor "${INSTALL_DIR}"
+
 echo "==> Installing systemd unit to ${UNIT_DEST}"
 install -m 0644 "${SCRIPT_DIR}/${UNIT_NAME}" "${UNIT_DEST}"
 systemctl daemon-reload
