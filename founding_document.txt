@@ -1,0 +1,190 @@
+Harbor Console
+
+Vision
+
+Harbor Console is a lightweight terminal dashboard for Linux servers.
+
+Its purpose is simple:
+
+Replace the default Linux login console with a useful operational dashboard.
+
+Engineering Principles
+
+MVP First
+
+YAGNI
+
+KISS
+
+DRY
+
+Test Driven Development
+
+Main is Always Deployable
+
+MVP (v0.1.0)
+
+The first release shall display:
+
+Hostname
+
+Uptime
+
+CPU utilization
+
+Memory utilization
+
+Disk utilization
+
+IPv4 address
+
+Docker container count
+
+Current date/time
+
+The display refreshes once per second.
+
+The application exits cleanly with Ctrl+C.
+
+No configuration files.
+
+No plugins.
+
+No colors are required.
+
+No keyboard shortcuts.
+
+No historical graphs.
+
+No databases.
+
+No web server.
+
+Technology
+
+Python 3.13+
+
+uv
+
+rich
+
+psutil
+
+pytest
+
+Repository Layout
+
+harbor-console/
+├── README.md
+├── LICENSE
+├── pyproject.toml
+├── src/
+│   └── harbor_console/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── app.py
+│       ├── system.py
+│       └── ui.py
+├── tests/
+│   ├── test_app.py
+│   └── test_system.py
+└── docs/
+    └── architecture.md
+
+Initial Features
+
+system.py
+
+Responsible for collecting:
+
+hostname
+
+uptime
+
+CPU usage
+
+memory usage
+
+disk usage
+
+IPv4 address
+
+Docker container count
+
+ui.py
+
+Responsible only for rendering.
+
+No business logic.
+
+app.py
+
+Coordinates refresh loop.
+
+Refresh interval:
+
+1 second
+
+Release Criteria
+
+The project is complete when:
+
+It automatically starts.
+
+It continuously updates.
+
+It never crashes during normal operation.
+
+The Linux login console is no longer preferred.
+
+Deferred Until Later
+
+These are intentionally excluded.
+
+Plugin architecture
+
+Colors
+
+Unicode artwork
+
+Themes
+
+Configuration files
+
+YAML
+
+Interactive menus
+
+Function keys
+
+Service control
+
+Docker management
+
+SMART monitoring
+
+GPU monitoring
+
+UPS monitoring
+
+Atlas integration
+
+GTE integration
+
+Harbor Window integration
+
+ARM integration
+
+Notifications
+
+Remote monitoring
+
+They will be added only after a real operational need is demonstrated.
+
+Definition of Success
+
+A successful MVP answers one question in under five seconds:
+
+"Is my server healthy?"
+
+If the answer is obvious at a glance, version 0.1.0 has achieved its purpose.
