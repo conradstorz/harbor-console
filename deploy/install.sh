@@ -38,10 +38,18 @@ mkdir -p "${INSTALL_DIR}"
 rsync -a --delete \
   --exclude '.git' \
   --exclude '.venv' \
+  --exclude '.uv-python' \
   --exclude '__pycache__' \
   --exclude '.pytest_cache' \
   --exclude '*.egg-info' \
   "${REPO_ROOT}/" "${INSTALL_DIR}/"
+
+# The service runs as the unprivileged 'harbor' user with ProtectHome=yes. This host
+# has no Python 3.13+, so uv installs a managed CPython; by default it lands under root's
+# home (/root/.local/share/uv/python), which harbor cannot read and ProtectHome hides —
+# the venv symlinks to it and the service dies with 203/EXEC. Pin the managed interpreter
+# inside INSTALL_DIR so the chown below makes it harbor-readable and ProtectHome-safe.
+export UV_PYTHON_INSTALL_DIR="${INSTALL_DIR}/.uv-python"
 
 echo "==> Building virtualenv with uv sync"
 ( cd "${INSTALL_DIR}" && uv sync )
