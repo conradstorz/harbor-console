@@ -51,6 +51,21 @@ rsync -a --delete \
 # inside INSTALL_DIR so the chown below makes it harbor-readable and ProtectHome-safe.
 export UV_PYTHON_INSTALL_DIR="${INSTALL_DIR}/.uv-python"
 
+# Self-heal an install left by an older installer (or a moved interpreter): if an
+# existing venv's Python resolves into a home directory, harbor can't exec it under
+# ProtectHome, and `uv sync` would happily keep that venv. Drop it so uv rebuilds
+# against the pinned location above. Venvs on system paths (/usr) or already inside
+# INSTALL_DIR are fine and left untouched.
+if [[ -e "${INSTALL_DIR}/.venv/bin/python" ]]; then
+  current_py=$(readlink -f "${INSTALL_DIR}/.venv/bin/python" 2>/dev/null || true)
+  case "${current_py}" in
+    /root/*|/home/*)
+      echo "==> Removing stale venv (interpreter under a home dir: ${current_py})"
+      rm -rf "${INSTALL_DIR}/.venv"
+      ;;
+  esac
+fi
+
 echo "==> Building virtualenv with uv sync"
 ( cd "${INSTALL_DIR}" && uv sync )
 
