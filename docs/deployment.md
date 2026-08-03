@@ -24,7 +24,7 @@ The installer is idempotent — re-run it any time to update.
 ### What it changes
 
 - Copies the repo to `/opt/harbor-console` and builds `.venv` with `uv sync`.
-  If the host has no Python 3.13+, uv fetches a managed interpreter into
+  If the host has no Python 3.13+, `uv` fetches a managed interpreter into
   `/opt/harbor-console/.uv-python` (not root's home) so the unprivileged `harbor`
   user — running under `ProtectHome=yes` — can execute it.
 - Creates a `harbor` system user (added to the `docker` group) that owns
@@ -68,8 +68,8 @@ sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console and the har
   masked (`systemctl is-enabled getty@tty1`); switch to the console with
   Ctrl+Alt+F1.
 - `status=203/EXEC` / `Permission denied` executing `.venv/bin/harbor-console`:
-  the venv's Python points somewhere the `harbor` user can't reach (e.g. a uv
-  managed interpreter under `/root`, which `ProtectHome=yes` also hides). Re-run
+  the venv's Python points somewhere the `harbor` user can't reach (e.g. a
+  `uv`-managed interpreter under `/root`, which `ProtectHome=yes` also hides). Re-run
   the installer — it pins the interpreter under `/opt/harbor-console/.uv-python`.
   Verify with `readlink -f /opt/harbor-console/.venv/bin/python` (must resolve
   inside `/opt/harbor-console`).

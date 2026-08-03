@@ -44,8 +44,8 @@ rsync -a --delete \
   --exclude '*.egg-info' \
   "${REPO_ROOT}/" "${INSTALL_DIR}/"
 
-# The service runs as the unprivileged 'harbor' user with ProtectHome=yes. This host
-# has no Python 3.13+, so uv installs a managed CPython; by default it lands under root's
+# The service runs as the unprivileged 'harbor' user with ProtectHome=yes. If the host
+# has no Python 3.13+, uv installs a managed CPython; by default it lands under root's
 # home (/root/.local/share/uv/python), which harbor cannot read and ProtectHome hides —
 # the venv symlinks to it and the service dies with 203/EXEC. Pin the managed interpreter
 # inside INSTALL_DIR so the chown below makes it harbor-readable and ProtectHome-safe.
