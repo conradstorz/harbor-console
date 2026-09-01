@@ -18,6 +18,8 @@ the reasoning, including reasoning we later moved away from.
 | 0005 | [Run as a dedicated `harbor` user, not root](0005-run-as-harbor-user.md) | Accepted |
 | 0006 | [Expand scope to a service registry and a tailnet status page](0006-service-registry-and-web-status-page.md) | Accepted |
 | 0007 | [Bind the web status page to the Tailscale address only](0007-bind-tailscale-address-only.md) | Accepted |
+| 0008 | [Allocate ports rather than validate them](0008-allocate-ports-rather-than-validate.md) | Accepted |
+| 0009 | [Write every file atomically, and write `.env` last](0009-atomic-writes-and-env-last.md) | Accepted |
 
 ## Adding a new ADR
 

@@ -1,0 +1,12 @@
+# harbor-console takes its port from the same file it serves.
+project = "harbor-console"
+host    = "hpz440"
+
+[[port]]
+name          = "web"
+want          = 8090
+assigned      = 8090
+container     = "harbor-console-web"
+health_path   = "/"
+hcstatus_path = "/hcstatus"
+description   = "Service directory and host status page"

@@ -354,12 +354,10 @@ Open Questions
 These are known and deliberately undecided. Decide them before implementing,
 and record the outcome as an ADR.
 
-How the port authority is enforced. A file nobody consults is not an
-authority. Candidates: an advisory ports check command run by hand or in CI;
-the drift list on the page as the only enforcement; or generated configuration
-that each project's compose file reads, which is the strongest guarantee and
-the only one that couples other repositories to this one. This determines
-whether any other repository is touched.
+How the port authority is enforced was decided on 2026-09-01: by allocation.
+Projects declare what they need in .harbor.toml, harbor-console leases a port and
+writes it into the project's .env, and the incumbent always keeps what it holds.
+See ADR 8. The remaining open question is below.
 
 Where the registry lives on disk. In repository and copied to
 /opt/harbor-console/services.toml by the installer, or a path under /etc.

@@ -1,0 +1,79 @@
+# Harbor Console port ledger. Written by `harbor-console ports sync`.
+# The authority on which project holds which (host, addr, port).
+#
+# Adopted 2026-09-01 from what was actually running on hpz440. Ports outside the
+# 8100-8999 allocation band are grandfathered where they stand; nothing running is
+# renumbered to tidy the band. ARM's 49152 sits inside the Linux ephemeral range
+# (32768-60999) and should move when convenient.
+
+[[lease]]
+project = "gte"
+name    = "console"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8080
+granted = 2026-09-01
+
+[[lease]]
+project = "fastapi-docker"
+name    = "api"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8000
+granted = 2026-09-01
+
+[[lease]]
+project = "harbor-console"
+name    = "web"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8090
+granted = 2026-09-01
+
+[[lease]]
+project = "retirement-planning"
+name    = "app"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8501
+granted = 2026-09-01
+
+[[lease]]
+project = "retirement-planning"
+name    = "admin"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8502
+granted = 2026-09-01
+
+[[lease]]
+project = "my-river-level"
+name    = "web"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 5743
+granted = 2026-09-01
+
+[[lease]]
+project = "ice-colder"
+name    = "web"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 26123
+granted = 2026-09-01
+
+[[lease]]
+project = "ice-colder"
+name    = "mqtt"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 1883
+granted = 2026-09-01
+
+[[lease]]
+project = "automatic-ripping-machine"
+name    = "web"
+host    = "hpz440"
+addr    = "100.69.239.123"
+port    = 49152
+granted = 2026-09-01
