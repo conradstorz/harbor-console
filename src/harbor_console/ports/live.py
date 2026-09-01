@@ -1,0 +1,103 @@
+"""What is actually listening on the target host.
+
+The authoritative source is `/ports.json`, served read-only by
+`harbor-console-web` on the host itself, because only the host can see
+loopback-bound listeners and non-Docker ones (sshd, tailscaled) -- an allocator
+blind to those would eventually hand one out. When that is unreachable we fall
+back to probing over the tailnet and mark the result incomplete.
+"""
+
+from __future__ import annotations
+
+import json
+import socket
+import urllib.request
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+
+from harbor_console.ports.keys import ANY_ADDR, addrs_overlap
+
+
+class LiveUnavailable(Exception):
+    """Live host state could not be obtained."""
+
+
+@dataclass(frozen=True)
+class Listener:
+    """One socket listening on the host. `container` is None for non-Docker."""
+
+    addr: str
+    port: int
+    container: str | None
+
+
+@dataclass(frozen=True)
+class LiveState:
+    """A snapshot of listening sockets. `complete` is False for TCP probing."""
+
+    host: str
+    listeners: tuple[Listener, ...]
+    complete: bool
+
+    def is_listening(self, addr: str, port: int) -> bool:
+        """True when anything on this host contends for (addr, port)."""
+        return any(
+            listener.port == port and addrs_overlap(listener.addr, addr)
+            for listener in self.listeners
+        )
+
+    def container_on(self, port: int) -> str | None:
+        """The container holding a port, when known."""
+        for listener in self.listeners:
+            if listener.port == port:
+                return listener.container
+        return None
+
+
+def fetch_live(
+    url: str,
+    timeout: float = 5.0,
+    opener: Callable[..., object] = urllib.request.urlopen,
+) -> LiveState:
+    """Read authoritative host state from harbor-console-web's /ports.json."""
+    try:
+        with opener(url, timeout=timeout) as response:  # type: ignore[union-attr]
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise LiveUnavailable(f"{url}: {exc}") from exc
+
+    try:
+        listeners = tuple(
+            Listener(
+                addr=entry["addr"],
+                port=int(entry["port"]),
+                container=entry.get("container"),
+            )
+            for entry in payload["listening"]
+        )
+        host = payload["host"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LiveUnavailable(f"{url}: malformed payload ({exc})") from exc
+
+    return LiveState(host=host, listeners=listeners, complete=True)
+
+
+def probe_live(
+    host: str,
+    ports: Iterable[int],
+    connect: Callable[..., object] = socket.create_connection,
+    timeout: float = 0.5,
+) -> LiveState:
+    """Fallback: TCP-connect to each port. Blind to loopback and to ownership."""
+    listeners = []
+    for port in ports:
+        try:
+            sock = connect((host, port), timeout=timeout)
+        except OSError:
+            continue
+        close = getattr(sock, "close", None)
+        if close is not None:
+            close()
+        listeners.append(Listener(addr=ANY_ADDR, port=port, container=None))
+
+    return LiveState(host=host, listeners=tuple(listeners), complete=False)
