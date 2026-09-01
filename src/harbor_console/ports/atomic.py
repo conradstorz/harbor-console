@@ -14,6 +14,18 @@ was. Same directory matters: `os.replace` cannot be atomic -- and on Windows
 cannot work at all -- across filesystems, and the system temporary directory is
 routinely on a different one.
 
+The `except BaseException` cleanup below handles every failure that runs as a
+Python exception, including a `KeyboardInterrupt` or `SystemExit` raised mid-write.
+It cannot run at all for a `SIGKILL` or a power cut: those leave the temp file
+sitting in the target's own directory, next to secrets it may itself contain
+in full or in part. To keep that residue from ever becoming a *tracked* file
+-- a `.gitignore` entry for `.env` does not match `.env.<random>.tmp` -- every
+temp file this module creates is named `.harbor-tmp.<original name>.<random>`,
+so a single `.gitignore` rule, `.harbor-tmp.*`, sweeps every leftover
+regardless of which target was being written. That pattern is the sanctioned
+way to find and remove abandoned temp files; nothing in this module sweeps
+them automatically.
+
 stdlib only: `tempfile` and `os`.
 """
 
@@ -41,7 +53,9 @@ def write_text_atomic(path: Path, text: str) -> None:
     """
     mode = _target_mode(path)
 
-    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    handle, temp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".harbor-tmp.{path.name}.", suffix=".tmp"
+    )
     os.close(handle)
     temp_path = Path(temp_name)
 

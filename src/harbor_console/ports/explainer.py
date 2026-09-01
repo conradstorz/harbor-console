@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from harbor_console.ports.atomic import write_text_atomic
+
 TEMPLATE_VERSION = 1
 
 _VERSION_LINE = re.compile(r"harbor-console-template-version:\s*(\d+)")
@@ -92,11 +94,18 @@ well enough to keep following it by hand.
 
 
 def write_explainer(path: Path) -> bool:
-    """Write the explainer when missing or outdated. Returns True when written."""
+    """Write the explainer when missing or outdated. Returns True when written.
+
+    Written atomically: this is the first file `_write_project` touches for a
+    project, so a plain truncating write that failed partway could leave a file
+    that still satisfies the version check above -- a permanently truncated
+    explainer that no later run would ever repair. `write_text_atomic` leaves
+    the original untouched on any failure instead.
+    """
     if path.exists():
         match = _VERSION_LINE.search(path.read_text(encoding="utf-8"))
         if match is not None and int(match.group(1)) >= TEMPLATE_VERSION:
             return False
 
-    path.write_text(TEMPLATE, encoding="utf-8")
+    write_text_atomic(path, TEMPLATE)
     return True
