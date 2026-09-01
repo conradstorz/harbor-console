@@ -93,6 +93,24 @@ well enough to keep following it by hand.
 """
 
 
+def is_outdated(path: Path) -> bool:
+    """True when `path` is missing, unreadable, or older than the template.
+
+    Split out of `write_explainer` so that a caller can ask the question without
+    answering it -- `scan` has to report a missing explainer while writing
+    nothing at all. A file that cannot be read is treated as outdated: the write
+    that follows is the thing entitled to fail, not the question.
+    """
+    if not path.exists():
+        return True
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return True
+    match = _VERSION_LINE.search(text)
+    return match is None or int(match.group(1)) < TEMPLATE_VERSION
+
+
 def write_explainer(path: Path) -> bool:
     """Write the explainer when missing or outdated. Returns True when written.
 
@@ -102,10 +120,8 @@ def write_explainer(path: Path) -> bool:
     explainer that no later run would ever repair. `write_text_atomic` leaves
     the original untouched on any failure instead.
     """
-    if path.exists():
-        match = _VERSION_LINE.search(path.read_text(encoding="utf-8"))
-        if match is not None and int(match.group(1)) >= TEMPLATE_VERSION:
-            return False
+    if not is_outdated(path):
+        return False
 
     write_text_atomic(path, TEMPLATE)
     return True

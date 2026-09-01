@@ -20,8 +20,9 @@ It cannot run at all for a `SIGKILL` or a power cut: those leave the temp file
 sitting in the target's own directory, next to secrets it may itself contain
 in full or in part. To keep that residue from ever becoming a *tracked* file
 -- a `.gitignore` entry for `.env` does not match `.env.<random>.tmp` -- every
-temp file this module creates is named `.harbor-tmp.<original name>.<random>`,
-so a single `.gitignore` rule, `.harbor-tmp.*`, sweeps every leftover
+temp file this module creates is named
+`.harbor-tmp.<original name>.<random>.tmp`, so a single `.gitignore` rule,
+`.harbor-tmp.*`, sweeps every leftover
 regardless of which target was being written. That pattern is the sanctioned
 way to find and remove abandoned temp files; nothing in this module sweeps
 them automatically.

@@ -79,13 +79,19 @@ def decide(
     live: LiveState,
     today: date,
 ) -> list[Decision]:
-    """Resolve every declared port against the ledger and live host state."""
+    """Resolve every declared port against the ledger and live host state.
+
+    ``today`` is part of this module's published entry signature and is *not*
+    consulted by any rule: seniority is compared between grant dates already on
+    the leases, and nothing here expires. It is `apply_decisions` that stamps a
+    date onto a new lease.
+    """
     taken: list[_Promise] = []
     decisions: list[Decision] = []
 
     for declaration in declarations:
         for request in declaration.ports:
-            decision = _decide_one(declaration, request, leases, taken, live, today)
+            decision = _decide_one(declaration, request, leases, taken, live)
             decisions.append(decision)
             taken.append(
                 _Promise(
@@ -106,8 +112,13 @@ def _decide_one(
     leases: Sequence[Lease],
     taken: Sequence[_Promise],
     live: LiveState,
-    today: date,
 ) -> Decision:
+    """Resolve a single declared port. Takes no date: nothing here expires.
+
+    Seniority is compared between two grant dates that are already on the
+    leases, so today's date says nothing about any decision made here. It is
+    `apply_decisions` that stamps a new lease.
+    """
     host, addr = declaration.host, request.addr
 
     def make(

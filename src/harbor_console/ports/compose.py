@@ -10,9 +10,29 @@ entries that sit inside a `ports:` block -- indented deeper than the block's
 `ports:` key line, per YAML's indentation rules -- are considered as
 candidates. Indentation alone (no YAML parser) is used to find a block's
 extent: it opens at a line that is exactly a `ports:` key (nothing but
-optional whitespace or a trailing comment after the colon) and closes at the
-first following non-blank, non-comment line indented at or shallower than
-that key. A file may hold several such blocks (one per service); all of them
+optional whitespace or a trailing comment after the colon), and closes at the
+first following non-blank, non-comment line that is *not* a dash entry and is
+indented at or shallower than that key -- or at a dash entry indented
+*shallower* than it, which belongs to some enclosing sequence.
+
+A dash entry at exactly the key's own indentation stays inside the block. YAML
+allows a block sequence to sit at the indentation of the key that owns it, and
+compose files are commonly written that way:
+
+    ports:
+    - "8080:8080"
+
+Closing on `indent <= ports_indent` made every such file invisible to the drift
+auditor, which is the only warning a project gets when its `.env` has drifted
+from its compose default.
+
+Leading whitespace is counted character by character, so a tab counts as one
+indent unit exactly as a space does, in the key line and in its entries alike.
+That keeps a tab-indented file self-consistent, which is all this comparison
+needs; YAML forbids tabs for indentation anyway, so no correct file mixes the
+two in a way that could be measured differently.
+
+A file may hold several such blocks (one per service); all of them
 are scanned. This keeps port-shaped scalars that live under unrelated keys --
 `command:`, `entrypoint:`, `healthcheck:` test arrays, environment lists,
 `x-*` extension blocks -- out of consideration entirely, since a wrong port
@@ -110,11 +130,17 @@ def _published_ports_in_file(path: Path) -> list[PublishedPort]:
             ports_indent = len(key_match.group("indent"))
             continue
 
-        if ports_indent is not None and indent <= ports_indent:
-            # A sibling (or shallower) key ends the block.
-            ports_indent = None
+        is_entry = stripped.startswith("-")
 
-        if ports_indent is None or not stripped.startswith("-"):
+        if ports_indent is not None:
+            if not is_entry and indent <= ports_indent:
+                # A sibling (or shallower) key ends the block.
+                ports_indent = None
+            elif is_entry and indent < ports_indent:
+                # A dash belonging to an enclosing sequence, not to this key.
+                ports_indent = None
+
+        if ports_indent is None or not is_entry:
             continue
 
         value = _value_of(stripped)

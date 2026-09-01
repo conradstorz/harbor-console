@@ -7,8 +7,19 @@ mid-deploy on.
 
 The ledger records that a project holds a port; the project's own `.env` is what
 actually makes the container bind it. A lease with no matching `.env` is worse
-than no lease at all, and two mechanisms guard against one -- neither of which is
-a blanket pre-flight check of every file:
+than no lease at all, so `sync` writes a project's files whenever they disagree
+with the ledger -- not only when a port moves. `.env` is gitignored, so *every*
+fresh clone of a participating project starts without one while its lease stands
+and its decisions are all "keep"; a run that wrote only what changed would say
+"up to date" over a project whose compose file is about to interpolate its own
+default, on a port leased to somebody else. That is this tool's founding
+failure, at exit 0. A repair is reported as a repair, distinctly from a grant,
+because restoring a lease a project already holds is not the same event as
+handing it a new one. A tree that already matches is still a genuine no-op: no
+file is opened for writing, and the ledger's mtime does not move.
+
+Two further mechanisms guard a lease against having no matching `.env` --
+neither of which is a blanket pre-flight check of every file:
 
 * Each affected project's `.env` is read and its managed fence parsed *before*
   anything is written, because a corrupted fence must not be guessed at: a wrong
@@ -50,6 +61,7 @@ from harbor_console.ports.declaration import (
     Declaration,
     DeclarationError,
     load_declaration,
+    reject_duplicate_declarations,
     write_assigned,
 )
 from harbor_console.ports.envfile import EnvFenceError
@@ -62,6 +74,10 @@ PORTS_URL_DEFAULT = "http://hpz440:8090/ports.json"
 EXIT_OK = 0
 EXIT_PENDING = 1
 EXIT_ERROR = 2
+
+#: One project's outstanding repairs: why its own files disagree with the
+#: ledger, in words fit to print. Keyed by project name.
+_Repairs = dict[str, list[str]]
 
 #: A decision's identity within one run: ``(project, port_name)``. Decisions are
 #: frozen dataclasses and so comparable, but keying on identity keeps "is this
@@ -113,13 +129,22 @@ def run(
 
     try:
         leases = load_leases(ledger_path)
-        declarations = [load_declaration(path) for path in discovery.find_declarations(root)]
-    except (LedgerError, DeclarationError) as exc:
+    except LedgerError as exc:
         print(f"error: {exc}", file=out)
         return EXIT_ERROR
 
+    # `show` reads no declaration. It is the one command that answers "what is
+    # leased right now", and it has to keep answering while somebody else's
+    # `.harbor.toml` is broken -- that is precisely when an operator needs it.
     if args.command == "show":
         return _show(leases, out)
+
+    try:
+        declarations = [load_declaration(path) for path in discovery.find_declarations(root)]
+        reject_duplicate_declarations(declarations)
+    except DeclarationError as exc:
+        print(f"error: {exc}", file=out)
+        return EXIT_ERROR
 
     try:
         decisions = decide(declarations, leases, live, today)
@@ -142,8 +167,23 @@ def run(
     warnings = _compose_warnings(declarations, env_values)
 
     if args.command == "scan":
-        _report(changes, warnings, out, applied=False)
-        return EXIT_PENDING if changes or warnings else EXIT_OK
+        # A project already in the change set is about to be written whole;
+        # reporting it a second time as a repair would double-count it.
+        pending = {decision.project for decision in changes}
+        repairs = {
+            project: reasons
+            for project, reasons in _repairs_needed(declarations, env_values).items()
+            if project not in pending
+        }
+        _report(
+            changes,
+            warnings,
+            out,
+            applied=False,
+            repairs=repairs,
+            incomplete=not live.complete,
+        )
+        return EXIT_PENDING if changes or warnings or repairs else EXIT_OK
 
     if changes and not live.complete:
         print(
@@ -166,6 +206,7 @@ def run(
             out,
             applied=False,
             outstanding=True,
+            repairs=_repairs_needed(declarations, held_values),
         )
         return EXIT_PENDING
 
@@ -176,14 +217,35 @@ def run(
     ]
     by_project = {declaration.project: declaration for declaration in declarations}
 
+    # A project with no decision to apply still belongs in the write pass when
+    # its own files have drifted from the lease it already holds. `env_values`
+    # has been computed for every project, keep-only ones included, so the
+    # comparison is against exactly what would be written.
+    writing = {decision.project for decision in applied}
+    repairs = {
+        project: reasons
+        for project, reasons in _repairs_needed(declarations, env_values).items()
+        if project not in writing
+    }
+
     # Validate before writing: a project whose `.env` cannot be read, or whose
     # fence is corrupted, is dropped whole -- it never gets a lease it cannot
-    # honour.
-    broken = _unwritable_projects(applied, by_project, env_values, out)
+    # honour, and a repair is not attempted on a file that must not be guessed
+    # at either.
+    broken = _unwritable_projects(
+        sorted(writing | set(repairs)), by_project, env_values, out
+    )
     if broken:
         applied = [decision for decision in applied if decision.project not in broken]
+        repairs = {
+            project: reasons
+            for project, reasons in repairs.items()
+            if project not in broken
+        }
 
-    written, failures = _write(applied, by_project, env_values, leases, ledger_path, today)
+    written, repaired, failures = _write(
+        applied, sorted(repairs), by_project, env_values, leases, ledger_path, today
+    )
 
     _report(
         written,
@@ -191,6 +253,7 @@ def run(
         out,
         applied=True,
         outstanding=bool(withheld or broken or failures),
+        repairs={project: repairs[project] for project in repaired},
     )
 
     for failure in failures:
@@ -261,8 +324,66 @@ def _current_port(
     return None
 
 
+def _repairs_needed(
+    declarations: Sequence[Declaration],
+    env_values: dict[str, dict[str, str]],
+) -> _Repairs:
+    """Projects whose own files no longer say what the ledger says, and why.
+
+    Asked of *every* project, not only the ones whose ports are moving, because
+    the ordinary way for a project to lose its `.env` is not a reassignment: it
+    is gitignored, so a fresh clone simply has none while its lease stands and
+    every decision about it is "keep". The comparison is against `env_values`,
+    which is what a write would put there -- so a project that already matches
+    yields nothing and is never opened for writing.
+
+    A project with no effective port is skipped entirely: there is nothing to
+    publish, and writing an empty managed fence into a `.env` that no port
+    needs would be this tool inventing work in somebody else's repository.
+
+    The reasons are phrased for an operator to read. Reading `.env` can fail --
+    a directory, a cp1252 password, a corrupted fence -- and that is reported as
+    the repair it is, rather than raising here; `_unwritable_projects` is what
+    turns it into a refusal at write time, and `scan` must be able to say it
+    while writing nothing at all.
+    """
+    needed: _Repairs = {}
+
+    for declaration in declarations:
+        expected = env_values.get(declaration.project, {})
+        if not expected:
+            continue
+
+        project_dir = declaration.path.parent
+        reasons = _env_repairs(project_dir / ".env", expected)
+        if explainer.is_outdated(project_dir / "HARBOR_PORTS.md"):
+            reasons.append("HARBOR_PORTS.md is missing or outdated")
+        if reasons:
+            needed[declaration.project] = reasons
+
+    return needed
+
+
+def _env_repairs(env_path: Path, expected: dict[str, str]) -> list[str]:
+    """Why `env_path` disagrees with `expected`, or an empty list if it does not."""
+    exists = env_path.exists()
+    try:
+        existing = env_path.read_text(encoding="utf-8") if exists else ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f".env cannot be read as UTF-8 text ({exc})"]
+
+    try:
+        wanted = envfile.apply_fence(existing, expected)
+    except EnvFenceError as exc:
+        return [f".env has a corrupted harbor-console fence ({exc})"]
+
+    if wanted == existing:
+        return []
+    return [".env is missing" if not exists else ".env does not match the ledger"]
+
+
 def _unwritable_projects(
-    applied: Sequence[Decision],
+    projects: Sequence[str],
     by_project: dict[str, Declaration],
     env_values: dict[str, dict[str, str]],
     out: TextIO,
@@ -275,10 +396,15 @@ def _unwritable_projects(
     cannot be read as UTF-8 -- a cp1252 password in somebody else's repository --
     cannot be rewritten without destroying it either. Both are reported here
     rather than escaping as a traceback.
+
+    `projects` is every project the run intends to write: the ones with a
+    decision to apply and the ones whose files are merely being repaired. A
+    repair is a write into somebody else's `.env` like any other and is held to
+    the same refusal.
     """
     broken: set[str] = set()
 
-    for project in sorted({decision.project for decision in applied}):
+    for project in sorted(projects):
         env_path = by_project[project].path.parent / ".env"
         try:
             existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
@@ -303,16 +429,22 @@ def _unwritable_projects(
 
 def _write(
     applied: Sequence[Decision],
+    repairs: Sequence[str],
     by_project: dict[str, Declaration],
     env_values: dict[str, dict[str, str]],
     leases: Sequence[Lease],
     ledger_path: Path,
     today: date,
-) -> tuple[list[Decision], list[str]]:
-    """Apply accepted decisions and report what landed. Raises nothing.
+) -> tuple[list[Decision], list[str], list[str]]:
+    """Apply accepted decisions, repair drifted files, report what landed.
 
-    Returns the decisions actually written, and one message per project that
-    could not be written completely. The ledger is saved first, so an interrupted
+    Raises nothing. Returns the decisions actually written, the projects
+    repaired, and one message per project that could not be written completely.
+
+    `repairs` names projects with nothing to decide whose own files have drifted
+    from the lease they already hold. They are written like any other project
+    except that no `assigned` is rewritten -- there is no decision to record, and
+    a project's `.harbor.toml` is not touched to say what it already says. The ledger is saved first, so an interrupted
     run leaves a port reserved to its rightful holder rather than named in some
     project's `.env` while the allocator still believes it free. Each project's
     own files are then written together, and a project that fails has *this
@@ -322,8 +454,8 @@ def _write(
     reassigned, and which may disagree with a file already written for it, since
     those are not rolled back. Its neighbours are untouched by its failure.
     """
-    if not applied:
-        return [], []
+    if not applied and not repairs:
+        return [], [], []
 
     updated = apply_decisions(leases, applied, today)
     ledger_written = dumps_leases(updated) != dumps_leases(leases)
@@ -331,27 +463,40 @@ def _write(
         if ledger_written:
             save_leases(ledger_path, updated)
     except OSError as exc:
-        return [], [f"{ledger_path}: {exc}; nothing was written"]
+        return [], [], [f"{ledger_path}: {exc}; nothing was written"]
 
     written: list[Decision] = []
+    repaired: list[str] = []
     failed: set[str] = set()
     messages: list[str] = []
 
-    for project in sorted({decision.project for decision in applied}):
+    for project in sorted({decision.project for decision in applied} | set(repairs)):
         mine = [decision for decision in applied if decision.project == project]
         try:
             _write_project(by_project[project], mine, env_values.get(project, {}))
         except _WRITE_FAILURES as exc:
             failed.add(project)
-            messages.append(
-                f"{project}: {exc}; every decision made for {project} in this run was "
-                f"withdrawn from the ledger, so it still holds whatever lease it held "
-                f"before the run -- which may be none, and which may disagree with any "
-                f"file already written for it, since those are not rolled back. Fix the "
-                f"cause and re-run."
-            )
+            if mine:
+                messages.append(
+                    f"{project}: {exc}; every decision made for {project} in this run "
+                    f"was withdrawn from the ledger, so it still holds whatever lease "
+                    f"it held before the run -- which may be none, and which may "
+                    f"disagree with any file already written for it, since those are "
+                    f"not rolled back. Fix the cause and re-run."
+                )
+            else:
+                # Nothing was decided for this project, so there is nothing to
+                # withdraw: it holds the lease it walked in with either way. What
+                # failed is the repair, and its files still disagree with that
+                # lease -- which is exactly the state that needed fixing.
+                messages.append(
+                    f"{project}: {exc}; its lease is unchanged but its files still "
+                    f"disagree with it. Fix the cause and re-run."
+                )
         else:
             written.extend(mine)
+            if not mine:
+                repaired.append(project)
 
     if failed and ledger_written:
         kept = [decision for decision in applied if decision.project not in failed]
@@ -363,7 +508,7 @@ def _write(
                 f"{', '.join(sorted(failed))} with no matching .env"
             )
 
-    return written, messages
+    return written, repaired, messages
 
 
 def _write_project(
@@ -372,6 +517,10 @@ def _write_project(
     values: dict[str, str],
 ) -> None:
     """Write one project's explainer, declaration and `.env`, in that order.
+
+    `decisions` is empty for a repair: nothing about the project's ports is
+    changing, so its `.harbor.toml` already says what a write would say and is
+    left alone.
 
     `.env` goes last, deliberately. It is the file that makes a container
     actually bind the port, while the ledger is only the record of who is
@@ -425,13 +574,33 @@ def _report(
     out: TextIO,
     applied: bool,
     outstanding: bool = False,
+    repairs: _Repairs | None = None,
+    incomplete: bool = False,
 ) -> None:
     """Print what happened, or what would happen, one line per change.
 
     `outstanding` says something is still pending or wrong -- a withheld port, a
     dropped project, a failed write -- so that "up to date" is suppressed rather
     than printed immediately above the lines that contradict it.
+
+    `repairs` are printed apart from the grants and in their own words: a repair
+    restores a lease the project already holds, which is a different event from
+    being handed a new port, and an operator reading "wrote alpha/web = 8080"
+    has no way to tell that nothing was actually granted.
+
+    `incomplete` says the live host state could not be verified. The caveat
+    belongs here, in the reporting path, rather than at the top of `main()`:
+    `sync` refuses to grant on this input, so a `scan` that prints "would write"
+    without it promises something the next command will not do -- and a caller
+    handing `run()` its own state never reaches `main()` at all.
     """
+    if incomplete and changes:
+        print(
+            "note: live host state is incomplete (no /ports.json), so the grants "
+            "below are unverified -- `sync` will refuse them until it is reachable.",
+            file=out,
+        )
+
     verb = "wrote" if applied else "would write"
     for decision in changes:
         line = f"{verb} {decision.project}/{decision.port_name} = {decision.port}"
@@ -441,10 +610,14 @@ def _report(
             line += f"  ({decision.reason})"
         print(line, file=out)
 
+    repair_verb = "repaired" if applied else "would repair"
+    for project in sorted(repairs or {}):
+        print(f"{repair_verb} {project}: {'; '.join(repairs[project])}", file=out)
+
     for warning in warnings:
         print(f"warning: {warning}", file=out)
 
-    if not changes and not warnings and not outstanding:
+    if not changes and not warnings and not repairs and not outstanding:
         print("up to date", file=out)
 
 

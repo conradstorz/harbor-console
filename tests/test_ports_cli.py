@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from datetime import date
 from pathlib import Path
 
@@ -510,3 +511,170 @@ def test_a_compose_file_that_is_not_utf8_is_skipped_not_a_traceback(tmp_path: Pa
     assert "9999" not in output
     assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"alpha": 8080}
     assert "HARBOR_PORT_WEB=8080" in (alpha / ".env").read_text(encoding="utf-8")
+
+
+def _freeze_mtimes(root: Path, stamp: int = 1_000_000) -> dict[Path, int]:
+    """Set every file's mtime under `root` to `stamp` and return the mapping.
+
+    A run that rewrites a file identically is invisible to a content check but
+    not to this one, and comparing against a stamp set by hand is immune to the
+    clock resolution a same-millisecond rewrite would hide behind.
+    """
+    stamps: dict[Path, int] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            os.utime(path, (stamp, stamp))
+            stamps[path] = path.stat().st_mtime_ns
+    return stamps
+
+
+def test_sync_restores_a_deleted_env(tmp_path: Path):
+    # `.env` is gitignored, so *every* fresh clone starts without one. A project
+    # in steady state yields only `keep` decisions; if those keep it out of the
+    # write pass, sync says "up to date" over a project whose compose file is
+    # about to interpolate its default -- a port the ledger has leased to
+    # somebody else. That is this tool's founding failure, at exit 0.
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    (project / ".env").unlink()
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    assert "HARBOR_PORT_WEB=8080" in (project / ".env").read_text(encoding="utf-8")
+    assert "repaired" in output.lower()
+    assert "up to date" not in output
+    # A repair restores what is already leased; it grants nothing.
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"alpha": 8080}
+
+
+def test_sync_repairs_a_hand_edited_fence(tmp_path: Path):
+    # Same fault, reached by editing rather than deleting: the fence names a
+    # port the ledger never granted, and every `keep` decision hides it.
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    (project / ".env").write_text(
+        f"SECRET=keepme\n{FENCE_START}\nHARBOR_PORT_WEB=9999\n{FENCE_END}\n",
+        encoding="utf-8",
+    )
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    env = (project / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_WEB=8080" in env
+    assert "9999" not in env
+    assert "SECRET=keepme" in env  # a repair is still only the fence
+    assert "repaired" in output.lower()
+
+
+def test_sync_repairs_a_missing_explainer(tmp_path: Path):
+    # `HARBOR_PORTS.md` is the only thing telling the next person why a port is
+    # fenced into `.env`. It must come back too, not only when a port moves.
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    (project / "HARBOR_PORTS.md").unlink()
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    assert (project / "HARBOR_PORTS.md").is_file()
+    assert "repaired" in output.lower()
+
+
+def test_scan_reports_a_pending_repair_and_writes_nothing(tmp_path: Path):
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    (project / ".env").unlink()
+
+    code, output = run(["scan"], tmp_path, ledger_path)
+
+    assert code == 1
+    assert "alpha" in output
+    assert "repair" in output.lower()
+    assert "up to date" not in output
+    assert not (project / ".env").exists()
+
+
+def test_sync_writes_nothing_when_everything_already_matches(tmp_path: Path):
+    # The other half of the contract: repairing what has drifted must not turn
+    # sync into a run that rewrites other people's repositories every time.
+    make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    before = _freeze_mtimes(tmp_path)
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    assert output == "up to date\n"
+    after = {path: path.stat().st_mtime_ns for path in before}
+    assert after == before
+
+
+def test_two_directories_declaring_one_project_is_a_hard_error(tmp_path: Path):
+    # `.harbor.toml` travels with a copy, so a `-backup` directory or a second
+    # worktree declares the same project twice. Keying declarations by project
+    # name silently drops one of them: the lease is written for one directory
+    # and the files for the other.
+    gte = make_project(tmp_path, "gte", 8080)
+    backup = tmp_path / "gte-backup"
+    backup.mkdir()
+    (backup / ".harbor.toml").write_text(
+        'project = "gte"\nhost = "hpz440"\n\n[[port]]\nname = "web"\nwant = 8080\n',
+        encoding="utf-8",
+    )
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "gte-backup" in output  # both paths are named, not just the winner
+    assert str(gte / ".harbor.toml") in output
+    assert not ledger_path.exists()
+    assert not (gte / ".env").exists()
+    assert not (backup / ".env").exists()
+    assert not (gte / "HARBOR_PORTS.md").exists()
+
+
+def test_scan_says_its_grants_are_unverified_when_live_state_is_incomplete(tmp_path: Path):
+    # `sync` refuses to grant on this input. `scan` printing "would write
+    # alpha/web = 8080" with no caveat promises something the next command will
+    # not do -- and the caveat `main()` prints never reaches an injected-state
+    # caller at all.
+    make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["scan"], tmp_path, ledger_path, state=live(complete=False))
+
+    assert code == 1
+    assert "8080" in output
+    assert "unverified" in output.lower()
+    assert "incomplete" in output.lower()
+
+
+def test_a_project_name_that_would_corrupt_the_ledger_is_refused(tmp_path: Path):
+    # The project name comes from a `.harbor.toml` in a repository this tool
+    # does not own, and it is interpolated into the ledger's TOML strings. A
+    # quote in it wrote a ledger that no later command could load -- the tool
+    # could not start again until somebody hand-edited `services.toml`.
+    project = tmp_path / "evil"
+    project.mkdir()
+    (project / ".harbor.toml").write_text(
+        'project = \'ev"il\'\nhost = "hpz440"\n\n[[port]]\nname = "web"\nwant = 8080\n',
+        encoding="utf-8",
+    )
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "project" in output
+    assert not ledger_path.exists()
+    assert not (project / ".env").exists()
+    # And every later command still works, which is the whole point.
+    assert run(["show"], tmp_path, ledger_path)[0] == 0

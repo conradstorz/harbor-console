@@ -172,3 +172,36 @@ def test_a_failed_write_leaves_the_existing_declaration_intact(tmp_path: Path, m
 
     assert path.read_text(encoding="utf-8") == FULL
     assert [entry.name for entry in tmp_path.iterdir()] == [".harbor.toml"]
+
+
+def test_a_quote_in_the_project_name_is_refused(tmp_path: Path):
+    # These values are interpolated into the ledger's TOML strings and into a
+    # shell-adjacent `.env`. They come from a repository this tool does not own,
+    # so they are checked here, at the door, rather than escaped downstream --
+    # escaping alone would let the name flow on into `env_var_name` and the
+    # `.env` fence.
+    with pytest.raises(DeclarationError, match="project"):
+        load_declaration(_write(tmp_path, 'project = \'ev"il\'\nhost = "h"\n'))
+
+
+def test_a_quote_in_a_port_name_is_refused(tmp_path: Path):
+    # A TOML literal string carries the quote through intact, so this is a
+    # perfectly loadable declaration holding a name that would break the ledger.
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = \'we"b\'\n'
+    with pytest.raises(DeclarationError, match="port name"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_an_empty_project_name_is_refused(tmp_path: Path):
+    with pytest.raises(DeclarationError, match="project"):
+        load_declaration(_write(tmp_path, 'project = ""\nhost = "h"\n'))
+
+
+def test_two_port_names_deriving_one_variable_are_refused(tmp_path: Path):
+    # `web-ui` and `web_ui` are different port names but one `HARBOR_PORT_WEB_UI`.
+    # Both would be leased and both written as `assigned`, while `.env` published
+    # only the second -- so the first container silently fell back to its compose
+    # default, on a port the ledger had leased to somebody else.
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web-ui"\n\n[[port]]\nname = "web_ui"\n'
+    with pytest.raises(DeclarationError, match="HARBOR_PORT_WEB_UI"):
+        load_declaration(_write(tmp_path, text))
