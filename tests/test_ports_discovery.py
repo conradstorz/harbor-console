@@ -66,3 +66,73 @@ def test_published_ports_covers_every_compose_variant(tmp_path: Path):
     names = sorted(port.file.name for port in published_ports(tmp_path))
 
     assert names == ["docker-compose.prod.yml", "docker-compose.yml"]
+
+
+def test_published_ports_reads_unquoted_short_syntax(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    ports:\n"
+        "      - 8080:8080\n"
+        "      - 127.0.0.1:9090:9090\n",
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080, 9090]
+
+
+def test_published_ports_reads_protocol_suffixes(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    ports:\n"
+        '      - "8080:8080/udp"\n'
+        '      - "9090:9090/tcp"\n',
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080, 9090]
+
+
+def test_published_ports_reads_single_quoted_values(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  web:\n    ports:\n      - '8080:8080'\n", encoding="utf-8"
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080]
+
+
+def test_published_ports_reads_bare_compose_spec_filenames(tmp_path: Path):
+    (tmp_path / "compose.yaml").write_text(
+        'services:\n  web:\n    ports:\n      - "8080:8080"\n', encoding="utf-8"
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080]
+
+
+def test_published_ports_ignores_an_image_like_list_entry(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  cache:\n    entrypoint:\n      - redis:7.2\n", encoding="utf-8"
+    )
+
+    found = published_ports(tmp_path)
+
+    assert found == []
+
+
+def test_published_ports_ignores_a_commented_out_ports_entry(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        'services:\n  web:\n    # ports:\n    #   - "8080:8080"\n', encoding="utf-8"
+    )
+
+    found = published_ports(tmp_path)
+
+    assert found == []
