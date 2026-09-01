@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from harbor_console.ports.envfile import FENCE_END, FENCE_START, apply_fence, write_env
+import pytest
+
+from harbor_console.ports.envfile import (
+    EnvFenceError,
+    FENCE_END,
+    FENCE_START,
+    apply_fence,
+    write_env,
+)
 
 
 def test_creates_the_fence_when_absent():
@@ -61,3 +69,25 @@ def test_write_env_is_idempotent(tmp_path: Path):
     write_env(path, {"HARBOR_PORT_WEB": "8090"})
 
     assert path.read_text(encoding="utf-8") == first
+
+
+def test_orphan_end_before_start_raises_instead_of_discarding_content():
+    original = f"A=1\n{FENCE_END}\nB=2\n{FENCE_START}\nC=3\n"
+
+    with pytest.raises(EnvFenceError):
+        apply_fence(original, {"HARBOR_PORT_WEB": "1"})
+
+
+def test_orphan_start_with_no_end_anywhere_raises_instead_of_duplicating():
+    original = f"A=1\n{FENCE_START}\nB=2\n"
+
+    with pytest.raises(EnvFenceError):
+        apply_fence(original, {"HARBOR_PORT_WEB": "1"})
+
+
+def test_intentional_blank_line_after_fence_survives_a_rewrite():
+    original = f"{FENCE_START}\nHARBOR_PORT_WEB=1\n{FENCE_END}\n\n# spaced comment\n"
+
+    result = apply_fence(original, {"HARBOR_PORT_WEB": "2"})
+
+    assert result.endswith(f"{FENCE_END}\n\n# spaced comment\n")

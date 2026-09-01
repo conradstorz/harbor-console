@@ -13,15 +13,53 @@ FENCE_START = "# >>> harbor-console (managed) >>>"
 FENCE_END = "# <<< harbor-console (managed) <<<"
 
 
+class EnvFenceError(Exception):
+    """Raised when the managed fence markers in a `.env` file are corrupted.
+
+    This is a new exception type: any caller of `write_env` or `apply_fence`
+    must be prepared to catch it. Guessing how to repair a malformed fence
+    risks destroying secrets that live outside it, so this module refuses to
+    guess and raises instead.
+    """
+
+
 def apply_fence(text: str, values: dict[str, str]) -> str:
-    """Return `text` with the managed block replaced by `values`."""
+    """Return `text` with the managed block replaced by `values`.
+
+    A well-formed fence requires a `FENCE_START` followed, later in the text,
+    by a `FENCE_END`; that is the only arrangement treated as "replace this
+    block". Any other arrangement of markers -- a start with no end after it,
+    an end with no start before it -- means the fence is corrupted, and this
+    function raises `EnvFenceError` rather than guess at a repair: guessing
+    wrong can silently discard secrets that live outside the fence. A file
+    with no markers at all is not corrupted; that is the ordinary case of a
+    project adopting the fence for the first time, and the block is appended.
+    """
     body = "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
     block = f"{FENCE_START}\n{body}\n{FENCE_END}\n"
 
-    if FENCE_START in text and FENCE_END in text:
+    start_index = text.find(FENCE_START)
+    end_index = text.find(FENCE_END)
+
+    if start_index != -1 and end_index != -1 and start_index < end_index:
         head, _, rest = text.partition(FENCE_START)
         _, _, tail = rest.partition(FENCE_END)
-        return head + block + tail.lstrip("\n")
+        if tail.startswith("\n"):
+            tail = tail[1:]
+        return head + block + tail
+
+    if start_index != -1 or end_index != -1:
+        if start_index != -1 and end_index == -1:
+            raise EnvFenceError(
+                f"found {FENCE_START!r} with no matching {FENCE_END!r} after it"
+            )
+        if end_index != -1 and start_index == -1:
+            raise EnvFenceError(
+                f"found {FENCE_END!r} with no matching {FENCE_START!r} before it"
+            )
+        raise EnvFenceError(
+            f"found {FENCE_END!r} before {FENCE_START!r}; the fence markers are out of order"
+        )
 
     if not text:
         return block
