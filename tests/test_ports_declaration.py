@@ -116,3 +116,28 @@ def test_write_assigned_rejects_an_unknown_port_name(tmp_path: Path):
 
     with pytest.raises(DeclarationError, match="nosuch"):
         write_assigned(path, "nosuch", 8100)
+
+
+def test_write_assigned_handles_missing_trailing_newline(tmp_path: Path):
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "a"'
+    path = _write(tmp_path, text)
+
+    write_assigned(path, "a", 8100)
+
+    text = path.read_text(encoding="utf-8")
+    assert 'name = "a"\n' in text
+    assert load_declaration(path).ports[0].assigned == 8100
+
+
+def test_write_assigned_does_not_bleed_into_a_following_table(tmp_path: Path):
+    text = (
+        'project = "p"\nhost = "h"\n\n[[port]]\nname = "a"\nwant = 1\n'
+        '\n[other]\nassigned = "not-a-port-field"\n'
+    )
+    path = _write(tmp_path, text)
+
+    write_assigned(path, "a", 9999)
+
+    text = path.read_text(encoding="utf-8")
+    assert 'assigned = "not-a-port-field"' in text
+    assert load_declaration(path).ports[0].assigned == 9999

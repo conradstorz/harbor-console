@@ -101,13 +101,29 @@ def write_assigned(path: Path, port_name: str, assigned: int) -> None:
 
 
 def _port_block_bounds(lines: list[str]) -> list[tuple[int, int]]:
-    """Return (start, end) line indices for each [[port]] block."""
+    """Return (start, end) line indices for each [[port]] block.
+
+    A block ends at the next top-level table header of any kind
+    (`[[port]]`, `[[other]]`, `[other]`, ...) or at end of file - never
+    past it - so a table that follows a `[[port]]` block is never mistaken
+    for part of that block.
+    """
     starts = [i for i, line in enumerate(lines) if line.strip() == "[[port]]"]
     bounds = []
-    for position, start in enumerate(starts):
-        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+    for start in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if _is_table_header(lines[index]):
+                end = index
+                break
         bounds.append((start, end))
     return bounds
+
+
+def _is_table_header(line: str) -> bool:
+    """True if `line` opens a top-level TOML table, e.g. `[foo]` or `[[foo]]`."""
+    stripped = line.strip()
+    return len(stripped) > 2 and stripped.startswith("[") and stripped.endswith("]")
 
 
 def _block_name(block: list[str]) -> str | None:
@@ -127,7 +143,15 @@ def _set_field(lines: list[str], start: int, end: int, assigned: int) -> None:
 
     for index in range(start, end):
         if lines[index].partition("=")[0].strip() == "name":
+            _ensure_trailing_newline(lines, index)
             lines.insert(index + 1, f"assigned      = {assigned}\n")
             return
 
+    _ensure_trailing_newline(lines, start)
     lines.insert(start + 1, f"assigned      = {assigned}\n")
+
+
+def _ensure_trailing_newline(lines: list[str], index: int) -> None:
+    """Append a newline to `lines[index]` if it lacks one (e.g. last line of file)."""
+    if not lines[index].endswith("\n"):
+        lines[index] += "\n"
