@@ -3,7 +3,9 @@ import json
 import pytest
 
 from harbor_console.ports.live import (
+    LiveState,
     LiveUnavailable,
+    Listener,
     fetch_live,
     probe_live,
 )
@@ -97,6 +99,30 @@ def test_fetch_raises_live_unavailable_when_port_is_string():
             "http://x/ports.json",
             opener=lambda _url, timeout: FakeResponse(json.dumps(payload).encode()),
         )
+
+
+def test_container_on_with_an_address_matches_the_overlapping_listener():
+    state = LiveState(
+        host="hpz440",
+        listeners=(
+            Listener(addr="10.0.0.5", port=49152, container="arm-dev"),
+            Listener(addr="127.0.0.1", port=49152, container="stranger"),
+        ),
+        complete=True,
+    )
+
+    assert state.container_on(49152, "10.0.0.5") == "arm-dev"
+    assert state.container_on(49152, "127.0.0.1") == "stranger"
+
+
+def test_container_on_with_an_address_returns_none_when_nothing_overlaps():
+    state = LiveState(
+        host="hpz440",
+        listeners=(Listener(addr="127.0.0.1", port=49152, container="stranger"),),
+        complete=True,
+    )
+
+    assert state.container_on(49152, "10.0.0.5") is None
 
 
 def test_probe_marks_state_incomplete_and_reports_open_ports():

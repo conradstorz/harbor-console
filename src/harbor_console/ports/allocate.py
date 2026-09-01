@@ -164,8 +164,9 @@ def _decide_one(
             # and would then never vacate, leaving the key claimed twice. So
             # the widening is refused and the existing lease stands as it is.
             action = "keep" if own.port == request.assigned else "grant"
+            blocker_name = blocker.port_name if isinstance(blocker, _Promise) else blocker.name
             reason = (
-                f"addr change to {addr} blocked by {blocker.project}; "
+                f"addr change to {addr} blocked by {blocker.project}/{blocker_name}; "
                 f"keeping {own.addr}:{own.port}"
             )
             return make(action, own.port, reason, bind=own.addr)
@@ -186,13 +187,14 @@ def _decide_one(
             #     busy, but it is busy being mine". It never overrides a
             #     lease or a promise made earlier in this run: both are
             #     tested above, and their absence is what leads here.
-            if _is_own_listener(live, request, host):
+            if _is_own_listener(live, request, host, addr):
                 return make("grant", request.want, "grandfathered: already running")
 
         if incumbent is not None:
             port = _first_free(host, addr, leases, taken, live)
             action = "reassign" if request.assigned is not None else "grant"
-            return make(action, port, f"{request.want} held by {incumbent.project}", incumbent)
+            reason = f"{request.want} held by {incumbent.project}/{incumbent.name}"
+            return make(action, port, reason, incumbent)
 
         if promised is not None:
             # The same conflict, except the winner was decided moments ago in
@@ -200,7 +202,8 @@ def _decide_one(
             # the same way, with the claimant named in the reason instead.
             port = _first_free(host, addr, leases, taken, live)
             action = "reassign" if request.assigned is not None else "grant"
-            return make(action, port, f"{request.want} claimed this run by {promised.project}")
+            reason = f"{request.want} claimed this run by {promised.project}/{promised.port_name}"
+            return make(action, port, reason)
 
     # 3. No preference, or the preference was unavailable: next free in the band.
     port = _first_free(host, addr, leases, taken, live)
@@ -265,13 +268,21 @@ def _promised_by(
     return None
 
 
-def _is_own_listener(live: LiveState, request: PortRequest, host: str) -> bool:
-    """True when this project's own container already listens on its preference."""
+def _is_own_listener(live: LiveState, request: PortRequest, host: str, addr: str) -> bool:
+    """True when this project's own container already listens on its preference.
+
+    Ownership has to match the address as well as the port number: a listener
+    on somebody else's socket -- one that merely happens to share the port
+    number, on an address that does not overlap the requested one -- must not
+    be waved through as "this project already runs here". ``addr`` is checked
+    with the same overlap semantics the rest of this module uses, via
+    ``LiveState.container_on``.
+    """
     if request.container is None or request.want is None:
         return False
     if live.host != host:
         return False
-    return live.container_on(request.want) == request.container
+    return live.container_on(request.want, addr) == request.container
 
 
 def _is_free(

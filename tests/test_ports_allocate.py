@@ -77,6 +77,7 @@ def test_want_held_by_another_project_moves_the_newcomer_into_the_band():
     assert decision.port == BAND_START
     assert decision.incumbent is not None
     assert decision.incumbent.project == "gte"
+    assert "gte/console" in decision.reason
 
 
 def test_a_held_lease_is_written_back_when_the_declaration_lacks_it():
@@ -269,7 +270,7 @@ def test_a_want_blocked_by_a_same_run_grant_is_reported_as_a_conflict():
     assert winner.port == 8080
     assert loser.action == "reassign"
     assert loser.port == BAND_START
-    assert "first" in loser.reason
+    assert "first/web" in loser.reason
     assert loser.incumbent is None
 
 
@@ -280,7 +281,7 @@ def test_a_same_run_conflict_without_an_assignment_is_a_grant_not_a_reassign():
 
     assert loser.action == "grant"
     assert loser.port == BAND_START
-    assert "first" in loser.reason
+    assert "first/web" in loser.reason
 
 
 def test_live_state_for_another_host_does_not_block_a_port():
@@ -381,8 +382,47 @@ def test_two_ports_of_one_project_are_not_both_grandfathered_onto_one_key():
     assert first.port == 49152
     assert "grandfathered" in first.reason
     assert second.port == BAND_START
-    assert "arm" in second.reason
+    assert "arm/web" in second.reason
     assert contending_pairs(apply_decisions([], [first, second], TODAY)) == []
+
+
+def test_grandfathering_does_not_grant_on_top_of_a_strangers_listener():
+    """Ownership has to match the address as well as the port.
+
+    arm-dev's own listener sits on 10.0.0.5, not on the requested 127.0.0.1 --
+    that address is a stranger's socket. Waving the request through as
+    "already running" would grant arm's declaration straight on top of it. The
+    outcome must not depend on which listener happens to be probed first.
+    """
+    declaration = decl("arm", "web", want=49152, container="arm-dev", addr="127.0.0.1")
+
+    for pairs in (
+        [("10.0.0.5", 49152, "arm-dev"), ("127.0.0.1", 49152, "stranger")],
+        [("127.0.0.1", 49152, "stranger"), ("10.0.0.5", 49152, "arm-dev")],
+    ):
+        state = live(*pairs)
+        [decision] = decide([declaration], [], state, TODAY)
+
+        assert decision.action == "grant"
+        assert decision.reason == "allocated from band"
+        assert decision.port == BAND_START
+
+
+def test_grandfathering_still_grants_when_the_own_container_listens_on_the_addr():
+    """The positive case: an address match still grandfathers.
+
+    Same two listeners as above, but the declaration now asks for the address
+    arm-dev's own container actually listens on. The liveness override must
+    still fire -- the address check must not over-correct into never matching.
+    """
+    state = live(("10.0.0.5", 49152, "arm-dev"), ("127.0.0.1", 49152, "stranger"))
+    declaration = decl("arm", "web", want=49152, container="arm-dev", addr="10.0.0.5")
+
+    [decision] = decide([declaration], [], state, TODAY)
+
+    assert decision.action == "grant"
+    assert decision.port == 49152
+    assert "grandfathered" in decision.reason
 
 
 def test_when_two_contending_leaseholders_both_widen_only_the_junior_moves():
@@ -405,7 +445,7 @@ def test_when_two_contending_leaseholders_both_widen_only_the_junior_moves():
         kept = decisions["senior"]
         assert kept.action == "keep"
         assert (kept.addr, kept.port) == ("100.69.239.123", 8080)
-        assert "junior" in kept.reason
+        assert "junior/web" in kept.reason
 
         moved = decisions["junior"]
         assert moved.action == "reassign"

@@ -46,11 +46,23 @@ class LiveState:
             for listener in self.listeners
         )
 
-    def container_on(self, port: int) -> str | None:
-        """The container holding a port, when known."""
+    def container_on(self, port: int, addr: str | None = None) -> str | None:
+        """The container holding a port, when known.
+
+        Without ``addr`` this answers about the port number alone, matching the
+        first listener found -- the original behaviour, kept for callers that
+        have no address to check against. With ``addr`` it answers only for a
+        listener whose bind address overlaps it (``addrs_overlap`` semantics: a
+        listener on ``0.0.0.0`` contends with any addr, and vice versa), since a
+        stranger's listener on an unrelated address says nothing about who owns
+        this one.
+        """
         for listener in self.listeners:
-            if listener.port == port:
-                return listener.container
+            if listener.port != port:
+                continue
+            if addr is not None and not addrs_overlap(listener.addr, addr):
+                continue
+            return listener.container
         return None
 
 
