@@ -5,8 +5,22 @@ and the only thing needed is the published-port strings. Used to warn when a
 compose default has drifted from the assignment -- `.env` is usually gitignored,
 so the default is what a fresh clone actually gets.
 
-Recognised short-syntax `ports:` entry shapes, quoted or not, single- or
-double-quoted, with an optional trailing `/tcp` or `/udp`:
+The scan is structurally aware of the `ports:` key: only dash (`-`) list
+entries that sit inside a `ports:` block -- indented deeper than the block's
+`ports:` key line, per YAML's indentation rules -- are considered as
+candidates. Indentation alone (no YAML parser) is used to find a block's
+extent: it opens at a line that is exactly a `ports:` key (nothing but
+optional whitespace or a trailing comment after the colon) and closes at the
+first following non-blank, non-comment line indented at or shallower than
+that key. A file may hold several such blocks (one per service); all of them
+are scanned. This keeps port-shaped scalars that live under unrelated keys --
+`command:`, `entrypoint:`, `healthcheck:` test arrays, environment lists,
+`x-*` extension blocks -- out of consideration entirely, since a wrong port
+number here would fabricate a drift report against a project that is actually
+correct.
+
+Within a `ports:` block, recognised short-syntax entry shapes, quoted or not,
+single- or double-quoted, with an optional trailing `/tcp` or `/udp`:
 
 - `host:container` (e.g. `8080:8080`)
 - `addr:host:container` (e.g. `127.0.0.1:8080:8080`)
@@ -23,6 +37,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+# Matches a line that is exactly a `ports:` mapping key -- nothing but
+# optional leading indentation and an optional trailing comment after the
+# colon -- so it can be told apart from `ports: []` or a `some_ports:` key,
+# neither of which opens a block.
+_PORTS_KEY = re.compile(r"^(?P<indent>[ \t]*)ports:[ \t]*(?:#.*)?$")
 
 # Matched against a single list-entry value after the leading "- " and any
 # single layer of wrapping quotes have already been stripped by `_value_of`.
@@ -58,43 +78,66 @@ def _value_of(list_entry: str) -> str:
     return value
 
 
+def _published_ports_in_file(path: Path) -> list[PublishedPort]:
+    """Every published port inside `ports:` blocks of a single compose file."""
+    found: list[PublishedPort] = []
+    ports_indent: int | None = None
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            # Blank and comment-only lines never open or close a block.
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        key_match = _PORTS_KEY.fullmatch(line.rstrip())
+        if key_match is not None:
+            ports_indent = len(key_match.group("indent"))
+            continue
+
+        if ports_indent is not None and indent <= ports_indent:
+            # A sibling (or shallower) key ends the block.
+            ports_indent = None
+
+        if ports_indent is None or not stripped.startswith("-"):
+            continue
+
+        value = _value_of(stripped)
+
+        match = _VARIABLE.fullmatch(value)
+        if match is not None:
+            default = match.group("default")
+            found.append(
+                PublishedPort(
+                    file=path,
+                    var=match.group("var"),
+                    default=int(default) if default else None,
+                    literal=None,
+                )
+            )
+            continue
+
+        match = _LITERAL.fullmatch(value)
+        if match is not None:
+            found.append(
+                PublishedPort(
+                    file=path,
+                    var=None,
+                    default=None,
+                    literal=int(match.group("host_port")),
+                )
+            )
+
+    return found
+
+
 def published_ports(project_dir: Path) -> list[PublishedPort]:
     """Every published port declared by every compose variant in a project."""
-    found: list[PublishedPort] = []
-
-    patterns = ("docker-compose*.y*ml", "compose*.y*ml")
+    patterns = ("docker-compose*.y*ml", "compose.y*ml")
     paths = sorted({path for pattern in patterns for path in project_dir.glob(pattern)})
 
+    found: list[PublishedPort] = []
     for path in paths:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("-"):
-                continue
-
-            value = _value_of(stripped)
-
-            match = _VARIABLE.fullmatch(value)
-            if match is not None:
-                default = match.group("default")
-                found.append(
-                    PublishedPort(
-                        file=path,
-                        var=match.group("var"),
-                        default=int(default) if default else None,
-                        literal=None,
-                    )
-                )
-                continue
-
-            match = _LITERAL.fullmatch(value)
-            if match is not None:
-                found.append(
-                    PublishedPort(
-                        file=path,
-                        var=None,
-                        default=None,
-                        literal=int(match.group("host_port")),
-                    )
-                )
-
+        found.extend(_published_ports_in_file(path))
     return found

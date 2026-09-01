@@ -136,3 +136,84 @@ def test_published_ports_ignores_a_commented_out_ports_entry(tmp_path: Path):
     found = published_ports(tmp_path)
 
     assert found == []
+
+
+def test_published_ports_ignores_a_timestamp_shaped_command_entry(tmp_path: Path):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    command:\n"
+        "      - 12:30:00\n"
+        '      - "23:59:59"\n',
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert found == []
+
+
+def test_published_ports_ignores_timestamp_shapes_under_healthcheck_and_entrypoint(
+    tmp_path: Path,
+):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    healthcheck:\n"
+        "      test:\n"
+        "        - 5:00\n"
+        "    entrypoint:\n"
+        '      - "100:200:300"\n',
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert found == []
+
+
+def test_published_ports_scopes_dash_entries_to_their_own_services_ports_block(
+    tmp_path: Path,
+):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    ports:\n"
+        '      - "8080:8080"\n'
+        "  db:\n"
+        "    ports:\n"
+        '      - "5432:5432"\n',
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080, 5432]
+
+
+def test_published_ports_does_not_swallow_a_sibling_key_after_a_ports_block(
+    tmp_path: Path,
+):
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    ports:\n"
+        '      - "8080:8080"\n'
+        "    command:\n"
+        "      - 12:30:00\n",
+        encoding="utf-8",
+    )
+
+    found = published_ports(tmp_path)
+
+    assert [port.literal for port in found] == [8080]
+
+
+def test_published_ports_does_not_scan_composer_yml(tmp_path: Path):
+    (tmp_path / "composer.yml").write_text(
+        'services:\n  web:\n    ports:\n      - "8080:8080"\n', encoding="utf-8"
+    )
+
+    found = published_ports(tmp_path)
+
+    assert found == []
