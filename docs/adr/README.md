@@ -20,6 +20,8 @@ the reasoning, including reasoning we later moved away from.
 | 0007 | [Bind the web status page to the Tailscale address only](0007-bind-tailscale-address-only.md) | Accepted |
 | 0008 | [Allocate ports rather than validate them](0008-allocate-ports-rather-than-validate.md) | Accepted |
 | 0009 | [Write every file atomically, and write `.env` last](0009-atomic-writes-and-env-last.md) | Accepted |
+| 0010 | [Scope the port key to the bind address: `(host, addr, port)`](0010-address-scoped-port-key.md) | Accepted |
+| 0011 | [`sync` repairs drifted projects, and `show` stands alone](0011-sync-repairs-drift-and-show-stands-alone.md) | Accepted |
 
 ## Adding a new ADR
 

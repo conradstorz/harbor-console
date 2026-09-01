@@ -27,10 +27,16 @@ def test_does_not_rewrite_a_current_file(tmp_path: Path):
 
 def test_rewrites_an_older_version(tmp_path: Path):
     path = tmp_path / "HARBOR_PORTS.md"
-    path.write_text("harbor-console-template-version: 0\nstale\n", encoding="utf-8")
+    # The sentinel has to be a string the template itself can never contain,
+    # since the assertion is that the old content is gone. An ordinary English
+    # word is not safe: "stale" was, until the template started using it.
+    sentinel = "OLD-TEMPLATE-CONTENT-SENTINEL"
+    path.write_text(
+        f"harbor-console-template-version: 0\n{sentinel}\n", encoding="utf-8"
+    )
 
     assert write_explainer(path) is True
-    assert "stale" not in path.read_text(encoding="utf-8")
+    assert sentinel not in path.read_text(encoding="utf-8")
 
 
 def test_contains_no_project_specific_numbers(tmp_path: Path):

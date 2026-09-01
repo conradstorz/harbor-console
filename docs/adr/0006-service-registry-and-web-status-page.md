@@ -6,6 +6,9 @@ Date: 2026-09-01
 
 Accepted — supersedes the "no web server" constraint of the v0.1.0 MVP and
 amends [ADR 3](0003-no-plugins-in-mvp.md) with respect to declared data files.
+The `(host, port)` uniqueness rule below is superseded by
+[ADR 10](0010-address-scoped-port-key.md), which scopes the key to the bind
+address: `(host, addr, port)`. Everything else here stands.
 
 ## Context
 

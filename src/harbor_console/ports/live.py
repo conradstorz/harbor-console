@@ -3,8 +3,13 @@
 The authoritative source is `/ports.json`, served read-only by
 `harbor-console-web` on the host itself, because only the host can see
 loopback-bound listeners and non-Docker ones (sshd, tailscaled) -- an allocator
-blind to those would eventually hand one out. When that is unreachable we fall
-back to probing over the tailnet and mark the result incomplete.
+blind to those would eventually hand one out. When it is unreachable the CLI
+refuses to grant rather than guessing.
+
+`probe_live` below offers a TCP probe over the tailnet as a possible fallback,
+but nothing wires it: no caller outside its own test reaches it, and the
+`LiveState` it returns is marked `complete=False`, which is exactly the state
+the CLI declines to grant on. It is provided, not used.
 """
 
 from __future__ import annotations
@@ -107,7 +112,12 @@ def probe_live(
     connect: Callable[..., object] = socket.create_connection,
     timeout: float = 0.5,
 ) -> LiveState:
-    """Fallback: TCP-connect to each port. Blind to loopback and to ownership."""
+    """Candidate fallback: TCP-connect to each port. Not wired to any caller.
+
+    Blind to loopback listeners and to ownership, so the result is marked
+    incomplete -- and an incomplete `LiveState` is one the CLI refuses to grant
+    on. Wiring it up would need that policy decided first.
+    """
     listeners = []
     for port in ports:
         try:

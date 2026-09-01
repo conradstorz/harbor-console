@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harbor_console.ports.atomic import write_text_atomic
 
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
 
 _VERSION_LINE = re.compile(r"harbor-console-template-version:\s*(\d+)")
 
@@ -62,8 +62,34 @@ rewritten; `assigned` is harbor-console's and must not be hand-edited.
   is listening.
 - **New ports come from 8100-8999**, deliberately below the Linux ephemeral range
   (32768-60999) so an assigned port cannot lose a race to an outbound socket.
-- **After a reassignment, redeploy.** Until you do, the running container still
-  holds the old port and harbor-console will report the mismatch.
+- **After a reassignment, do two things: update the compose default, then
+  redeploy.** They fix different problems. Redeploying is what makes the running
+  container actually bind the new port. Editing the default in the compose line
+  — the `1234` in `"${{HARBOR_PORT_NAME:-1234}}:1234"` — to the number you were
+  assigned is what clears the warning: until you do, `harbor-console ports scan`
+  and `harbor-console ports sync` both keep reporting that this project's
+  compose file defaults the variable to the old number, and both keep exiting
+  non-zero. That warning is permanent, not transient. Nothing else clears it,
+  because `.env` is normally gitignored and the stale default is what a fresh
+  clone would publish.
+
+## Add one line to `.gitignore`
+
+    .harbor-tmp.*
+
+harbor-console never truncates a file it is replacing. It writes the new content
+to `.harbor-tmp.<file>.<random>.tmp` beside the target and then moves it over,
+so a write that fails partway leaves your original exactly as it was, and it
+removes the temp file afterwards.
+
+A `SIGKILL` or a power cut is the case it cannot clean up after. That leaves a
+temp file sitting in your repository next to — and possibly containing part of —
+your `.env`. A `.gitignore` rule for `.env` does not match a temp file derived
+from it, so without the line above an abandoned temp file holding your secrets
+can be committed.
+
+The same pattern is how you find and delete leftovers. Nothing sweeps them
+automatically.
 
 ## Health and status endpoints
 

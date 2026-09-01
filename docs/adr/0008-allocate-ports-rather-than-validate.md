@@ -4,7 +4,11 @@ Date: 2026-09-01
 
 ## Status
 
-Accepted
+Accepted — amended by [ADR 10](0010-address-scoped-port-key.md), which scopes
+the allocated key to the bind address, and by
+[ADR 11](0011-sync-repairs-drift-and-show-stands-alone.md), which makes `sync`
+repair a project whose files have drifted from the lease it already holds and
+makes `show` independent of declaration loading.
 
 ## Context
 

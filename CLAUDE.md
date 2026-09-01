@@ -24,8 +24,8 @@ Uses `uv` (not pip/venv). Python 3.13+.
 | Run one test file | `uv run pytest tests/test_system.py` |
 | Run one test | `uv run pytest tests/test_system.py::test_format_uptime` |
 | Report pending port changes | `uv run harbor-console ports scan` |
-| Apply port assignments | `uv run harbor-console ports sync` |
-| Print the lease table | `uv run harbor-console ports show` |
+| Apply port assignments, and repair drifted projects | `uv run harbor-console ports sync` |
+| Print the lease table (reads no declarations) | `uv run harbor-console ports show` |
 
 `pyproject.toml` sets `pythonpath = ["src"]`, so tests import `harbor_console` without an editable install.
 
@@ -41,12 +41,17 @@ Existing (implemented):
 
 The port allocator, implemented for v0.2.0, keeps the same split under `ports/`:
 
-- `ports/keys.py`, `ports/ledger.py`, `ports/declaration.py` — **collect** the lease ledger (`services.toml`) and each project's declaration (`.harbor.toml`). A ledger that claims one `(host, addr, port)` twice is a hard error at load time.
+- `ports/keys.py`, `ports/ledger.py`, `ports/declaration.py` — **collect** the lease ledger (`services.toml`) and each project's declaration (`.harbor.toml`). The uniqueness key is `(host, addr, port)`, compared by address *overlap*: `0.0.0.0` contends with every address on its host, two different specific addresses do not contend, two hosts never contend ([ADR 10](docs/adr/0010-address-scoped-port-key.md)). A ledger that claims one `(host, addr, port)` twice is a hard error at load time.
 - `ports/live.py`, `ports/discovery.py`, `ports/compose.py` — **collect** host state from `/ports.json`, the participating projects in the tree, and the ports each compose file publishes.
 - `ports/allocate.py` — the allocation policy. Pure: no I/O, so every rule is testable with plain values.
 - `ports/envfile.py`, `ports/explainer.py` — **render** the two generated artifacts: the managed fence in a project's `.env`, and `HARBOR_PORTS.md`.
 - `ports/atomic.py` — the one way a whole file is replaced: temp file beside the target, then `os.replace`. Every writer goes through it ([ADR 9](docs/adr/0009-atomic-writes-and-env-last.md)).
 - `ports/cli.py` — **coordinates** `scan` / `sync` / `show`, and is the **only module in the allocator that writes**. Nothing else touches the disk on its own.
+
+Two behaviours of that CLI are load-bearing and easy to undo by accident ([ADR 11](docs/adr/0011-sync-repairs-drift-and-show-stands-alone.md)):
+
+- **`sync` writes a project whose files have drifted, not only one whose decision changed.** `.env` is gitignored, so every fresh clone of a participating project starts without one while its lease stands and its decision is "keep"; writing only changes would report "up to date" over a project about to fall back to its compose default, on a port that may be leased to somebody else. A missing or mangled fence and a missing `HARBOR_PORTS.md` are repaired the same way. `scan` reports the same condition and writes nothing. A repair is reported *as* a repair, distinctly from a grant, and a tree that already matches stays a genuine no-op.
+- **`show` loads no declarations at all.** It reads the ledger and prints it, so a broken `.harbor.toml` anywhere in the tree — which does fail `scan` and `sync` — still leaves an operator able to read the lease table, which is exactly when they need it.
 
 Still planned for v0.2.0 (**none of these exist yet** — do not describe them as if they do):
 
@@ -69,11 +74,12 @@ Collectors never raise on a hostile environment: `get_docker_container_count()` 
 Two deliberate exceptions, where failing loudly is the point:
 
 - A duplicate `(host, addr, port)` in `services.toml` is a hard error at load time, not a warning. Catching that collision is why the ledger exists.
+- A `.harbor.toml` that cannot be parsed fails `scan` and `sync`: the allocator will not allocate against data it cannot read. `show` is deliberately exempt.
 - `harbor-console-web` refuses to start if it cannot bind the host's Tailscale address. There is no fallback to `0.0.0.0` — see the hard constraints below.
 
 ### The `.harbor-tmp.*` sweep pattern
 
-`ports/atomic.py` writes to `.harbor-tmp.<target name>.<random>.tmp` beside the file it is replacing and removes it afterwards. A `SIGKILL` or a power cut leaves one behind, next to — and possibly containing part of — a `.env`. This repository ignores `.harbor-tmp.*`; **every participating project should add the same line to its own `.gitignore`**, because a rule for `.env` does not match a temp file derived from it. That pattern is also how you find and remove abandoned temp files; nothing sweeps them automatically.
+`ports/atomic.py` writes to `.harbor-tmp.<target name>.<random>.tmp` beside the file it is replacing and removes it afterwards. A `SIGKILL` or a power cut leaves one behind, next to — and possibly containing part of — a `.env`. This repository ignores `.harbor-tmp.*`; **every participating project should add the same line to its own `.gitignore`**, because a rule for `.env` does not match a temp file derived from it. Since template version 2, `HARBOR_PORTS.md` tells each participating project that in its own words, which is what ADR 9 meant by "documented for them". That pattern is also how you find and remove abandoned temp files; nothing sweeps them automatically.
 
 ## Hard constraints (v0.2.0)
 
