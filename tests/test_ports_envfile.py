@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,18 @@ def test_a_failed_write_leaves_the_existing_env_intact(tmp_path: Path, monkeypat
 
     assert path.read_text(encoding="utf-8") == original
     assert [entry.name for entry in tmp_path.iterdir()] == [".env"]
+
+
+def test_write_env_leaves_an_already_correct_file_alone(tmp_path: Path):
+    # A project is put into the write pass by *any* of its files having drifted,
+    # so an unconditional rewrite here moves the mtime of every participating
+    # project's `.env` whenever the explainer template changes. Identical
+    # content is invisible; a moved mtime is not.
+    path = tmp_path / ".env"
+    write_env(path, {"HARBOR_PORT_WEB": "8090"})
+    os.utime(path, (1_000_000, 1_000_000))
+    stamp = path.stat().st_mtime_ns
+
+    assert write_env(path, {"HARBOR_PORT_WEB": "8090"}) is False
+    assert path.stat().st_mtime_ns == stamp
+    assert write_env(path, {"HARBOR_PORT_WEB": "8091"}) is True

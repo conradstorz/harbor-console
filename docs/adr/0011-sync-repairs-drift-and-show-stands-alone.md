@@ -40,6 +40,20 @@ project already holds is not the same event as handing it a new port. A tree tha
 already matches stays a genuine no-op: no file is opened for writing and the
 ledger's mtime does not move.
 
+A repair restores a **lease**, and only a lease. It is bounded by three rules,
+because a repair writes into a repository this tool does not own:
+
+- A project holding no lease has nothing to repair. An `assigned` in somebody
+  else's `.harbor.toml` is not a reservation — it is a committed number that
+  stays there after the port has been granted away — so it is never treated as
+  "the port this project is already on".
+- A project whose decision `--new-only` withheld is excluded from the repair set
+  exactly as it is excluded from the write pass. A run that has just refused to
+  renumber a project may not write its files by another route. `scan` and `sync`
+  compute the set through one predicate, so `scan` predicts `sync` exactly.
+- Only the files that actually disagree are written. Being repaired for one file
+  does not rewrite the others.
+
 We will make `show` independent of declaration loading. It reads the ledger and
 prints it; it parses no `.harbor.toml` at all.
 
@@ -49,6 +63,13 @@ prints it; it parses no `.harbor.toml` at all.
   compose default. The lease and the file that honours it converge.
 - `sync` now touches projects the operator did not change, so the report must
   distinguish repairs from grants or it reads as unexplained churn. It does.
+- A repair is a write on the unattended path, so its bounds are load-bearing.
+  Repairing a project that held no lease published the incumbent's port into it
+  — two projects on one port, reached through the mechanism meant to prevent
+  that, at exit 0 and reported as a repair. The rules above are what stop it.
+- Bumping the `HARBOR_PORTS.md` template version puts every participating
+  project into the repair set at once. Writing only the files that differ is
+  what keeps that from being an mtime change on every project's `.env`.
 - A broken declaration anywhere in the tree still fails `scan` and `sync` — those
   cannot allocate against data they cannot read — but no longer hides the lease
   table. `show` keeps working during exactly the incident that breaks the others.

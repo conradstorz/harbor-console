@@ -70,11 +70,25 @@ def apply_fence(text: str, values: dict[str, str]) -> str:
     return text + block
 
 
-def write_env(path: Path, values: dict[str, str]) -> None:
+def write_env(path: Path, values: dict[str, str]) -> bool:
     """Create or update a project's `.env`, preserving everything else in it.
+
+    Returns True when the file was written. A `.env` that already says exactly
+    this is left alone -- not opened, not replaced, mtime and all -- for the
+    same reason `explainer.write_explainer` checks before writing: a project is
+    put into the write pass by *any* of its files having drifted, so a run that
+    rewrote every file of every drifted project would touch the `.env` of every
+    participating repository each time the explainer template changed. A
+    byte-identical rewrite is invisible in content and loud in `git status`,
+    file watchers and backups, in repositories this tool does not own.
 
     Written atomically: `.env` holds secrets that are not this tool's to lose,
     so a failed write must leave the file it found, not an empty one.
     """
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    write_text_atomic(path, apply_fence(existing, values))
+    wanted = apply_fence(existing, values)
+    if path.exists() and wanted == existing:
+        return False
+
+    write_text_atomic(path, wanted)
+    return True

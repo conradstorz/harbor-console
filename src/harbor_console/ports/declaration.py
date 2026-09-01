@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harbor_console.ports.atomic import write_text_atomic
-from harbor_console.ports.keys import ANY_ADDR, env_var_name
+from harbor_console.ports.keys import ANY_ADDR, VAR_PREFIX, env_var_name
 
 #: What a `project`, `host` or port `name` may contain. Deliberately narrower
 #: than anything downstream strictly needs: these are identifiers that end up in
@@ -96,6 +96,18 @@ def load_declaration(path: Path) -> Declaration:
         # so the other container fell back to its compose default, on a port the
         # ledger had leased to somebody else. Silently. This is where that stops.
         variable = env_var_name(name)
+
+        # `--` and `.` are made entirely of characters `_IDENTIFIER` allows and
+        # slug to nothing at all, leaving the bare prefix. `.env` would then
+        # publish `HARBOR_PORT_=8080` into somebody else's repository: not a
+        # variable any shell or compose file can interpolate, and a line no
+        # later run could tell apart from the fence's other content.
+        if variable == VAR_PREFIX:
+            raise DeclarationError(
+                f"{path}: port name '{name}' has no letters or digits, so it "
+                f"publishes the bare variable '{variable}'; give it a name"
+            )
+
         if variable in variables:
             raise DeclarationError(
                 f"{path}: port names '{variables[variable]}' and '{name}' both "

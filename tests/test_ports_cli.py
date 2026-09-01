@@ -332,20 +332,49 @@ def test_an_unreadable_env_is_reported_not_a_traceback(tmp_path: Path):
     assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8500
 
 
+def _widened_onto_an_incumbent(root: Path, ledger_path: Path, extra: str = "") -> Path:
+    """Set up the one situation in which a *lease-holder* is told to move.
+
+    The incumbent is never renumbered, so a project can only be reassigned off a
+    port it actually holds by widening its own address onto a senior lease:
+    imageharbor holds 192.168.1.5:8080 and now asks to bind 0.0.0.0:8080, which
+    gte has held at 127.0.0.1:8080 since longer ago. Two specific addresses do
+    not contend, so both leases are legal in the ledger; the widening is what
+    makes them contend, and the junior is the one that moves.
+
+    Returns imageharbor's directory. `extra` is appended to its declaration.
+    """
+    save_leases(
+        ledger_path,
+        [
+            Lease("gte", "web", "hpz440", "127.0.0.1", 8080, date(2026, 7, 5)),
+            Lease("imageharbor", "web", "hpz440", "192.168.1.5", 8080, date(2026, 8, 1)),
+        ],
+    )
+    incumbent = root / "gte"
+    incumbent.mkdir()
+    (incumbent / ".harbor.toml").write_text(
+        'project = "gte"\nhost = "hpz440"\n\n[[port]]\n'
+        'name = "web"\nwant = 8080\nassigned = 8080\naddr = "127.0.0.1"\n',
+        encoding="utf-8",
+    )
+    moved = root / "imageharbor"
+    moved.mkdir()
+    (moved / ".harbor.toml").write_text(
+        'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
+        'name = "web"\nwant = 8080\nassigned = 8080\naddr = "0.0.0.0"\n' + extra,
+        encoding="utf-8",
+    )
+    return moved
+
+
 def test_new_only_keeps_the_withheld_ports_current_number_in_env(tmp_path: Path):
     # The fence is rewritten wholesale, so a project holding one withheld port
     # and one granted port is where a mistake shows: the withheld variable must
     # keep the number it currently holds, never the move that was refused.
     ledger_path = tmp_path / "services.toml"
-    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
-    make_project(tmp_path, "gte", 8080)
-    moved = tmp_path / "imageharbor"
-    moved.mkdir()
-    (moved / ".harbor.toml").write_text(
-        'project = "imageharbor"\nhost = "hpz440"\n\n'
-        '[[port]]\nname = "web"\nwant = 8080\nassigned = 8080\n\n'
-        '[[port]]\nname = "api"\nwant = 8600\n',
-        encoding="utf-8",
+    moved = _widened_onto_an_incumbent(
+        tmp_path, ledger_path, extra='\n[[port]]\nname = "api"\nwant = 8600\n'
     )
     (moved / ".env").write_text(
         f"SECRET=keepme\n{FENCE_START}\nHARBOR_PORT_WEB=8080\n{FENCE_END}\n",
@@ -362,8 +391,15 @@ def test_new_only_keeps_the_withheld_ports_current_number_in_env(tmp_path: Path)
     assert "8100" not in env  # the refused reassignment never leaks in
     assert "SECRET=keepme" in env  # content outside the fence survives
     assert load_declaration(moved / ".harbor.toml").ports[0].assigned == 8080
-    held = {(lease.project, lease.name): lease.port for lease in load_leases(ledger_path)}
-    assert held == {("gte", "web"): 8080, ("imageharbor", "api"): 8600}
+    held = {
+        (lease.project, lease.name): (lease.addr, lease.port)
+        for lease in load_leases(ledger_path)
+    }
+    assert held == {
+        ("gte", "web"): ("127.0.0.1", 8080),
+        ("imageharbor", "web"): ("192.168.1.5", 8080),  # the withheld lease stands
+        ("imageharbor", "api"): ("0.0.0.0", 8600),
+    }
 
 
 def test_ports_url_is_accepted_before_and_after_the_subcommand(tmp_path: Path):
@@ -470,14 +506,7 @@ def test_a_degraded_run_reports_drift_against_the_held_port_not_the_refused_one(
     # repository's compose default to a number nobody was granted -- a guess, on
     # the one path whose whole contract is that it does not guess.
     ledger_path = tmp_path / "services.toml"
-    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
-    make_project(tmp_path, "gte", 8080)
-    moved = make_project(tmp_path, "imageharbor", 8080)
-    (moved / ".harbor.toml").write_text(
-        'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
-        'name = "web"\nwant = 8080\nassigned = 8080\n',
-        encoding="utf-8",
-    )
+    moved = _widened_onto_an_incumbent(tmp_path, ledger_path)
     (moved / "docker-compose.yml").write_text(
         'services:\n  a:\n    ports:\n      - "${HARBOR_PORT_WEB:-9999}:80"\n',
         encoding="utf-8",
@@ -491,7 +520,9 @@ def test_a_degraded_run_reports_drift_against_the_held_port_not_the_refused_one(
     assert "assigned 8080" in output  # against the number it is actually on
     assert "8100" not in output  # never against the grant that was refused
     assert not (moved / ".env").exists()
-    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"gte": 8080}
+    assert {
+        (lease.project, lease.addr): lease.port for lease in load_leases(ledger_path)
+    } == {("gte", "127.0.0.1"): 8080, ("imageharbor", "192.168.1.5"): 8080}
 
 
 def test_a_compose_file_that_is_not_utf8_is_skipped_not_a_traceback(tmp_path: Path):
@@ -678,3 +709,102 @@ def test_a_project_name_that_would_corrupt_the_ledger_is_refused(tmp_path: Path)
     assert not (project / ".env").exists()
     # And every later command still works, which is the whole point.
     assert run(["show"], tmp_path, ledger_path)[0] == 0
+
+
+def _stale_project(root: Path, name: str, want: int, assigned: int) -> Path:
+    """A committed `.harbor.toml` naming an `assigned` its project has no lease on.
+
+    The ordinary shape of a fresh clone that once shared a tree with somebody
+    else: `assigned` travels in git, the lease does not, and `.env` is
+    gitignored so it is simply absent.
+    """
+    project = root / name
+    project.mkdir()
+    (project / ".harbor.toml").write_text(
+        f'project = "{name}"\nhost = "hpz440"\n\n[[port]]\n'
+        f"name = \"web\"\nwant = {want}\nassigned = {assigned}\n",
+        encoding="utf-8",
+    )
+    return project
+
+
+def _repair_targets(output: str) -> set[str]:
+    """The projects a report says it repaired, or would repair."""
+    targets: set[str] = set()
+    for line in output.splitlines():
+        words = line.partition(":")[0].split()
+        if words[:1] == ["repaired"] or words[:2] == ["would", "repair"]:
+            targets.add(words[-1])
+    return targets
+
+
+def test_new_only_never_publishes_an_incumbents_port_into_a_withheld_project(
+    tmp_path: Path,
+):
+    # Only a lease reserves a port; an `assigned` in a file this tool does not
+    # own does not. beta's committed declaration still claims 8080, but alpha
+    # holds the lease on it. Treating that stale number as "the port beta is
+    # already on" published 8080 into beta's `.env` -- two projects on one port,
+    # created by the repair mechanism, on the path the scheduled timer runs, and
+    # reported as a repair.
+    ledger_path = tmp_path / "services.toml"
+    alpha = make_project(tmp_path, "alpha", 8080)
+    run(["sync"], tmp_path, ledger_path)
+    beta = _stale_project(tmp_path, "beta", 8080, 8080)
+
+    code, output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert code == 1
+    assert "withheld" in output.lower()
+    # Nothing this run was entitled to publish for beta, so nothing was.
+    assert not (beta / ".env").exists()
+    assert not (beta / "HARBOR_PORTS.md").exists()
+    assert "beta" not in _repair_targets(output)
+    # And the incumbent still holds 8080, alone.
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"alpha": 8080}
+    assert "HARBOR_PORT_WEB=8080" in (alpha / ".env").read_text(encoding="utf-8")
+
+
+def test_scan_predicts_exactly_what_new_only_repairs(tmp_path: Path):
+    # `scan` is the dry run for `sync`. It filtered repairs by every project
+    # with a change; `sync --new-only` filtered only by the changes it applied,
+    # so a withheld project appeared as a repair in one and not the other.
+    ledger_path = tmp_path / "services.toml"
+    make_project(tmp_path, "alpha", 8080)
+    gamma = make_project(tmp_path, "gamma", 8500)
+    run(["sync"], tmp_path, ledger_path)
+    (gamma / ".env").unlink()  # the fresh clone: gitignored, so simply absent
+    beta = _stale_project(tmp_path, "beta", 8080, 8080)
+
+    scan_code, scan_output = run(["scan"], tmp_path, ledger_path)
+    sync_code, sync_output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert scan_code == 1
+    assert sync_code == 1
+    assert _repair_targets(scan_output) == _repair_targets(sync_output) == {"gamma"}
+    assert "HARBOR_PORT_WEB=8500" in (gamma / ".env").read_text(encoding="utf-8")
+    assert not (beta / ".env").exists()
+
+
+def test_a_repair_of_the_explainer_alone_does_not_touch_env(tmp_path: Path):
+    # Bumping TEMPLATE_VERSION puts every participating project into the repair
+    # set at once. Rewriting each one's `.env` byte-for-byte identically to move
+    # its mtime is churn in somebody else's repository for no reason.
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    (project / "HARBOR_PORTS.md").write_text(
+        "harbor-console-template-version: 1\n", encoding="utf-8"
+    )
+    before = _freeze_mtimes(tmp_path)
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    assert "repaired" in output.lower()
+    assert "harbor-console-template-version: 2" in (
+        project / "HARBOR_PORTS.md"
+    ).read_text(encoding="utf-8")
+    unchanged = {path: stamp for path, stamp in before.items() if path.name != "HARBOR_PORTS.md"}
+    after = {path: path.stat().st_mtime_ns for path in unchanged}
+    assert after == unchanged

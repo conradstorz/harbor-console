@@ -16,7 +16,19 @@ default, on a port leased to somebody else. That is this tool's founding
 failure, at exit 0. A repair is reported as a repair, distinctly from a grant,
 because restoring a lease a project already holds is not the same event as
 handing it a new one. A tree that already matches is still a genuine no-op: no
-file is opened for writing, and the ledger's mtime does not move.
+file is opened for writing, and the ledger's mtime does not move. Nor does a
+project's `.env` move when only its `HARBOR_PORTS.md` has drifted -- a repair
+writes the files that disagree, not every file of a project that has one.
+
+A repair restores a *lease*, and nothing else. Only a lease reserves a port; an
+`assigned` in a `.harbor.toml` does not, being a number committed to somebody
+else's repository that stays there after the port has been granted away. A
+project holding no lease therefore has nothing to repair and nothing published
+for it -- and a project whose decision `--new-only` withheld is excluded from
+the repair set exactly as it is excluded from the write pass, because a run that
+has just refused to renumber a project has no business writing its files by
+another route. `scan` and `sync` compute that set through one predicate
+(`_outstanding_repairs`), so `scan` is a truthful preview of what `sync` does.
 
 Two further mechanisms guard a lease against having no matching `.env` --
 neither of which is a blanket pre-flight check of every file:
@@ -163,18 +175,11 @@ def run(
     # Both the `.env` writer and the drift warnings must speak of the port a
     # project will actually be on after this run. For a withheld decision that is
     # the number it already holds, not the move that was just refused.
-    env_values = _effective_env(decisions, withheld_keys, leases, declarations)
+    env_values = _effective_env(decisions, withheld_keys, leases)
     warnings = _compose_warnings(declarations, env_values)
 
     if args.command == "scan":
-        # A project already in the change set is about to be written whole;
-        # reporting it a second time as a repair would double-count it.
-        pending = {decision.project for decision in changes}
-        repairs = {
-            project: reasons
-            for project, reasons in _repairs_needed(declarations, env_values).items()
-            if project not in pending
-        }
+        repairs = _outstanding_repairs(declarations, env_values, changes)
         _report(
             changes,
             warnings,
@@ -199,14 +204,20 @@ def run(
         # path whose whole contract is that it does not guess. Every change is
         # therefore treated exactly as a withheld decision is.
         ungranted = {(decision.project, decision.port_name) for decision in changes}
-        held_values = _effective_env(decisions, ungranted, leases, declarations)
+        held_values = _effective_env(decisions, ungranted, leases)
         _report(
             [],
             _compose_warnings(declarations, held_values),
             out,
             applied=False,
             outstanding=True,
-            repairs=_repairs_needed(declarations, held_values),
+            # Nothing is reported as changing on this path -- it grants nothing
+            # -- so nothing is excluded from the repair set either, or a project
+            # whose grant was refused *and* whose files have drifted from a
+            # lease it does hold would go unmentioned entirely. A project
+            # holding no lease is already absent from `held_values` and so
+            # cannot appear here.
+            repairs=_outstanding_repairs(declarations, held_values, []),
         )
         return EXIT_PENDING
 
@@ -220,13 +231,12 @@ def run(
     # A project with no decision to apply still belongs in the write pass when
     # its own files have drifted from the lease it already holds. `env_values`
     # has been computed for every project, keep-only ones included, so the
-    # comparison is against exactly what would be written.
+    # comparison is against exactly what would be written. The exclusion is
+    # `changes`, not `applied`: a withheld project is no more this run's to
+    # repair than it is this run's to reassign, and passing the same set `scan`
+    # passes is what keeps `scan` a preview of this.
     writing = {decision.project for decision in applied}
-    repairs = {
-        project: reasons
-        for project, reasons in _repairs_needed(declarations, env_values).items()
-        if project not in writing
-    }
+    repairs = _outstanding_repairs(declarations, env_values, changes)
 
     # Validate before writing: a project whose `.env` cannot be read, or whose
     # fence is corrupted, is dropped whole -- it never gets a lease it cannot
@@ -275,7 +285,6 @@ def _effective_env(
     decisions: Sequence[Decision],
     withheld_keys: set[_Key],
     leases: Sequence[Lease],
-    declarations: Sequence[Declaration],
 ) -> dict[str, dict[str, str]]:
     """The variables each project's `.env` should publish, per project.
 
@@ -283,13 +292,16 @@ def _effective_env(
     rewritten wholesale, so omitting an untouched port would delete it. A
     withheld port publishes the number it *currently* holds, never the move that
     was refused -- otherwise the run that declined to renumber a project would
-    renumber it anyway, through the back door.
+    renumber it anyway, through the back door. A withheld port holding no lease
+    publishes nothing at all: there is no number this run is entitled to put in
+    somebody else's `.env`, and the one written in their `.harbor.toml` is
+    typically the incumbent's.
     """
     values: dict[str, dict[str, str]] = {}
 
     for decision in decisions:
         if (decision.project, decision.port_name) in withheld_keys:
-            port = _current_port(decision, leases, declarations)
+            port = _current_port(decision, leases)
             if port is None:
                 continue
         else:
@@ -300,12 +312,20 @@ def _effective_env(
     return values
 
 
-def _current_port(
-    decision: Decision,
-    leases: Sequence[Lease],
-    declarations: Sequence[Declaration],
-) -> int | None:
-    """The port a withheld decision's port already holds, if it holds one."""
+def _current_port(decision: Decision, leases: Sequence[Lease]) -> int | None:
+    """The port a withheld decision's port already holds, or None if it holds none.
+
+    Only a lease reserves a port. An `assigned` in a `.harbor.toml` is not
+    evidence of a reservation: it is a number committed to a repository this
+    tool does not own, and it stays there after the port has been granted to
+    somebody else -- which is exactly the state a reassignment exists to
+    correct. Falling back to it here published the incumbent's number into the
+    withheld project's `.env`, putting two projects on one port through the
+    very mechanism meant to prevent it, and calling it a repair.
+
+    A project holding no lease therefore publishes nothing. It has no port to
+    keep, and this run has just declined to give it one.
+    """
     for lease in leases:
         if (lease.project, lease.name, lease.host) == (
             decision.project,
@@ -314,14 +334,35 @@ def _current_port(
         ):
             return lease.port
 
-    for declaration in declarations:
-        if declaration.project != decision.project:
-            continue
-        for request in declaration.ports:
-            if request.name == decision.port_name:
-                return request.assigned
-
     return None
+
+
+def _outstanding_repairs(
+    declarations: Sequence[Declaration],
+    env_values: dict[str, dict[str, str]],
+    reported: Sequence[Decision],
+) -> _Repairs:
+    """Drifted projects, minus those this run already reports as changing.
+
+    The one predicate `scan` and `sync` both compute their repair set through,
+    so that `scan` is a truthful preview of what `sync` will do. They diverged
+    once: `scan` excluded every project with a change, `sync --new-only`
+    excluded only the changes it *applied*, and a project whose reassignment was
+    withheld was therefore repaired by a run that had just refused to touch it
+    -- to a number that run had no authority over -- while `scan` had predicted
+    nothing of the sort.
+
+    `reported` is every decision the caller is about to print or write. A
+    project in it is already being spoken for: it is written whole, so naming it
+    again as a repair double-counts it, and if it was withheld instead then
+    nothing about it is this run's to write at all.
+    """
+    named = {decision.project for decision in reported}
+    return {
+        project: reasons
+        for project, reasons in _repairs_needed(declarations, env_values).items()
+        if project not in named
+    }
 
 
 def _repairs_needed(
@@ -339,7 +380,9 @@ def _repairs_needed(
 
     A project with no effective port is skipped entirely: there is nothing to
     publish, and writing an empty managed fence into a `.env` that no port
-    needs would be this tool inventing work in somebody else's repository.
+    needs would be this tool inventing work in somebody else's repository. That
+    is what keeps a project holding no lease out of the repair set -- it has no
+    effective port, whatever its own `.harbor.toml` says it was once assigned.
 
     The reasons are phrased for an operator to read. Reading `.env` can fail --
     a directory, a cp1252 password, a corrupted fence -- and that is reported as
@@ -520,7 +563,12 @@ def _write_project(
 
     `decisions` is empty for a repair: nothing about the project's ports is
     changing, so its `.harbor.toml` already says what a write would say and is
-    left alone.
+    left alone. The other two files check themselves the same way --
+    `write_explainer` and `write_env` each return without writing when the file
+    already holds exactly what they would put there. A project is put into the
+    write pass by *any* one of its files having drifted, so an unconditional
+    write here would move the mtime of every participating project's `.env`
+    every time the explainer template changed.
 
     `.env` goes last, deliberately. It is the file that makes a container
     actually bind the port, while the ledger is only the record of who is

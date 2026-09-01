@@ -205,3 +205,13 @@ def test_two_port_names_deriving_one_variable_are_refused(tmp_path: Path):
     text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web-ui"\n\n[[port]]\nname = "web_ui"\n'
     with pytest.raises(DeclarationError, match="HARBOR_PORT_WEB_UI"):
         load_declaration(_write(tmp_path, text))
+
+
+def test_a_punctuation_only_port_name_is_refused(tmp_path: Path):
+    # `--` is made entirely of characters `_IDENTIFIER` allows, and slugs to
+    # nothing: `env_var_name` derives the bare prefix `HARBOR_PORT_`, and the
+    # fence would publish `HARBOR_PORT_=8080` -- not a variable any shell or
+    # compose file can interpolate, in somebody else's `.env`.
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "--"\n'
+    with pytest.raises(DeclarationError, match="port name"):
+        load_declaration(_write(tmp_path, text))

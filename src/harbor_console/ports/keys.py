@@ -10,6 +10,11 @@ import re
 
 ANY_ADDR = "0.0.0.0"
 
+#: What every published variable starts with. Named so that a caller can ask
+#: whether a port name derived *anything* beyond the prefix: a name made only of
+#: punctuation slugs to nothing and would publish a bare `HARBOR_PORT_=`.
+VAR_PREFIX = "HARBOR_PORT_"
+
 _NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
 
 
@@ -27,6 +32,12 @@ def addrs_overlap(a: str, b: str) -> bool:
 
 
 def env_var_name(port_name: str) -> str:
-    """Derive the environment variable a declared port is published through."""
+    """Derive the environment variable a declared port is published through.
+
+    A port name with no letters or digits in it slugs to nothing and yields the
+    bare `VAR_PREFIX`. That is not a usable variable name, and it is refused
+    where declarations are read rather than papered over here -- this function
+    is also how `.env` is written, and the two must agree.
+    """
     slug = _NON_ALNUM.sub("_", port_name).strip("_").upper()
-    return f"HARBOR_PORT_{slug}"
+    return f"{VAR_PREFIX}{slug}"
