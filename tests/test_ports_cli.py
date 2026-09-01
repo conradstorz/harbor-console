@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 from datetime import date
 from pathlib import Path
@@ -5,7 +7,7 @@ from pathlib import Path
 from harbor_console import app
 from harbor_console.ports import cli
 from harbor_console.ports.declaration import load_declaration
-from harbor_console.ports.envfile import FENCE_START
+from harbor_console.ports.envfile import FENCE_END, FENCE_START
 from harbor_console.ports.ledger import Lease, load_leases, save_leases
 from harbor_console.ports.live import Listener, LiveState
 
@@ -216,3 +218,158 @@ def test_ports_subcommand_is_dispatched_to_the_allocator(monkeypatch):
 
     assert app.main(["ports", "show"]) == 7
     assert seen["argv"] == ["show"]
+
+
+def test_a_failed_declaration_write_leaves_that_project_without_a_lease(
+    tmp_path: Path, monkeypatch
+):
+    # A project whose files cannot all be written must end the run holding no
+    # lease: a lease nothing can honour is worse than no lease at all. Its
+    # neighbours -- both the ones written before it and the ones after -- must
+    # be served completely.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    beta = make_project(tmp_path, "beta", 8500)
+    zulu = make_project(tmp_path, "zulu", 8600)
+    ledger_path = tmp_path / "services.toml"
+
+    real_write_assigned = cli.write_assigned
+
+    def failing(path: Path, port_name: str, port: int) -> None:
+        if path.parent.name == "beta":
+            raise OSError("no space left on device")
+        real_write_assigned(path, port_name, port)
+
+    monkeypatch.setattr(cli, "write_assigned", failing)
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "beta" in output
+    # beta holds no lease, and its neighbours hold theirs.
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {
+        "alpha": 8080,
+        "zulu": 8600,
+    }
+    for project, port in ((alpha, 8080), (zulu, 8600)):
+        assert load_declaration(project / ".harbor.toml").ports[0].assigned == port
+        assert f"HARBOR_PORT_WEB={port}" in (project / ".env").read_text(encoding="utf-8")
+        assert (project / "HARBOR_PORTS.md").is_file()
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned is None
+    assert not (beta / ".env").exists()
+    assert not (beta / "HARBOR_PORTS.md").exists()
+    # What did land is reported, not hidden behind the error line.
+    assert "alpha" in output
+    assert "zulu" in output
+
+
+def test_a_failed_explainer_write_withdraws_only_that_projects_lease(tmp_path: Path):
+    # The same guarantee, driven by a real filesystem refusal rather than a
+    # stub: `HARBOR_PORTS.md` is a directory, so writing it cannot succeed.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    beta = make_project(tmp_path, "beta", 8500)
+    zulu = make_project(tmp_path, "zulu", 8600)
+    (beta / "HARBOR_PORTS.md").mkdir()
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "beta" in output
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {
+        "alpha": 8080,
+        "zulu": 8600,
+    }
+    for project, port in ((alpha, 8080), (zulu, 8600)):
+        assert load_declaration(project / ".harbor.toml").ports[0].assigned == port
+        assert f"HARBOR_PORT_WEB={port}" in (project / ".env").read_text(encoding="utf-8")
+        assert (project / "HARBOR_PORTS.md").is_file()
+
+
+def test_an_env_that_is_not_utf8_is_reported_not_a_traceback(tmp_path: Path):
+    # Somebody else's repository may hold a cp1252 password in `.env`. That is
+    # not a crash: the project is named, dropped whole, and its bytes are left
+    # exactly as they were.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    (alpha / ".env").write_bytes(b"PASSWORD=caf\xff\n")
+    beta = make_project(tmp_path, "beta", 8500)
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "alpha" in output
+    assert ".env" in output
+    assert (alpha / ".env").read_bytes() == b"PASSWORD=caf\xff\n"
+    assert load_declaration(alpha / ".harbor.toml").ports[0].assigned is None
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"beta": 8500}
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8500
+
+
+def test_an_unreadable_env_is_reported_not_a_traceback(tmp_path: Path):
+    # `.env` exists but cannot be read (here: it is a directory). Same contract
+    # as a corrupted fence -- named, dropped whole, non-zero exit, no traceback.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    (alpha / ".env").mkdir()
+    beta = make_project(tmp_path, "beta", 8500)
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "alpha" in output
+    assert ".env" in output
+    assert load_declaration(alpha / ".harbor.toml").ports[0].assigned is None
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"beta": 8500}
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8500
+
+
+def test_new_only_keeps_the_withheld_ports_current_number_in_env(tmp_path: Path):
+    # The fence is rewritten wholesale, so a project holding one withheld port
+    # and one granted port is where a mistake shows: the withheld variable must
+    # keep the number it currently holds, never the move that was refused.
+    ledger_path = tmp_path / "services.toml"
+    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    make_project(tmp_path, "gte", 8080)
+    moved = tmp_path / "imageharbor"
+    moved.mkdir()
+    (moved / ".harbor.toml").write_text(
+        'project = "imageharbor"\nhost = "hpz440"\n\n'
+        '[[port]]\nname = "web"\nwant = 8080\nassigned = 8080\n\n'
+        '[[port]]\nname = "api"\nwant = 8600\n',
+        encoding="utf-8",
+    )
+    (moved / ".env").write_text(
+        f"SECRET=keepme\n{FENCE_START}\nHARBOR_PORT_WEB=8080\n{FENCE_END}\n",
+        encoding="utf-8",
+    )
+
+    code, output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert code == 1
+    assert "withheld" in output.lower()
+    env = (moved / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_WEB=8080" in env  # withheld: the number it already has
+    assert "HARBOR_PORT_API=8600" in env  # granted: the new one
+    assert "8100" not in env  # the refused reassignment never leaks in
+    assert "SECRET=keepme" in env  # content outside the fence survives
+    assert load_declaration(moved / ".harbor.toml").ports[0].assigned == 8080
+    held = {(lease.project, lease.name): lease.port for lease in load_leases(ledger_path)}
+    assert held == {("gte", "web"): 8080, ("imageharbor", "api"): 8600}
+
+
+def test_ports_url_is_accepted_before_and_after_the_subcommand(tmp_path: Path):
+    # argparse's usual trap: a subparser default overwriting a value given
+    # before the subcommand. Both orderings must reach the same place.
+    url = "http://example.invalid:9/ports.json"
+
+    assert cli._parser().parse_args(["--ports-url", url, "scan"]).ports_url == url
+    assert cli._parser().parse_args(["scan", "--ports-url", url]).ports_url == url
+    assert cli._parser().parse_args(["scan"]).ports_url == cli.PORTS_URL_DEFAULT
+
+    make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    before = run(["--ports-url", url, "scan"], tmp_path, ledger_path)
+    after = run(["scan", "--ports-url", url], tmp_path, ledger_path)
+
+    assert before == after
+    assert before[0] == 1

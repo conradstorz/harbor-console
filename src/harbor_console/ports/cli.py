@@ -5,12 +5,27 @@ requests but withholds anything that would change an existing assignment, which
 is what the scheduled task runs: a timer must never renumber a project you are
 mid-deploy on.
 
-Writing is all-or-nothing *per project*. The ledger records that a project holds
-a port, and the project's own `.env` is what actually makes the container bind
-it; a lease with no matching `.env` is worse than no lease at all. So every
-project's files are validated before anything is written, and a project whose
-files cannot all be written is dropped from the run entirely -- its lease
-included -- rather than left half-done. Its neighbours are still served.
+The ledger records that a project holds a port; the project's own `.env` is what
+actually makes the container bind it. A lease with no matching `.env` is worse
+than no lease at all, and two mechanisms guard against one -- neither of which is
+a blanket pre-flight check of every file:
+
+* Each affected project's `.env` is read and its managed fence parsed *before*
+  anything is written, because a corrupted fence must not be guessed at: a wrong
+  guess destroys secrets living outside it. A project whose `.env` is corrupted,
+  unreadable, or not valid UTF-8 is named, dropped from the run whole -- no
+  lease, no `assigned`, no files -- and the command exits non-zero.
+
+* Whether `.harbor.toml` and `HARBOR_PORTS.md` can be written is *not* checked in
+  advance; nothing short of writing them proves it. So the surviving projects are
+  written one at a time -- declaration, then `.env`, then explainer -- and if any
+  of those fails, the ledger is re-saved with that project's decisions removed.
+  The project ends the run holding no lease, though files already written for it
+  are not rolled back, and the error says so. Its neighbours, before and after it
+  in the run, are unaffected.
+
+Whatever did land is reported before any error line, so an operator is never left
+guessing which projects were served.
 """
 
 from __future__ import annotations
@@ -45,6 +60,11 @@ EXIT_ERROR = 2
 #: frozen dataclasses and so comparable, but keying on identity keeps "is this
 #: one withheld?" independent of every other field.
 _Key = tuple[str, str]
+
+#: Everything writing one project's files can raise. ``UnicodeDecodeError`` is a
+#: ``ValueError``, not an ``OSError``, and is named for exactly that reason:
+#: somebody else's `.env` may legitimately hold a cp1252 password.
+_WRITE_FAILURES = (DeclarationError, EnvFenceError, OSError, UnicodeDecodeError)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -101,7 +121,18 @@ def run(
         return EXIT_ERROR
 
     changes = [decision for decision in decisions if decision.action != "keep"]
-    warnings = _compose_warnings(declarations, decisions)
+
+    new_only = getattr(args, "new_only", False)
+    withheld = [
+        decision for decision in changes if new_only and decision.action == "reassign"
+    ]
+    withheld_keys = {(decision.project, decision.port_name) for decision in withheld}
+
+    # Both the `.env` writer and the drift warnings must speak of the port a
+    # project will actually be on after this run. For a withheld decision that is
+    # the number it already holds, not the move that was just refused.
+    env_values = _effective_env(decisions, withheld_keys, leases, declarations)
+    warnings = _compose_warnings(declarations, env_values)
 
     if args.command == "scan":
         _report(changes, warnings, out, applied=False)
@@ -113,35 +144,38 @@ def run(
             "that cannot be verified as unheld. Nothing written.",
             file=out,
         )
+        # The drift warnings are already computed, and are true whether or not
+        # anything is granted; discarding them here would hide a real fault
+        # behind a transient one.
+        _report([], warnings, out, applied=False, outstanding=True)
         return EXIT_PENDING
 
-    new_only = getattr(args, "new_only", False)
-    withheld = [
-        decision for decision in changes if new_only and decision.action == "reassign"
-    ]
-    withheld_keys = {(decision.project, decision.port_name) for decision in withheld}
     applied = [
         decision
         for decision in changes
         if (decision.project, decision.port_name) not in withheld_keys
     ]
-
-    env_values = _effective_env(decisions, withheld_keys, leases, declarations)
     by_project = {declaration.project: declaration for declaration in declarations}
 
-    # Validate before writing: a project whose `.env` fence is corrupted is
-    # dropped whole, so it never gets a lease it cannot honour.
+    # Validate before writing: a project whose `.env` cannot be read, or whose
+    # fence is corrupted, is dropped whole -- it never gets a lease it cannot
+    # honour.
     broken = _unwritable_projects(applied, by_project, env_values, out)
     if broken:
         applied = [decision for decision in applied if decision.project not in broken]
 
-    try:
-        _write(applied, by_project, env_values, leases, ledger_path, today)
-    except (DeclarationError, EnvFenceError, OSError) as exc:
-        print(f"error: {exc}", file=out)
-        return EXIT_ERROR
+    written, failures = _write(applied, by_project, env_values, leases, ledger_path, today)
 
-    _report(applied, warnings, out, applied=True)
+    _report(
+        written,
+        warnings,
+        out,
+        applied=True,
+        outstanding=bool(withheld or broken or failures),
+    )
+
+    for failure in failures:
+        print(f"error: {failure}", file=out)
 
     for decision in withheld:
         print(
@@ -150,7 +184,7 @@ def run(
             file=out,
         )
 
-    if broken:
+    if broken or failures:
         return EXIT_ERROR
     return EXIT_PENDING if withheld or warnings else EXIT_OK
 
@@ -214,22 +248,32 @@ def _unwritable_projects(
     env_values: dict[str, dict[str, str]],
     out: TextIO,
 ) -> set[str]:
-    """Projects that cannot be written, reported and named before anything is.
+    """Projects whose `.env` refuses the write, named before anything is written.
 
-    Only `.env` can realistically refuse: a corrupted managed fence is not
-    repaired by guessing, because a wrong guess destroys secrets that live
-    outside it.
+    `.env` is the one file that can be known unwritable in advance, and the one
+    worth knowing about. A corrupted managed fence is not repaired by guessing,
+    because a wrong guess destroys secrets that live outside it; and a file that
+    cannot be read as UTF-8 -- a cp1252 password in somebody else's repository --
+    cannot be rewritten without destroying it either. Both are reported here
+    rather than escaping as a traceback.
     """
     broken: set[str] = set()
 
     for project in sorted({decision.project for decision in applied}):
         env_path = by_project[project].path.parent / ".env"
-        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
         try:
+            existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
             envfile.apply_fence(existing, env_values.get(project, {}))
         except EnvFenceError as exc:
             print(
                 f"error: {project}: {env_path} has a corrupted harbor-console fence "
+                f"({exc}); nothing written for {project}. Repair it by hand.",
+                file=out,
+            )
+            broken.add(project)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(
+                f"error: {project}: {env_path} cannot be read as UTF-8 text "
                 f"({exc}); nothing written for {project}. Repair it by hand.",
                 file=out,
             )
@@ -245,41 +289,90 @@ def _write(
     leases: Sequence[Lease],
     ledger_path: Path,
     today: date,
-) -> None:
-    """Apply accepted decisions: ledger first, then each project's own files."""
+) -> tuple[list[Decision], list[str]]:
+    """Apply accepted decisions and report what landed. Raises nothing.
+
+    Returns the decisions actually written, and one message per project that
+    could not be written completely. The ledger is saved first, so an interrupted
+    run leaves a port reserved to its rightful holder rather than named in some
+    project's `.env` while the allocator still believes it free. Each project's
+    own files are then written together, and a project that fails has its
+    decisions taken back out of the ledger -- it ends the run holding no lease,
+    and its neighbours are untouched by its failure.
+    """
     if not applied:
-        return
+        return [], []
 
     updated = apply_decisions(leases, applied, today)
-    if dumps_leases(updated) != dumps_leases(leases):
-        save_leases(ledger_path, updated)
+    ledger_written = dumps_leases(updated) != dumps_leases(leases)
+    try:
+        if ledger_written:
+            save_leases(ledger_path, updated)
+    except OSError as exc:
+        return [], [f"{ledger_path}: {exc}; nothing was written"]
 
-    for decision in applied:
-        declaration = by_project[decision.project]
-        write_assigned(declaration.path, decision.port_name, decision.port)
+    written: list[Decision] = []
+    failed: set[str] = set()
+    messages: list[str] = []
 
     for project in sorted({decision.project for decision in applied}):
-        project_dir = by_project[project].path.parent
-        envfile.write_env(project_dir / ".env", env_values.get(project, {}))
-        explainer.write_explainer(project_dir / "HARBOR_PORTS.md")
+        mine = [decision for decision in applied if decision.project == project]
+        try:
+            _write_project(by_project[project], mine, env_values.get(project, {}))
+        except _WRITE_FAILURES as exc:
+            failed.add(project)
+            messages.append(
+                f"{project}: {exc}; {project} was left holding no lease -- any file "
+                f"already written for it was not rolled back. Fix the cause and re-run."
+            )
+        else:
+            written.extend(mine)
+
+    if failed and ledger_written:
+        kept = [decision for decision in applied if decision.project not in failed]
+        try:
+            save_leases(ledger_path, apply_decisions(leases, kept, today))
+        except OSError as exc:
+            messages.append(
+                f"{ledger_path}: {exc}; a lease may remain for "
+                f"{', '.join(sorted(failed))} with no matching .env"
+            )
+
+    return written, messages
+
+
+def _write_project(
+    declaration: Declaration,
+    decisions: Sequence[Decision],
+    values: dict[str, str],
+) -> None:
+    """Write one project's declaration, `.env` and explainer, in that order."""
+    for decision in decisions:
+        write_assigned(declaration.path, decision.port_name, decision.port)
+
+    project_dir = declaration.path.parent
+    envfile.write_env(project_dir / ".env", values)
+    explainer.write_explainer(project_dir / "HARBOR_PORTS.md")
 
 
 def _compose_warnings(
-    declarations: Sequence[Declaration], decisions: Sequence[Decision]
+    declarations: Sequence[Declaration], env_values: dict[str, dict[str, str]]
 ) -> list[str]:
-    """`.env` is usually gitignored, so a stale compose default is what a clone gets."""
-    assigned = {
-        (decision.project, env_var_name(decision.port_name)): decision.port
-        for decision in decisions
-    }
+    """`.env` is usually gitignored, so a stale compose default is what a clone gets.
+
+    Compared against the *effective* number -- what `.env` publishes after this
+    run -- rather than against the decision, so a withheld reassignment is not
+    reported as drift from a port the run has just refused to move it to.
+    """
     warnings: list[str] = []
 
     for declaration in declarations:
+        effective = env_values.get(declaration.project, {})
         for published in compose.published_ports(declaration.path.parent):
             if published.var is None or published.default is None:
                 continue
-            expected = assigned.get((declaration.project, published.var))
-            if expected is not None and published.default != expected:
+            expected = effective.get(published.var)
+            if expected is not None and published.default != int(expected):
                 warnings.append(
                     f"{declaration.project}: {published.file.name} defaults "
                     f"{published.var} to {published.default}, assigned {expected}"
@@ -289,9 +382,18 @@ def _compose_warnings(
 
 
 def _report(
-    changes: Sequence[Decision], warnings: Sequence[str], out: TextIO, applied: bool
+    changes: Sequence[Decision],
+    warnings: Sequence[str],
+    out: TextIO,
+    applied: bool,
+    outstanding: bool = False,
 ) -> None:
-    """Print what happened, or what would happen, one line per change."""
+    """Print what happened, or what would happen, one line per change.
+
+    `outstanding` says something is still pending or wrong -- a withheld port, a
+    dropped project, a failed write -- so that "up to date" is suppressed rather
+    than printed immediately above the lines that contradict it.
+    """
     verb = "wrote" if applied else "would write"
     for decision in changes:
         line = f"{verb} {decision.project}/{decision.port_name} = {decision.port}"
@@ -304,7 +406,7 @@ def _report(
     for warning in warnings:
         print(f"warning: {warning}", file=out)
 
-    if not changes and not warnings:
+    if not changes and not warnings and not outstanding:
         print("up to date", file=out)
 
 
