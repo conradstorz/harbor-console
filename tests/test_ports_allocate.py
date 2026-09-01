@@ -12,16 +12,19 @@ from harbor_console.ports.allocate import (
     decide,
 )
 from harbor_console.ports.declaration import Declaration, PortRequest
+from harbor_console.ports.keys import addrs_overlap
 from harbor_console.ports.ledger import Lease
 from harbor_console.ports.live import Listener, LiveState
 
 TODAY = date(2026, 9, 1)
 
 
-def decl(project, name, want=None, assigned=None, container=None, addr="0.0.0.0"):
+def decl(
+    project, name, want=None, assigned=None, container=None, addr="0.0.0.0", host="hpz440"
+):
     return Declaration(
         project=project,
-        host="hpz440",
+        host=host,
         path=Path(f"/tree/{project}/.harbor.toml"),
         ports=(
             PortRequest(
@@ -38,9 +41,9 @@ def decl(project, name, want=None, assigned=None, container=None, addr="0.0.0.0"
     )
 
 
-def live(*pairs, complete=True):
+def live(*pairs, complete=True, host="hpz440"):
     return LiveState(
-        host="hpz440",
+        host=host,
         listeners=tuple(
             Listener(addr=addr, port=port, container=container)
             for addr, port, container in pairs
@@ -203,3 +206,117 @@ def test_apply_decisions_moves_a_project_off_its_previous_port():
     assert ("p", 8200) not in ports
     assert ("p", 8300) in ports
     assert ("gte", 8080) in ports
+
+
+def contending_pairs(leases):
+    """Every pair of leases that claims the same (host, port) with overlapping addrs."""
+    return [
+        (a, b)
+        for i, a in enumerate(leases)
+        for b in leases[i + 1 :]
+        if a.host == b.host and a.port == b.port and addrs_overlap(a.addr, b.addr)
+    ]
+
+
+def test_widening_an_addr_onto_a_held_port_moves_this_project_not_the_incumbent():
+    """A held lease is short-circuited only while its *new* key contends with nobody.
+
+    Granting 0.0.0.0:8080 here would sit on top of arm's 100.69.239.123:8080 and
+    produce a ledger that `ledger.load_leases` refuses to read.
+    """
+    leases = [
+        Lease("arm", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1)),
+        Lease("p", "web", "hpz440", "127.0.0.1", 8080, date(2026, 2, 1)),
+    ]
+    declaration = decl("p", "web", want=8080, addr="0.0.0.0")
+
+    [decision] = decide([declaration], leases, live(), TODAY)
+
+    assert decision.port == BAND_START
+    assert decision.incumbent is not None
+    assert decision.incumbent.project == "arm"
+    assert contending_pairs(apply_decisions(leases, [decision], TODAY)) == []
+
+
+def test_a_lease_on_another_host_is_not_this_hosts_lease():
+    """Lease identity is (project, name, host): hostA's number is not hostB's."""
+    leases = [
+        Lease("p", "web", "hostA", "0.0.0.0", 8111, date(2026, 1, 1)),
+        Lease("p", "web", "hostB", "0.0.0.0", 8222, date(2026, 2, 1)),
+    ]
+    declaration = decl("p", "web", want=8222, assigned=8222, host="hostB")
+
+    [decision] = decide([declaration], leases, live(host="hostB"), TODAY)
+
+    assert decision.action == "keep"
+    assert decision.host == "hostB"
+    assert decision.port == 8222
+
+    updated = apply_decisions(leases, [decision], TODAY)
+
+    assert len(updated) == 2
+    assert leases[0] in updated
+
+
+def test_a_want_blocked_by_a_same_run_grant_is_reported_as_a_conflict():
+    declarations = [
+        decl("first", "web", want=8080, assigned=8080),
+        decl("second", "web", want=8080, assigned=8080),
+    ]
+
+    winner, loser = decide(declarations, [], live(), TODAY)
+
+    assert winner.port == 8080
+    assert loser.action == "reassign"
+    assert loser.port == BAND_START
+    assert "first" in loser.reason
+    assert loser.incumbent is None
+
+
+def test_a_same_run_conflict_without_an_assignment_is_a_grant_not_a_reassign():
+    declarations = [decl("first", "web", want=8080), decl("second", "web", want=8080)]
+
+    _, loser = decide(declarations, [], live(), TODAY)
+
+    assert loser.action == "grant"
+    assert loser.port == BAND_START
+    assert "first" in loser.reason
+
+
+def test_live_state_for_another_host_does_not_block_a_port():
+    """hpz440's listeners say nothing about what is free on another machine."""
+    state = live(("0.0.0.0", BAND_START, "somebody-else"), host="hpz440")
+
+    [decision] = decide([decl("p", "web", host="otherhost")], [], state, TODAY)
+
+    assert decision.port == BAND_START
+
+
+def test_the_earlier_granted_lease_is_the_incumbent():
+    """The headline rule: seniority decides who stays, and the dates are what decide it."""
+
+    def incumbent_of(gte_granted, river_granted):
+        leases = [
+            Lease("gte", "console", "hpz440", "100.69.239.123", 8080, gte_granted),
+            Lease("river", "web", "hpz440", "127.0.0.1", 8080, river_granted),
+        ]
+        declaration = decl("imageharbor", "dashboard", want=8080, assigned=8080)
+        [decision] = decide([declaration], leases, live(), TODAY)
+        assert decision.incumbent is not None
+        return decision.incumbent.project
+
+    assert incumbent_of(date(2026, 1, 1), date(2026, 6, 1)) == "gte"
+    assert incumbent_of(date(2026, 6, 1), date(2026, 1, 1)) == "river"
+
+
+def test_apply_decisions_records_an_addr_change_on_an_unchanged_port():
+    leases = [Lease("p", "web", "hpz440", "127.0.0.1", 8090, date(2026, 8, 1))]
+    decisions = [
+        Decision("p", "web", "keep", "hpz440", "0.0.0.0", 8090, "already leased", None)
+    ]
+
+    updated = apply_decisions(leases, decisions, TODAY)
+
+    assert len(updated) == 1
+    assert updated[0].addr == "0.0.0.0"
+    assert updated[0].granted == TODAY
