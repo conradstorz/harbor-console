@@ -11,6 +11,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from harbor_console.ports.atomic import write_text_atomic
 from harbor_console.ports.keys import ANY_ADDR
 
 
@@ -86,7 +87,11 @@ def load_declaration(path: Path) -> Declaration:
 
 
 def write_assigned(path: Path, port_name: str, assigned: int) -> None:
-    """Set `assigned` inside the named [[port]] block, leaving all else alone."""
+    """Set `assigned` inside the named [[port]] block, leaving all else alone.
+
+    Written atomically, so a failed write leaves the project's `.harbor.toml`
+    as it was rather than truncated.
+    """
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     blocks = _port_block_bounds(lines)
 
@@ -94,7 +99,7 @@ def write_assigned(path: Path, port_name: str, assigned: int) -> None:
         if _block_name(lines[start:end]) != port_name:
             continue
         _set_field(lines, start, end, assigned)
-        path.write_text("".join(lines), encoding="utf-8")
+        write_text_atomic(path, "".join(lines))
         return
 
     raise DeclarationError(f"{path}: no [[port]] named '{port_name}'")

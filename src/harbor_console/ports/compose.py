@@ -79,11 +79,25 @@ def _value_of(list_entry: str) -> str:
 
 
 def _published_ports_in_file(path: Path) -> list[PublishedPort]:
-    """Every published port inside `ports:` blocks of a single compose file."""
+    """Every published port inside `ports:` blocks of a single compose file.
+
+    A file that cannot be read, or that is not valid UTF-8, yields nothing
+    rather than raising. This reads a compose file in somebody else's
+    repository, from a caller that only wants to warn about drift; a byte this
+    module cannot decode is not a reason to fail the run, and the alternative --
+    `UnicodeDecodeError` escaping as a traceback -- is exactly what the `.env`
+    reader was already fixed for. Missing a warning is the safe direction:
+    nothing is written on the strength of one.
+    """
     found: list[PublishedPort] = []
     ports_indent: int | None = None
 
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             # Blank and comment-only lines never open or close a block.

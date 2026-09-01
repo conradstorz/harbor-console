@@ -92,3 +92,35 @@ def test_same_port_on_different_hosts_is_fine(tmp_path: Path):
     save_leases(path, leases)
 
     assert len(load_leases(path)) == 2
+
+
+def _truncating_disk_full(monkeypatch) -> None:
+    """Make every `Path.write_text` empty its target and then fail.
+
+    This is what a real out-of-space write does: `write_text` opens the file for
+    writing -- which truncates it -- before a single byte is stored. A writer
+    that writes straight to its target therefore destroys the file it was
+    updating; one that writes to a temporary file beside it destroys only that.
+    """
+
+    def write_text(self: Path, data: str, encoding: str | None = None, **kwargs) -> int:
+        with open(self, "w", encoding="utf-8"):
+            pass
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_a_failed_save_leaves_the_existing_ledger_intact(tmp_path: Path, monkeypatch):
+    # The ledger is the only record of who holds what. Emptying it would free
+    # every port at once, which is the worst possible outcome of a full disk.
+    path = tmp_path / "services.toml"
+    save_leases(path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    original = path.read_text(encoding="utf-8")
+    _truncating_disk_full(monkeypatch)
+
+    with pytest.raises(OSError):
+        save_leases(path, [Lease("other", "web", "hpz440", "0.0.0.0", 8100, date(2026, 8, 9))])
+
+    assert path.read_text(encoding="utf-8") == original
+    assert [entry.name for entry in tmp_path.iterdir()] == ["services.toml"]

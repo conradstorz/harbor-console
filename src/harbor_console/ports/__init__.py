@@ -2,6 +2,7 @@
 
 __all__ = [
     "allocate",
+    "atomic",
     "cli",
     "compose",
     "declaration",

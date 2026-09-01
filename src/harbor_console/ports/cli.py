@@ -18,11 +18,18 @@ a blanket pre-flight check of every file:
 
 * Whether `.harbor.toml` and `HARBOR_PORTS.md` can be written is *not* checked in
   advance; nothing short of writing them proves it. So the surviving projects are
-  written one at a time -- declaration, then `.env`, then explainer -- and if any
-  of those fails, the ledger is re-saved with that project's decisions removed.
-  The project ends the run holding no lease, though files already written for it
-  are not rolled back, and the error says so. Its neighbours, before and after it
-  in the run, are unaffected.
+  written one at a time -- explainer, then declaration, then `.env` -- and if any
+  of those fails, the ledger is re-saved with *this run's* decisions for that
+  project removed. It ends the run holding exactly the lease it held before the
+  run, which may be none, and which may disagree with a file already written for
+  it, since those are not rolled back; the error says so. Its neighbours, before
+  and after it in the run, are unaffected. `.env` is written last precisely so
+  that every failure before it leaves that withdrawal truthful -- nothing
+  publishes a port the ledger does not grant.
+
+Each of those files is replaced atomically (see `atomic.write_text_atomic`), so a
+failed write leaves the previous file intact rather than an empty one. These are
+other people's repositories, and their `.env` is not this tool's to lose.
 
 Whatever did land is reported before any error line, so an operator is never left
 guessing which projects were served.
@@ -144,10 +151,22 @@ def run(
             "that cannot be verified as unheld. Nothing written.",
             file=out,
         )
-        # The drift warnings are already computed, and are true whether or not
-        # anything is granted; discarding them here would hide a real fault
-        # behind a transient one.
-        _report([], warnings, out, applied=False, outstanding=True)
+        # Drift is still worth reporting -- hiding a real fault behind a
+        # transient one helps nobody -- but it must be reported against the port
+        # each project is actually on, never against the grant this branch has
+        # just refused to make. Telling an operator to change a compose default
+        # to a number the run declined to hand out would be a guess, on the one
+        # path whose whole contract is that it does not guess. Every change is
+        # therefore treated exactly as a withheld decision is.
+        ungranted = {(decision.project, decision.port_name) for decision in changes}
+        held_values = _effective_env(decisions, ungranted, leases, declarations)
+        _report(
+            [],
+            _compose_warnings(declarations, held_values),
+            out,
+            applied=False,
+            outstanding=True,
+        )
         return EXIT_PENDING
 
     applied = [
@@ -296,9 +315,12 @@ def _write(
     could not be written completely. The ledger is saved first, so an interrupted
     run leaves a port reserved to its rightful holder rather than named in some
     project's `.env` while the allocator still believes it free. Each project's
-    own files are then written together, and a project that fails has its
-    decisions taken back out of the ledger -- it ends the run holding no lease,
-    and its neighbours are untouched by its failure.
+    own files are then written together, and a project that fails has *this
+    run's* decisions taken back out of the ledger -- not every lease it has. It
+    therefore ends the run holding exactly the lease it held before the run,
+    which is often none but is whatever was there for a project being
+    reassigned, and which may disagree with a file already written for it, since
+    those are not rolled back. Its neighbours are untouched by its failure.
     """
     if not applied:
         return [], []
@@ -322,8 +344,11 @@ def _write(
         except _WRITE_FAILURES as exc:
             failed.add(project)
             messages.append(
-                f"{project}: {exc}; {project} was left holding no lease -- any file "
-                f"already written for it was not rolled back. Fix the cause and re-run."
+                f"{project}: {exc}; every decision made for {project} in this run was "
+                f"withdrawn from the ledger, so it still holds whatever lease it held "
+                f"before the run -- which may be none, and which may disagree with any "
+                f"file already written for it, since those are not rolled back. Fix the "
+                f"cause and re-run."
             )
         else:
             written.extend(mine)
@@ -346,13 +371,26 @@ def _write_project(
     decisions: Sequence[Decision],
     values: dict[str, str],
 ) -> None:
-    """Write one project's declaration, `.env` and explainer, in that order."""
+    """Write one project's explainer, declaration and `.env`, in that order.
+
+    `.env` goes last, deliberately. It is the file that makes a container
+    actually bind the port, while the ledger is only the record of who is
+    entitled to it -- and a project that fails here has this run's decisions
+    withdrawn from the ledger. Writing `.env` last is therefore what keeps that
+    withdrawal truthful: every failure before it leaves nothing publishing a
+    port the ledger no longer grants. The other order would leave a project's
+    `.env` naming a port the allocator believes free, which is this project's
+    founding failure -- two projects on one port -- reached through the very
+    mechanism meant to prevent it, and it does not heal itself: only a lease
+    reserves a port, an `assigned` value does not.
+    """
+    project_dir = declaration.path.parent
+    explainer.write_explainer(project_dir / "HARBOR_PORTS.md")
+
     for decision in decisions:
         write_assigned(declaration.path, decision.port_name, decision.port)
 
-    project_dir = declaration.path.parent
     envfile.write_env(project_dir / ".env", values)
-    explainer.write_explainer(project_dir / "HARBOR_PORTS.md")
 
 
 def _compose_warnings(

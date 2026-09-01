@@ -141,3 +141,34 @@ def test_write_assigned_does_not_bleed_into_a_following_table(tmp_path: Path):
     text = path.read_text(encoding="utf-8")
     assert 'assigned = "not-a-port-field"' in text
     assert load_declaration(path).ports[0].assigned == 9999
+
+
+def _truncating_disk_full(monkeypatch) -> None:
+    """Make every `Path.write_text` empty its target and then fail.
+
+    This is what a real out-of-space write does: `write_text` opens the file for
+    writing -- which truncates it -- before a single byte is stored. A writer
+    that writes straight to its target therefore destroys the file it was
+    updating; one that writes to a temporary file beside it destroys only that.
+    """
+
+    def write_text(self: Path, data: str, encoding: str | None = None, **kwargs) -> int:
+        with open(self, "w", encoding="utf-8"):
+            pass
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_a_failed_write_leaves_the_existing_declaration_intact(tmp_path: Path, monkeypatch):
+    # `.harbor.toml` is the human-owned half of the contract, in a repository
+    # this tool does not own. A failed write must not truncate it.
+    path = tmp_path / ".harbor.toml"
+    path.write_text(FULL, encoding="utf-8")
+    _truncating_disk_full(monkeypatch)
+
+    with pytest.raises(OSError):
+        write_assigned(path, "dashboard", 8100)
+
+    assert path.read_text(encoding="utf-8") == FULL
+    assert [entry.name for entry in tmp_path.iterdir()] == [".harbor.toml"]

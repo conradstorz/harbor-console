@@ -256,7 +256,10 @@ def test_a_failed_declaration_write_leaves_that_project_without_a_lease(
         assert (project / "HARBOR_PORTS.md").is_file()
     assert load_declaration(beta / ".harbor.toml").ports[0].assigned is None
     assert not (beta / ".env").exists()
-    assert not (beta / "HARBOR_PORTS.md").exists()
+    # `HARBOR_PORTS.md` is written first and may well have landed. That is
+    # harmless and deliberate: it is identical in every project and names no
+    # port, so it can contradict neither the ledger nor `.env`. What must not
+    # exist for a withdrawn project is anything carrying a number.
     # What did land is reported, not hidden behind the error line.
     assert "alpha" in output
     assert "zulu" in output
@@ -279,6 +282,11 @@ def test_a_failed_explainer_write_withdraws_only_that_projects_lease(tmp_path: P
         "alpha": 8080,
         "zulu": 8600,
     }
+    # The withdrawal above says 8500 belongs to nobody. Nothing of beta's may
+    # contradict it: an `.env` publishing 8500 would make beta bind a port the
+    # allocator believes free, and the next run would hand it to somebody else.
+    assert not (beta / ".env").exists()
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned is None
     for project, port in ((alpha, 8080), (zulu, 8600)):
         assert load_declaration(project / ".harbor.toml").ports[0].assigned == port
         assert f"HARBOR_PORT_WEB={port}" in (project / ".env").read_text(encoding="utf-8")
@@ -373,3 +381,132 @@ def test_ports_url_is_accepted_before_and_after_the_subcommand(tmp_path: Path):
 
     assert before == after
     assert before[0] == 1
+
+
+def test_env_is_written_last_so_a_failure_never_publishes_a_withdrawn_port(
+    tmp_path: Path, monkeypatch
+):
+    # A project that fails has this run's decisions withdrawn from the ledger.
+    # That withdrawal is only truthful if nothing of the project's is left
+    # publishing the port: an `.env` naming 8080 while the ledger records 8080
+    # as free is two projects on one port waiting to happen -- this tool's
+    # founding failure, reached through the mechanism meant to prevent it. It
+    # does not heal itself either: only a lease reserves a port, and `allocate`
+    # gives a bare `assigned` no claim at all.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    (alpha / ".env").write_text("SECRET=keepme\n", encoding="utf-8")
+    ledger_path = tmp_path / "services.toml"
+
+    def failing(path: Path) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cli.explainer, "write_explainer", failing)
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    assert "alpha" in output
+    env = (alpha / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_WEB" not in env  # nothing publishes the withdrawn port
+    assert "SECRET=keepme" in env  # and the secrets are still there
+    assert load_leases(ledger_path) == []
+    assert load_declaration(alpha / ".harbor.toml").ports[0].assigned is None
+    assert "withdrawn from the ledger" in output
+
+
+def test_a_failed_reassignment_says_the_project_keeps_the_lease_it_already_had(
+    tmp_path: Path,
+):
+    # Withdrawing a run's decisions does not withdraw the lease the project
+    # walked in with: `apply_decisions` folds from the original ledger. A
+    # project being *reassigned* therefore ends a failed run still holding its
+    # old port, and the message must say so -- telling an operator to hunt for
+    # a missing lease that is sitting right there is worse than saying nothing.
+    ledger_path = tmp_path / "services.toml"
+    save_leases(
+        ledger_path,
+        [
+            Lease("gte", "web", "hpz440", "100.69.239.123", 8080, date(2026, 7, 5)),
+            Lease("beta", "web", "hpz440", "127.0.0.1", 8080, date(2026, 8, 9)),
+        ],
+    )
+    gte = tmp_path / "gte"
+    gte.mkdir()
+    (gte / ".harbor.toml").write_text(
+        'project = "gte"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+        'want = 8080\nassigned = 8080\naddr = "100.69.239.123"\n',
+        encoding="utf-8",
+    )
+    # beta wants to widen to every address, which collides with gte's lease.
+    # beta is the junior, so it is the one that moves -- to 8100.
+    beta = tmp_path / "beta"
+    beta.mkdir()
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+        'want = 8080\nassigned = 8080\naddr = "0.0.0.0"\n',
+        encoding="utf-8",
+    )
+    (beta / "HARBOR_PORTS.md").mkdir()  # so writing beta cannot succeed
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 2
+    held = {(lease.project, lease.addr, lease.port) for lease in load_leases(ledger_path)}
+    assert held == {
+        ("gte", "100.69.239.123", 8080),
+        ("beta", "127.0.0.1", 8080),  # the lease beta walked in with, still there
+    }
+    assert "withdrawn from the ledger" in output
+    assert "before the run" in output
+    assert "holding no lease" not in output  # it is holding one
+
+
+def test_a_degraded_run_reports_drift_against_the_held_port_not_the_refused_one(
+    tmp_path: Path,
+):
+    # This path refuses to grant anything it cannot verify. A drift warning
+    # naming the port it just refused would tell the operator to change another
+    # repository's compose default to a number nobody was granted -- a guess, on
+    # the one path whose whole contract is that it does not guess.
+    ledger_path = tmp_path / "services.toml"
+    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    make_project(tmp_path, "gte", 8080)
+    moved = make_project(tmp_path, "imageharbor", 8080)
+    (moved / ".harbor.toml").write_text(
+        'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
+        'name = "web"\nwant = 8080\nassigned = 8080\n',
+        encoding="utf-8",
+    )
+    (moved / "docker-compose.yml").write_text(
+        'services:\n  a:\n    ports:\n      - "${HARBOR_PORT_WEB:-9999}:80"\n',
+        encoding="utf-8",
+    )
+
+    code, output = run(["sync"], tmp_path, ledger_path, state=live(complete=False))
+
+    assert code == 1
+    assert "incomplete" in output.lower()
+    assert "9999" in output  # the drift is still reported
+    assert "assigned 8080" in output  # against the number it is actually on
+    assert "8100" not in output  # never against the grant that was refused
+    assert not (moved / ".env").exists()
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"gte": 8080}
+
+
+def test_a_compose_file_that_is_not_utf8_is_skipped_not_a_traceback(tmp_path: Path):
+    # Another repository's compose file may hold any bytes at all. It is read
+    # only to warn about drift, so an undecodable one costs a warning, not the
+    # run -- the same class of fault already fixed for `.env`, one call away.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    (alpha / "docker-compose.yml").write_bytes(
+        b'services:\n  a:\n    # caf\xff\n    ports:\n'
+        b'      - "${HARBOR_PORT_WEB:-9999}:80"\n'
+    )
+    ledger_path = tmp_path / "services.toml"
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 0
+    assert "9999" not in output
+    assert {lease.project: lease.port for lease in load_leases(ledger_path)} == {"alpha": 8080}
+    assert "HARBOR_PORT_WEB=8080" in (alpha / ".env").read_text(encoding="utf-8")

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from harbor_console.ports.atomic import write_text_atomic
 from harbor_console.ports.keys import addrs_overlap
 
 
@@ -102,5 +103,9 @@ def dumps_leases(leases: Sequence[Lease]) -> str:
 
 
 def save_leases(path: Path, leases: Sequence[Lease]) -> None:
-    """Write the ledger, replacing it wholesale."""
-    path.write_text(dumps_leases(leases), encoding="utf-8")
+    """Write the ledger, replacing it wholesale -- atomically.
+
+    The ledger is the only record of who holds what; a failed write must leave
+    the previous one readable rather than emptying it.
+    """
+    write_text_atomic(path, dumps_leases(leases))

@@ -91,3 +91,36 @@ def test_intentional_blank_line_after_fence_survives_a_rewrite():
     result = apply_fence(original, {"HARBOR_PORT_WEB": "2"})
 
     assert result.endswith(f"{FENCE_END}\n\n# spaced comment\n")
+
+
+def _truncating_disk_full(monkeypatch) -> None:
+    """Make every `Path.write_text` empty its target and then fail.
+
+    This is what a real out-of-space write does: `write_text` opens the file for
+    writing -- which truncates it -- before a single byte is stored. A writer
+    that writes straight to its target therefore destroys the file it was
+    updating; one that writes to a temporary file beside it destroys only that.
+    """
+
+    def write_text(self: Path, data: str, encoding: str | None = None, **kwargs) -> int:
+        with open(self, "w", encoding="utf-8"):
+            pass
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_a_failed_write_leaves_the_existing_env_intact(tmp_path: Path, monkeypatch):
+    # `.env` holds somebody else's secrets, is usually gitignored and is never
+    # backed up. A write that fails must leave the file it found, not an empty
+    # one -- there is nothing to restore it from.
+    path = tmp_path / ".env"
+    original = "SECRET=hunter2\nAPI_KEY=abcdef\n"
+    path.write_text(original, encoding="utf-8")
+    _truncating_disk_full(monkeypatch)
+
+    with pytest.raises(OSError):
+        write_env(path, {"HARBOR_PORT_WEB": "8090"})
+
+    assert path.read_text(encoding="utf-8") == original
+    assert [entry.name for entry in tmp_path.iterdir()] == [".env"]

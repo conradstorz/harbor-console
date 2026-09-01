@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from harbor_console.ports.atomic import write_text_atomic
+
 FENCE_START = "# >>> harbor-console (managed) >>>"
 FENCE_END = "# <<< harbor-console (managed) <<<"
 
@@ -69,6 +71,10 @@ def apply_fence(text: str, values: dict[str, str]) -> str:
 
 
 def write_env(path: Path, values: dict[str, str]) -> None:
-    """Create or update a project's `.env`, preserving everything else in it."""
+    """Create or update a project's `.env`, preserving everything else in it.
+
+    Written atomically: `.env` holds secrets that are not this tool's to lose,
+    so a failed write must leave the file it found, not an empty one.
+    """
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(apply_fence(existing, values), encoding="utf-8")
+    write_text_atomic(path, apply_fence(existing, values))
