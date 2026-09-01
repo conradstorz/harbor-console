@@ -47,10 +47,15 @@ because a repair writes into a repository this tool does not own:
   else's `.harbor.toml` is not a reservation — it is a committed number that
   stays there after the port has been granted away — so it is never treated as
   "the port this project is already on".
-- A project whose decision `--new-only` withheld is excluded from the repair set
-  exactly as it is excluded from the write pass. A run that has just refused to
-  renumber a project may not write its files by another route. `scan` and `sync`
-  compute the set through one predicate, so `scan` predicts `sync` exactly.
+- A port whose reassignment `--new-only` withheld publishes the number its lease
+  says, or nothing when it holds no lease. A run that has just refused to
+  renumber a port may not renumber it by another route. The bound is on the
+  *port*, not the project around it: a project's other ports keep their leases,
+  and a lease with no `.env` behind it is repaired whether or not some sibling
+  port of the same project was withheld — refusing to move one port is not a
+  reason to leave a second one unpublished on the unattended path. `scan` and
+  `sync` compute the set through one predicate, discounting the ports each
+  reports rather than the projects, so `scan` predicts `sync` exactly.
 - Only the files that actually disagree are written. Being repaired for one file
   does not rewrite the others.
 
@@ -63,10 +68,18 @@ prints it; it parses no `.harbor.toml` at all.
   compose default. The lease and the file that honours it converge.
 - `sync` now touches projects the operator did not change, so the report must
   distinguish repairs from grants or it reads as unexplained churn. It does.
-- A repair is a write on the unattended path, so its bounds are load-bearing.
-  Repairing a project that held no lease published the incumbent's port into it
-  — two projects on one port, reached through the mechanism meant to prevent
-  that, at exit 0 and reported as a repair. The rules above are what stop it.
+- A repair is a write on the unattended path, so its bounds are load-bearing —
+  and being load-bearing, they have to be exactly as wide as the harm. Repairing
+  a project that held no lease published the incumbent's port into it — two
+  projects on one port, reached through the mechanism meant to prevent that, at
+  exit 0 and reported as a repair. What stops that is the first rule: no lease,
+  nothing published. Bounding by the whole project instead stopped it a second
+  time and cost the case above, where the same run left a genuine lease with no
+  `.env` behind it and said nothing.
+- A project can therefore be reported as both granted and repaired in one run:
+  one port moved, and others it already held came back. That is two events, and
+  the report names them separately rather than folding the second into the
+  first, where an operator would never see it.
 - Bumping the `HARBOR_PORTS.md` template version puts every participating
   project into the repair set at once. Writing only the files that differ is
   what keeps that from being an mtime change on every project's `.env`.

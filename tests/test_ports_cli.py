@@ -808,3 +808,70 @@ def test_a_repair_of_the_explainer_alone_does_not_touch_env(tmp_path: Path):
     unchanged = {path: stamp for path, stamp in before.items() if path.name != "HARBOR_PORTS.md"}
     after = {path: path.stat().st_mtime_ns for path in unchanged}
     assert after == unchanged
+
+
+def _withheld_beside_a_lease(root: Path, ledger_path: Path) -> Path:
+    """The ordinary fresh clone of a project that holds one port and wants another.
+
+    `beta` declares two ports. `web` carries a committed `assigned` that alpha
+    now holds the lease on, so `--new-only` withholds it. `api` is genuinely
+    leased to beta and contended by nobody. `.env` is gitignored, so the clone
+    simply has none.
+    """
+    make_project(root, "alpha", 8080)
+    run(["sync"], root, ledger_path)
+
+    beta = root / "beta"
+    beta.mkdir()
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n'
+        '[[port]]\nname = "web"\nwant = 8080\nassigned = 8080\n\n'
+        '[[port]]\nname = "api"\nwant = 8600\n',
+        encoding="utf-8",
+    )
+    run(["sync", "--new-only"], root, ledger_path)  # beta earns its lease on api
+    (beta / ".env").unlink()
+    return beta
+
+
+def test_new_only_repairs_the_leased_port_of_a_project_it_withheld(tmp_path: Path):
+    # Withholding one port is not a reason to abandon the rest of the project.
+    # beta holds a real lease on 8600 and has no `.env`, so its container is
+    # about to interpolate its compose default -- this tool's founding failure,
+    # on the path the scheduled timer runs. Excluding beta from the repair set
+    # because it had *a* decision, rather than because that decision was
+    # withheld, left it there and said nothing about it.
+    ledger_path = tmp_path / "services.toml"
+    beta = _withheld_beside_a_lease(tmp_path, ledger_path)
+
+    code, output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert code == 1
+    env = (beta / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_API=8600" in env  # the lease it holds is published again
+    assert "HARBOR_PORT_WEB" not in env  # the withheld port publishes nothing
+    assert "8100" not in env  # the refused reassignment never leaks in
+    assert "8080" not in env  # nor does the incumbent's port
+    assert "withheld beta/web" in output  # and the refusal is still reported
+    assert "beta" in _repair_targets(output)
+    # The repair grants nothing: alpha keeps 8080, beta keeps 8600, and beta's
+    # committed `assigned` on web is left exactly where its owner put it.
+    held = {(lease.project, lease.name): lease.port for lease in load_leases(ledger_path)}
+    assert held == {("alpha", "web"): 8080, ("beta", "api"): 8600}
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8080
+
+
+def test_scan_predicts_the_repair_of_a_withheld_projects_leased_port(tmp_path: Path):
+    # `scan` and `sync --new-only` compute the repair set through one predicate,
+    # so narrowing that predicate must move both together or `scan` stops being
+    # a preview.
+    ledger_path = tmp_path / "services.toml"
+    beta = _withheld_beside_a_lease(tmp_path, ledger_path)
+
+    scan_code, scan_output = run(["scan"], tmp_path, ledger_path)
+    sync_code, sync_output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert scan_code == 1
+    assert sync_code == 1
+    assert _repair_targets(scan_output) == _repair_targets(sync_output) == {"beta"}
+    assert "HARBOR_PORT_API=8600" in (beta / ".env").read_text(encoding="utf-8")

@@ -24,10 +24,12 @@ A repair restores a *lease*, and nothing else. Only a lease reserves a port; an
 `assigned` in a `.harbor.toml` does not, being a number committed to somebody
 else's repository that stays there after the port has been granted away. A
 project holding no lease therefore has nothing to repair and nothing published
-for it -- and a project whose decision `--new-only` withheld is excluded from
-the repair set exactly as it is excluded from the write pass, because a run that
-has just refused to renumber a project has no business writing its files by
-another route. `scan` and `sync` compute that set through one predicate
+for it. A port `--new-only` withheld is likewise nothing this run may publish:
+it keeps the number its lease says, or -- holding no lease -- publishes nothing
+at all. That bound is per *port*. The project around it keeps its other ports,
+and a lease of its own with no `.env` behind it is repaired like any other,
+because refusing to renumber one port is not a reason to leave a second one
+unpublished. `scan` and `sync` compute the repair set through one predicate
 (`_outstanding_repairs`), so `scan` is a truthful preview of what `sync` does.
 
 Two further mechanisms guard a lease against having no matching `.env` --
@@ -228,13 +230,15 @@ def run(
     ]
     by_project = {declaration.project: declaration for declaration in declarations}
 
-    # A project with no decision to apply still belongs in the write pass when
-    # its own files have drifted from the lease it already holds. `env_values`
-    # has been computed for every project, keep-only ones included, so the
-    # comparison is against exactly what would be written. The exclusion is
-    # `changes`, not `applied`: a withheld project is no more this run's to
-    # repair than it is this run's to reassign, and passing the same set `scan`
-    # passes is what keeps `scan` a preview of this.
+    # A project whose own files have drifted from the lease it already holds
+    # belongs in the write pass whether or not it has a decision to apply.
+    # `env_values` has been computed for every project, keep-only ones
+    # included, so the comparison is against exactly what would be written.
+    # `changes` is passed, not `applied`, because it is the same set `scan`
+    # passes, and passing one set is what keeps `scan` a preview of this: the
+    # predicate discounts the *ports* named in it, so a withheld port is
+    # discounted here exactly as it is in `env_values`, while the rest of its
+    # project stays this run's to repair.
     writing = {decision.project for decision in applied}
     repairs = _outstanding_repairs(declarations, env_values, changes)
 
@@ -342,26 +346,39 @@ def _outstanding_repairs(
     env_values: dict[str, dict[str, str]],
     reported: Sequence[Decision],
 ) -> _Repairs:
-    """Drifted projects, minus those this run already reports as changing.
+    """Drifted projects, minus those this run already speaks for in full.
 
     The one predicate `scan` and `sync` both compute their repair set through,
-    so that `scan` is a truthful preview of what `sync` will do. They diverged
-    once: `scan` excluded every project with a change, `sync --new-only`
-    excluded only the changes it *applied*, and a project whose reassignment was
-    withheld was therefore repaired by a run that had just refused to touch it
-    -- to a number that run had no authority over -- while `scan` had predicted
-    nothing of the sort.
+    so that `scan` is a truthful preview of what `sync` will do. Both pass the
+    same `reported`: every decision the caller is about to print or write.
 
-    `reported` is every decision the caller is about to print or write. A
-    project in it is already being spoken for: it is written whole, so naming it
-    again as a repair double-counts it, and if it was withheld instead then
-    nothing about it is this run's to write at all.
+    A project is spoken for only to the extent of the *ports* named in
+    `reported`. A port with a decision needs no repair -- the decision writes
+    it, and naming it again double-counts it -- so a project every one of whose
+    published variables carries a decision is dropped here. A project with a
+    port left over is not: those ports are exactly what this run is not
+    otherwise writing, and they are the ordinary way a lease ends up with no
+    `.env` behind it.
+
+    Excluding the whole project instead, on the strength of *any* decision,
+    was too wide by one case, and it was the common one. Under `--new-only` a
+    project with a withheld port and a second port it genuinely leases was
+    dropped whole: the withheld port contributed nothing to write, and the
+    leased one went unrepaired, so a fresh clone kept running on its compose
+    default with nothing said about it. What keeps a withheld port from being
+    published anyway is `_current_port` returning None for a port with no
+    lease, plus the empty-`expected` skip in `_repairs_needed`; neither is this
+    filter, and neither needs its help.
     """
-    named = {decision.project for decision in reported}
+    covered: dict[str, set[str]] = {}
+    for decision in reported:
+        variable = env_var_name(decision.port_name)
+        covered.setdefault(decision.project, set()).add(variable)
+
     return {
         project: reasons
         for project, reasons in _repairs_needed(declarations, env_values).items()
-        if project not in named
+        if set(env_values.get(project, {})) - covered.get(project, set())
     }
 
 
@@ -484,10 +501,16 @@ def _write(
     Raises nothing. Returns the decisions actually written, the projects
     repaired, and one message per project that could not be written completely.
 
-    `repairs` names projects with nothing to decide whose own files have drifted
-    from the lease they already hold. They are written like any other project
-    except that no `assigned` is rewritten -- there is no decision to record, and
-    a project's `.harbor.toml` is not touched to say what it already says. The ledger is saved first, so an interrupted
+    `repairs` names projects whose own files have drifted from a lease they
+    already hold on a port this run is not deciding. Usually they have no
+    decision at all, and are then written like any other project except that no
+    `assigned` is rewritten -- there is nothing to record, and a project's
+    `.harbor.toml` is not touched to say what it already says. One that *also*
+    has a decision is written once, as a decided project, and reported as both:
+    the grant explains one port moving, the repair explains the others coming
+    back.
+
+    The ledger is saved first, so an interrupted
     run leaves a port reserved to its rightful holder rather than named in some
     project's `.env` while the allocator still believes it free. Each project's
     own files are then written together, and a project that fails has *this
@@ -512,6 +535,10 @@ def _write(
     repaired: list[str] = []
     failed: set[str] = set()
     messages: list[str] = []
+    # A project can be both decided and repaired: one of its ports is moving
+    # while another, untouched by this run, has drifted from the lease behind
+    # it. `scan` names both, so this must too, or the preview overstates.
+    to_repair = set(repairs)
 
     for project in sorted({decision.project for decision in applied} | set(repairs)):
         mine = [decision for decision in applied if decision.project == project]
@@ -538,7 +565,7 @@ def _write(
                 )
         else:
             written.extend(mine)
-            if not mine:
+            if project in to_repair:
                 repaired.append(project)
 
     if failed and ledger_written:
@@ -561,9 +588,9 @@ def _write_project(
 ) -> None:
     """Write one project's explainer, declaration and `.env`, in that order.
 
-    `decisions` is empty for a repair: nothing about the project's ports is
-    changing, so its `.harbor.toml` already says what a write would say and is
-    left alone. The other two files check themselves the same way --
+    `decisions` is empty for a project being repaired alone: nothing about its
+    ports is changing, so its `.harbor.toml` already says what a write would say
+    and is left alone. The other two files check themselves the same way --
     `write_explainer` and `write_env` each return without writing when the file
     already holds exactly what they would put there. A project is put into the
     write pass by *any* one of its files having drifted, so an unconditional
@@ -634,7 +661,9 @@ def _report(
     `repairs` are printed apart from the grants and in their own words: a repair
     restores a lease the project already holds, which is a different event from
     being handed a new port, and an operator reading "wrote alpha/web = 8080"
-    has no way to tell that nothing was actually granted.
+    has no way to tell that nothing was actually granted. A project can appear
+    in both lists, once per event: a port of its own moved, and other ports it
+    already held were put back.
 
     `incomplete` says the live host state could not be verified. The caveat
     belongs here, in the reporting path, rather than at the top of `main()`:
