@@ -67,14 +67,21 @@ def fetch_live(
         raise LiveUnavailable(f"{url}: {exc}") from exc
 
     try:
-        listeners = tuple(
-            Listener(
-                addr=entry["addr"],
-                port=int(entry["port"]),
-                container=entry.get("container"),
+        listeners = []
+        for entry in payload["listening"]:
+            port_value = entry["port"]
+            # Reject non-integer types (floats, strings, booleans, etc.)
+            # bool is a subclass of int, so must check it explicitly
+            if not isinstance(port_value, int) or isinstance(port_value, bool):
+                raise ValueError(f"port must be an integer, not {type(port_value).__name__}: {port_value!r}")
+            listeners.append(
+                Listener(
+                    addr=entry["addr"],
+                    port=port_value,
+                    container=entry.get("container"),
+                )
             )
-            for entry in payload["listening"]
-        )
+        listeners = tuple(listeners)
         host = payload["host"]
     except (KeyError, TypeError, ValueError) as exc:
         raise LiveUnavailable(f"{url}: malformed payload ({exc})") from exc

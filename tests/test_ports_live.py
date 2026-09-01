@@ -71,6 +71,34 @@ def test_fetch_raises_live_unavailable_on_bad_json():
         fetch_live("http://x/ports.json", opener=lambda _u, timeout: FakeResponse(b"not json"))
 
 
+def test_fetch_raises_live_unavailable_when_port_is_float():
+    payload = {
+        "host": "hpz440",
+        "listening": [
+            {"addr": "0.0.0.0", "port": 8080.7, "container": "gte"},
+        ],
+    }
+    with pytest.raises(LiveUnavailable, match="port must be an integer"):
+        fetch_live(
+            "http://x/ports.json",
+            opener=lambda _url, timeout: FakeResponse(json.dumps(payload).encode()),
+        )
+
+
+def test_fetch_raises_live_unavailable_when_port_is_string():
+    payload = {
+        "host": "hpz440",
+        "listening": [
+            {"addr": "0.0.0.0", "port": "8080", "container": "gte"},
+        ],
+    }
+    with pytest.raises(LiveUnavailable, match="port must be an integer"):
+        fetch_live(
+            "http://x/ports.json",
+            opener=lambda _url, timeout: FakeResponse(json.dumps(payload).encode()),
+        )
+
+
 def test_probe_marks_state_incomplete_and_reports_open_ports():
     class FakeSocket:
         def close(self):
