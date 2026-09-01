@@ -4,7 +4,10 @@ Date: 2026-08-01
 
 ## Status
 
-Accepted
+Accepted — the no-configuration-file aspect is amended by
+[ADR 6](0006-service-registry-and-web-status-page.md), which adds a declared
+`services.toml` registry. The no-plugins, no-themes, no-user-configuration
+stance stands.
 
 ## Context
 

@@ -2,11 +2,35 @@ Harbor Console
 
 Vision
 
-Harbor Console is a lightweight terminal dashboard for Linux servers.
+Harbor Console is a lightweight operational console for a small fleet of Linux
+servers.
 
-Its purpose is simple:
+Its purpose has two halves:
 
 Replace the default Linux login console with a useful operational dashboard.
+
+Be the authority on which services run, on which host and port, and whether
+they are up.
+
+The first half shipped as v0.1.0 and is unchanged. The second half was added
+after a real operational need was demonstrated: two projects both published
+host port 8080, and nothing in the system would have said so. The collision
+would have surfaced only as a dashboard that quietly never appeared.
+
+Two surfaces, one core.
+
+harbor-console
+
+Runs on tty1 at the attached monitor. Answers "is my server healthy?"
+
+harbor-console-web
+
+Runs continuously under systemd. Answers "what is running, where, and is it
+up?" for anyone on the tailnet.
+
+Their lifetimes are independent. Logging in at the attached monitor must not
+take the tailnet page down, and the tailnet page must not depend on anyone
+being logged in.
 
 Engineering Principles
 
@@ -22,9 +46,9 @@ Test Driven Development
 
 Main is Always Deployable
 
-MVP (v0.1.0)
+MVP (v0.1.0) - shipped
 
-The first release shall display:
+The first release displays:
 
 Hostname
 
@@ -58,7 +82,101 @@ No historical graphs.
 
 No databases.
 
-No web server.
+v0.1.0 also stated "no web server." That constraint is superseded by v0.2.0,
+and the reasoning is recorded in ADR 6. It is superseded, not forgotten: the
+web surface below is deliberately the smallest thing that answers the
+directory question, and everything the constraint was protecting against -
+frameworks, login pages, write actions, remote control - remains excluded.
+
+v0.2.0 - Service Registry and Tailnet Status Page
+
+The Registry
+
+One declared file, services.toml, version controlled in this repository and
+deployed with it. It is diffable and reviewable because it is an authority,
+not a cache.
+
+Each entry declares:
+
+name
+
+title
+
+host - present from day one, so a second machine is a data change and not a
+rewrite
+
+port - the published host port; this file owns it
+
+container - for reconciliation against Docker
+
+health_path - probed; any HTTP response means up
+
+description
+
+Three rules make it an authority rather than a list:
+
+(host, port) is unique. A duplicate is a hard error when the file loads, not a
+warning. This is the 8080 collision caught at edit time.
+
+Every service is declared, including harbor-console-web itself. It takes its
+port from the same file it serves.
+
+Declaring is not deploying. The file records intent. Docker holds reality.
+
+No other project is required to change in order to appear in the registry.
+
+Reconciliation
+
+The page shows declared state beside live Docker state and names the three
+ways they disagree:
+
+Declared but not running.
+
+Running but not declared.
+
+Running on a port that does not match the declaration.
+
+The third is the failure mode that motivated this release.
+
+Health Probing
+
+Deliberately dumb. Connect, and any HTTP response means up.
+
+A service answering / with a 303 redirect to /login is a healthy service. A
+probe insisting on 200 would call it down, and a status page that cries wolf
+is worse than no status page.
+
+The Web Surface
+
+Binding is the access control. harbor-console-web binds the host's Tailscale
+address only. Never 0.0.0.0. If the Tailscale interface is not up, it refuses
+to start and lets systemd retry. There is no fallback bind, because a silent
+fallback would publish an inventory of every service on the host to the whole
+LAN. There is no login page; the network is the gate. See ADR 7.
+
+Standard library http.server. No FastAPI, no uvicorn, no new runtime
+dependency. One self-contained page.
+
+Probing happens in a background thread, never inside a request. The page
+renders last known results with a timestamp. The page that exists to tell you
+something is wrong must not become the thing that is wrong.
+
+The page shows three things: server health (the same metrics as the terminal
+console), the service directory with live or down state, and the drift list.
+It auto-refreshes on a timer.
+
+The page is read only. No buttons that do anything. Port allocation authority
+was chosen over lifecycle control, so nothing here can start or stop a
+container.
+
+Links are built from each entry's host and port. Tailscale MagicDNS resolves
+the name from anywhere on the tailnet, which is why no discovery protocol is
+needed. mDNS was considered and rejected: it is link local and does not cross
+a tailnet, which is precisely the case it was wanted for.
+
+What gatekeeping means
+
+Port allocation authority only. Not lifecycle control. Not access control.
 
 Technology
 
@@ -72,24 +190,32 @@ psutil
 
 pytest
 
+tomllib and http.server from the standard library. v0.2.0 adds no new runtime
+dependency.
+
 Repository Layout
 
 harbor-console/
 ├── README.md
 ├── LICENSE
 ├── pyproject.toml
+├── services.toml
 ├── src/
 │   └── harbor_console/
 │       ├── __init__.py
 │       ├── __main__.py
-│       ├── app.py
-│       ├── system.py
-│       └── ui.py
+│       ├── app.py          tty1 refresh loop
+│       ├── webapp.py       systemd web service entry point
+│       ├── system.py       collect host metrics
+│       ├── registry.py     read and validate services.toml
+│       ├── docker.py       live container state
+│       ├── ui.py           render terminal
+│       └── web.py          render and serve HTTP
 ├── tests/
-│   ├── test_app.py
-│   └── test_system.py
+├── deploy/
 └── docs/
-    └── architecture.md
+    ├── architecture.md
+    └── adr/
 
 Initial Features
 
@@ -111,23 +237,46 @@ IPv4 address
 
 Docker container count
 
+registry.py
+
+Reads and validates services.toml. Rejects duplicate (host, port). Collects
+only; no rendering, no probing.
+
+docker.py
+
+Reports live container state for reconciliation. Degrades to empty rather than
+raising when Docker is unavailable.
+
 ui.py
 
-Responsible only for rendering.
+Responsible only for rendering the terminal dashboard.
 
 No business logic.
 
+web.py
+
+Responsible only for rendering the HTML page and serving it.
+
+No business logic, no collection.
+
 app.py
 
-Coordinates refresh loop.
+Coordinates the terminal refresh loop.
 
 Refresh interval:
 
 1 second
 
+webapp.py
+
+Coordinates the web service: the background prober and the HTTP server.
+
+Collect, render, and coordinate stay separate. A web view is a second renderer
+over the same collectors, not a second application.
+
 Release Criteria
 
-The project is complete when:
+v0.1.0 is complete when:
 
 It automatically starts.
 
@@ -136,6 +285,20 @@ It continuously updates.
 It never crashes during normal operation.
 
 The Linux login console is no longer preferred.
+
+v0.2.0 is complete when:
+
+services.toml declares every service on the host, including harbor-console-web.
+
+A duplicate (host, port) fails loudly rather than shipping.
+
+The page is reachable from anywhere on the tailnet and from nowhere else.
+
+The page loads promptly even when a declared service is hung.
+
+Drift between declaration and Docker is visible without logging into the host.
+
+Both units survive each other: restarting one does not disturb the other.
 
 Deferred Until Later
 
@@ -149,9 +312,8 @@ Unicode artwork
 
 Themes
 
-Configuration files
-
-YAML
+User configuration files - services.toml is a declared authority, not user
+configuration of the dashboard; see ADR 6
 
 Interactive menus
 
@@ -159,7 +321,13 @@ Function keys
 
 Service control
 
-Docker management
+Docker management - starting, stopping, or restarting anything
+
+Authentication and login pages - the network is the gate
+
+Write actions of any kind on the web page
+
+Historical data and databases
 
 SMART monitoring
 
@@ -175,16 +343,33 @@ Harbor Window integration
 
 ARM integration
 
-Notifications
+Notifications and alerting
 
-Remote monitoring
+Multi-host aggregation - the schema carries host, but one host is served
 
 They will be added only after a real operational need is demonstrated.
 
+Open Questions
+
+These are known and deliberately undecided. Decide them before implementing,
+and record the outcome as an ADR.
+
+How the port authority is enforced. A file nobody consults is not an
+authority. Candidates: an advisory ports check command run by hand or in CI;
+the drift list on the page as the only enforcement; or generated configuration
+that each project's compose file reads, which is the strongest guarantee and
+the only one that couples other repositories to this one. This determines
+whether any other repository is touched.
+
+Where the registry lives on disk. In repository and copied to
+/opt/harbor-console/services.toml by the installer, or a path under /etc.
+
 Definition of Success
 
-A successful MVP answers one question in under five seconds:
+Two questions, each answered in under five seconds.
 
-"Is my server healthy?"
+At the attached monitor: "Is my server healthy?"
 
-If the answer is obvious at a glance, version 0.1.0 has achieved its purpose.
+From anywhere on the tailnet: "What is running here, and is it up?"
+
+If both answers are obvious at a glance, the console has achieved its purpose.
