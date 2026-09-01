@@ -320,3 +320,97 @@ def test_apply_decisions_records_an_addr_change_on_an_unchanged_port():
     assert len(updated) == 1
     assert updated[0].addr == "0.0.0.0"
     assert updated[0].granted == TODAY
+
+
+def test_widening_onto_a_port_held_under_this_projects_other_name_does_not_double_claim():
+    """One project's two named ports contend with each other like anybody else's.
+
+    gte holds 8100 twice over, on two addresses that do not overlap. Widening
+    either one to 0.0.0.0 would sit on top of the other, and `load_leases` reads
+    that as "port 8100 claimed twice" and refuses the whole ledger.
+    """
+    leases = [
+        Lease("gte", "web", "hpz440", "127.0.0.1", 8100, date(2026, 1, 1)),
+        Lease("gte", "api", "hpz440", "10.0.0.5", 8100, date(2026, 2, 1)),
+    ]
+    declaration = decl("gte", "api", want=8100, assigned=8100, addr="0.0.0.0")
+
+    [decision] = decide([declaration], leases, live(), TODAY)
+
+    assert decision.action == "reassign"
+    # 8100 is BAND_START itself, and gte/web still holds it, so the band starts
+    # handing out at the port after it.
+    assert decision.port == BAND_START + 1
+    assert decision.incumbent is not None
+    assert decision.incumbent.name == "web"
+    assert contending_pairs(apply_decisions(leases, [decision], TODAY)) == []
+
+
+def test_grandfathering_does_not_override_a_lease_held_by_the_same_project():
+    """Grandfathering answers liveness, not ownership.
+
+    arm's own container listens on 49152, but arm's *api* lease already claims
+    every address on that port. The running container is evidence about the
+    socket, and says nothing about who holds the key.
+    """
+    leases = [Lease("arm", "api", "hpz440", "0.0.0.0", 49152, date(2026, 1, 1))]
+    state = live(("100.69.239.123", 49152, "arm-dev"))
+    declaration = decl(
+        "arm", "web", want=49152, container="arm-dev", addr="100.69.239.123"
+    )
+
+    [decision] = decide([declaration], leases, state, TODAY)
+
+    assert decision.port == BAND_START
+    assert "grandfathered" not in decision.reason
+    assert decision.incumbent is not None
+    assert decision.incumbent.name == "api"
+    assert contending_pairs(apply_decisions(leases, [decision], TODAY)) == []
+
+
+def test_two_ports_of_one_project_are_not_both_grandfathered_onto_one_key():
+    """A promise binds a project against itself, not only against strangers."""
+    state = live(("100.69.239.123", 49152, "arm-dev"))
+    declarations = [
+        decl("arm", "web", want=49152, container="arm-dev", addr="100.69.239.123"),
+        decl("arm", "api", want=49152, container="arm-dev", addr="100.69.239.123"),
+    ]
+
+    first, second = decide(declarations, [], state, TODAY)
+
+    assert first.port == 49152
+    assert "grandfathered" in first.reason
+    assert second.port == BAND_START
+    assert "arm" in second.reason
+    assert contending_pairs(apply_decisions([], [first, second], TODAY)) == []
+
+
+def test_when_two_contending_leaseholders_both_widen_only_the_junior_moves():
+    """Seniority is settled by the grant dates, not by the order of the walk.
+
+    Both leaseholders widen onto each other in one run. The earlier grant is
+    never moved -- and it does not take the contended key either, because the
+    junior might not have been re-declared at all, in which case nothing would
+    have vacated it.
+    """
+    senior = Lease("senior", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1))
+    junior = Lease("junior", "web", "hpz440", "127.0.0.1", 8080, date(2026, 2, 1))
+    leases = [senior, junior]
+    senior_decl = decl("senior", "web", want=8080, assigned=8080, addr="0.0.0.0")
+    junior_decl = decl("junior", "web", want=8080, assigned=8080, addr="0.0.0.0")
+
+    for order in ([senior_decl, junior_decl], [junior_decl, senior_decl]):
+        decisions = {d.project: d for d in decide(order, leases, live(), TODAY)}
+
+        kept = decisions["senior"]
+        assert kept.action == "keep"
+        assert (kept.addr, kept.port) == ("100.69.239.123", 8080)
+        assert "junior" in kept.reason
+
+        moved = decisions["junior"]
+        assert moved.action == "reassign"
+        assert (moved.addr, moved.port) == ("0.0.0.0", BAND_START)
+
+        updated = apply_decisions(leases, list(decisions.values()), TODAY)
+        assert contending_pairs(updated) == []
+        assert senior in updated
