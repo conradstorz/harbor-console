@@ -78,10 +78,20 @@ def render_page(snapshot: Snapshot) -> bytes:
     ]
 
     if snapshot.collection_error is not None:
-        parts.append(
-            f"<p class=\"banner\">The last collection cycle failed: "
-            f"{escape(snapshot.collection_error)}. Showing the last good page.</p>"
-        )
+        if snapshot.probed:
+            parts.append(
+                f"<p class=\"banner\">The last collection cycle failed: "
+                f"{escape(snapshot.collection_error)}. Showing the last good page.</p>"
+            )
+        else:
+            # No cycle has ever completed, so there is no "last good page" to
+            # show -- only the starting placeholder. Claiming one would sit
+            # next to the "nothing has been collected yet" notes below and
+            # contradict them.
+            parts.append(
+                f"<p class=\"banner\">The last collection cycle failed: "
+                f"{escape(snapshot.collection_error)}.</p>"
+            )
     if not snapshot.docker_available:
         parts.append(
             "<p class=\"banner\">Docker could not be read, so undeclared containers "
@@ -201,8 +211,23 @@ def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHa
             if self.path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", render_page(get_snapshot()))
             elif self.path == "/ports.json":
-                body = json.dumps(ports_payload(get_snapshot())).encode("utf-8")
-                self._send(200, "application/json", body)
+                snapshot = get_snapshot()
+                if not snapshot.probed:
+                    # An unprobed snapshot has no listeners in it -- not
+                    # because none are found, but because none were looked
+                    # for. Serving that as 200 reads to the allocator as a
+                    # verified empty host, and `ports/allocate.py` grants on
+                    # it: a port already in use would be handed out in the
+                    # window between process start and the first probe
+                    # cycle. 503 makes `urllib` raise `HTTPError`, which
+                    # `ports.live.fetch_live` turns into `LiveUnavailable`,
+                    # so the allocator falls back to the refusal it already
+                    # has for a page it cannot reach at all.
+                    body = b"not yet probed: no collection cycle has completed\n"
+                    self._send(503, "text/plain; charset=utf-8", body)
+                else:
+                    body = json.dumps(ports_payload(snapshot)).encode("utf-8")
+                    self._send(200, "application/json", body)
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found\n")
 

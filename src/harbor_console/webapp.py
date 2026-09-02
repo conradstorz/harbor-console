@@ -122,9 +122,16 @@ def own_lease(leases: Iterable[Lease]) -> Lease:
             f"no lease for {WEB_PROJECT}/{WEB_PORT_NAME}; this service must be declared"
         )
     if len(mine) > 1:
-        hosts = ", ".join(sorted(lease.host for lease in mine))
+        # Naming the host alone is not enough to tell leases apart: a
+        # hand-edited ledger can declare the same service twice on the same
+        # host, on different addresses or ports, and "hpz440, hpz440" gives
+        # an operator nothing to fix. addr:port distinguishes them.
+        found = ", ".join(
+            f"{lease.host} ({lease.addr}:{lease.port})"
+            for lease in sorted(mine, key=lambda lease: (lease.host, lease.addr, lease.port))
+        )
         raise AmbiguousDeclaration(
-            f"{len(mine)} leases for {WEB_PROJECT}/{WEB_PORT_NAME}, on {hosts}; "
+            f"{len(mine)} leases for {WEB_PROJECT}/{WEB_PORT_NAME}, on {found}; "
             "running on more than one host needs an explicit choice of "
             "identity, which this service does not have"
         )

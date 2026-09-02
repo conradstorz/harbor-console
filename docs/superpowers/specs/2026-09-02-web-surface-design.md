@@ -118,7 +118,12 @@ class Snapshot:
     containers: tuple[Container, ...]
     health: dict[tuple[str, str], Health]      # keyed (project, name)
     drift: tuple[Drift, ...]
-    ledger_error: str | None                   # set when a reload failed
+    collection_error: str | None                # set when a cycle failed,
+                                                  # whatever the source --
+                                                  # ledger, collector, prober
+                                                  # or reconciler
+    probed: bool                                 # False until the first
+                                                  # cycle completes
 ```
 
 ## `/ports.json`
@@ -247,8 +252,10 @@ absent, refuse to start: every service is declared, including this one.
 | --- | --- |
 | Tailscale address unavailable | exit non-zero at startup; systemd retries |
 | Ledger unreadable at startup | exit non-zero |
-| Ledger unreadable on reload | keep the last good directory, set `ledger_error`, show a banner |
+| `harbor-console/web` lease ambiguous (more than one host declares it) | exit non-zero, naming each lease's host, address and port |
+| Ledger unreadable on reload, or any other collection failure | keep the last good directory, set `collection_error`, show a banner. Before the first cycle has ever completed, the banner still names the failure but drops "showing the last good page" -- there is no last good page yet |
 | `harbor-console/web` lease missing | exit non-zero |
+| Before the first collection cycle completes (`probed` is False) | the page renders the starting placeholder and says so; `/ports.json` returns **503** rather than an empty, falsely-authoritative listener list -- `urllib` raises `HTTPError`, `ports.live.fetch_live` turns that into `LiveUnavailable`, and the allocator falls back to its existing refusal instead of granting against a host nothing has looked at yet |
 | Docker missing or erroring | empty container list; drift categories 2–3 suppressed with a note |
 | Socket enumeration denied | empty listener list; the page says so |
 | A service hangs | 2s timeout, DOWN, page unaffected |

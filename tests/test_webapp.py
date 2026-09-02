@@ -348,6 +348,23 @@ def test_own_lease_refuses_when_two_hosts_declare_this_service():
     assert "nas" in message
 
 
+def test_own_lease_ambiguity_names_addr_and_port_not_just_a_repeated_host():
+    """A hand-edited ledger can declare the same service twice on one host,
+    on different addresses or ports. Naming only `lease.host` reads as the
+    same string twice -- "hpz440, hpz440" -- and gives the operator nothing
+    to find in the file. addr:port must distinguish each candidate.
+    """
+    first = Lease("harbor-console", "web", "hpz440", "0.0.0.0", 8090, date(2026, 9, 1))
+    second = Lease("harbor-console", "web", "hpz440", "127.0.0.1", 8091, date(2026, 9, 1))
+
+    with pytest.raises(webapp.AmbiguousDeclaration) as caught:
+        webapp.own_lease([first, second])
+
+    message = str(caught.value)
+    assert "0.0.0.0:8090" in message
+    assert "127.0.0.1:8091" in message
+
+
 def test_main_refuses_to_start_when_its_own_lease_is_ambiguous(monkeypatch):
     """An ambiguous identity is a refusal, like the other three, before any bind."""
     elsewhere = Lease("harbor-console", "web", "nas", "0.0.0.0", 8090, date(2026, 9, 1))

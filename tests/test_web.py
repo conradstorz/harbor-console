@@ -1,12 +1,15 @@
 import json
+import urllib.error
 from datetime import date, datetime
 from html import escape
 from io import BytesIO
 
+import pytest
+
 from harbor_console.docker import Container
 from harbor_console.listening import Listener
 from harbor_console.ports.ledger import Lease
-from harbor_console.ports.live import fetch_live
+from harbor_console.ports.live import LiveUnavailable, fetch_live
 from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Drift, Snapshot
 from harbor_console.web import make_handler, ports_payload, render_page
@@ -152,6 +155,19 @@ def test_page_does_not_call_an_unprobed_fleet_clean():
     assert "unknown" in html.lower()
 
 
+def test_banner_does_not_claim_a_last_good_page_before_the_first_cycle():
+    """When the very first collection cycle fails, there is no last good
+    page to fall back to -- only the starting placeholder. The banner must
+    say the collection failed without also claiming a page it never had.
+    """
+    html = render_page(
+        snapshot(probed=False, health={}, drift=(), collection_error="services.toml: boom")
+    ).decode()
+
+    assert "services.toml: boom" in html
+    assert "last good page" not in html.lower()
+
+
 def test_page_shows_the_collected_timestamp():
     html = render_page(snapshot()).decode()
 
@@ -284,6 +300,53 @@ def test_handler_serves_ports_json():
     assert headers["Content-Type"] == "application/json"
     payload = json.loads(body)
     assert payload["host"] == "hpz440"
+
+
+def test_handler_refuses_ports_json_before_the_first_cycle():
+    """An unprobed snapshot's listener list is empty because nothing was
+    looked at, not because nothing is there. Serving it as 200 reads to the
+    allocator as a verified-empty host and it grants against that -- so this
+    must be a 503, never a 200 with an empty `listening`.
+    """
+    handler_cls = make_handler(lambda: snapshot(probed=False, listeners=(), health={}))
+
+    status, _headers, body = _get(handler_cls, "/ports.json")
+
+    assert status == 503
+    assert b"not" in body.lower()
+
+
+def test_handler_still_serves_the_page_before_the_first_cycle():
+    """The 503 is /ports.json-only. An operator looking at the page during
+    the same window must still get it, with its existing "nothing collected
+    yet" notes -- not a failure of its own.
+    """
+    handler_cls = make_handler(lambda: snapshot(probed=False, listeners=(), health={}))
+
+    status, _headers, body = _get(handler_cls, "/")
+
+    assert status == 200
+    assert b"<html" in body.lower()
+
+
+def test_ports_json_503_reaches_the_allocator_as_live_unavailable():
+    """End-to-end proof, not an assumption: drive the real `fetch_live` (the
+    allocator's actual reader) against an opener that reproduces real
+    `urllib` behaviour -- raising `HTTPError` for a non-2xx response, exactly
+    as `urllib.request.urlopen` does against a real 503. `HTTPError` is an
+    `OSError` subclass, so `fetch_live` must turn it into `LiveUnavailable`,
+    which is the refusal `ports/cli.py` already knows how to fall back on.
+    """
+    handler_cls = make_handler(lambda: snapshot(probed=False, listeners=(), health={}))
+
+    def opener(url, timeout):
+        status, _headers, body = _get(handler_cls, "/ports.json")
+        if status >= 400:
+            raise urllib.error.HTTPError(url, status, "not probed", {}, BytesIO(body))
+        return FakeResponse(body)
+
+    with pytest.raises(LiveUnavailable):
+        fetch_live("http://x/ports.json", opener=opener)
 
 
 def test_handler_404s_an_unknown_path():
