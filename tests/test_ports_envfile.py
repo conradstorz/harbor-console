@@ -8,6 +8,7 @@ from harbor_console.ports.envfile import (
     FENCE_END,
     FENCE_START,
     apply_fence,
+    fenced_values,
     write_env,
 )
 
@@ -140,3 +141,32 @@ def test_write_env_leaves_an_already_correct_file_alone(tmp_path: Path):
     assert write_env(path, {"HARBOR_PORT_WEB": "8090"}) is False
     assert path.stat().st_mtime_ns == stamp
     assert write_env(path, {"HARBOR_PORT_WEB": "8091"}) is True
+
+
+def test_fenced_values_reads_back_what_apply_fence_wrote():
+    values = {"HARBOR_PORT_WEB": "8090", "HARBOR_PORT_API": "8600"}
+
+    assert fenced_values(apply_fence("SECRET=keepme\n", values)) == values
+
+
+def test_fenced_values_ignores_everything_outside_the_fence():
+    # A variable a project set for itself is not one this tool published, so
+    # counting it would leave the managed block unrepaired.
+    text = (
+        "HARBOR_PORT_WEB=1234\n"
+        f"{FENCE_START}\n"
+        "HARBOR_PORT_API=8600\n"
+        f"{FENCE_END}\n"
+        "HARBOR_PORT_ADMIN=4321\n"
+    )
+
+    assert fenced_values(text) == {"HARBOR_PORT_API": "8600"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "PLAIN=1\n", f"{FENCE_END}\nA=1\n{FENCE_START}\n"],
+)
+def test_fenced_values_publishes_nothing_without_a_well_formed_fence(text: str):
+    # Refusing a corrupted fence is `apply_fence`'s job; this one never raises.
+    assert fenced_values(text) == {}

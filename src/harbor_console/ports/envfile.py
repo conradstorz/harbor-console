@@ -25,6 +25,34 @@ class EnvFenceError(Exception):
     """
 
 
+def fenced_values(text: str) -> dict[str, str]:
+    """The variables the managed block of `text` currently publishes.
+
+    The read half of `apply_fence`, and the answer to "is this one variable
+    already published as the ledger says?" -- which is a different question
+    from `apply_fence`'s "would writing the whole fence change this file?", and
+    the one a caller asks when part of the fence is about to be rewritten
+    anyway. Nothing outside the markers is looked at: a `HARBOR_PORT_WEB` a
+    project set for itself elsewhere in its `.env` is not something this tool
+    published, and counting it would leave the managed block unrepaired.
+
+    Never raises. A file with no fence, or with corrupted markers, publishes
+    nothing as far as this function is concerned; refusing a corrupted fence is
+    `apply_fence`'s job, and every caller here reaches it too.
+    """
+    start = text.find(FENCE_START)
+    end = text.find(FENCE_END)
+    if start == -1 or end == -1 or start > end:
+        return {}
+
+    values: dict[str, str] = {}
+    for line in text[start + len(FENCE_START) : end].splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip()] = value.strip()
+    return values
+
+
 def apply_fence(text: str, values: dict[str, str]) -> str:
     """Return `text` with the managed block replaced by `values`.
 

@@ -24,13 +24,25 @@ A repair restores a *lease*, and nothing else. Only a lease reserves a port; an
 `assigned` in a `.harbor.toml` does not, being a number committed to somebody
 else's repository that stays there after the port has been granted away. A
 project holding no lease therefore has nothing to repair and nothing published
-for it. A port `--new-only` withheld is likewise nothing this run may publish:
-it keeps the number its lease says, or -- holding no lease -- publishes nothing
-at all. That bound is per *port*. The project around it keeps its other ports,
-and a lease of its own with no `.env` behind it is repaired like any other,
-because refusing to renumber one port is not a reason to leave a second one
-unpublished. `scan` and `sync` compute the repair set through one predicate
-(`_outstanding_repairs`), so `scan` is a truthful preview of what `sync` does.
+for it. A port `--new-only` withheld is likewise nothing this run may renumber:
+it keeps the number its lease says -- which is published into its `.env` if that
+file does not already say it, whether the port is one of several or the only one
+the project has -- or, holding no lease, publishes nothing at all. That bound is
+per *port*: the project around it keeps its other ports, and refusing to move one
+port is not a reason to leave a second one unpublished.
+
+A repair is drift this run's own writes do not already account for, and only
+that. A grant writes the variable it grants, so a project adding a port is not
+also reported as a project whose files have drifted -- the two lines mean
+different things and an operator reads the second as a warning. Drift is
+therefore judged against the variables this run is *not* writing: a project all
+of whose published variables are being written is spoken for by those lines
+alone, and one with variables left over is judged on exactly those, plus its
+`HARBOR_PORTS.md`. `scan` and `sync` compute the set through one predicate
+(`_outstanding_repairs`), each passing the decisions its own write pass lands,
+so `scan` is a truthful preview of `sync`. It previews `sync --new-only` too,
+except where that command withholds a move: the port `scan` shows as a grant is
+the port `--new-only` reports withheld and repairs to its standing lease.
 
 Two further mechanisms guard a lease against having no matching `.env` --
 neither of which is a blanket pre-flight check of every file:
@@ -234,13 +246,15 @@ def run(
     # belongs in the write pass whether or not it has a decision to apply.
     # `env_values` has been computed for every project, keep-only ones
     # included, so the comparison is against exactly what would be written.
-    # `changes` is passed, not `applied`, because it is the same set `scan`
-    # passes, and passing one set is what keeps `scan` a preview of this: the
-    # predicate discounts the *ports* named in it, so a withheld port is
-    # discounted here exactly as it is in `env_values`, while the rest of its
-    # project stays this run's to repair.
+    # `applied` is passed, not `changes`: the predicate discounts the ports this
+    # run's write pass covers, and a withheld port is covered by nothing. Its
+    # variable is therefore judged like any other -- and `env_values` holds the
+    # number its lease says, so what a repair publishes for it is that number
+    # and never the move that was just refused. `scan`, which previews a full
+    # `sync`, passes its `changes` for the same reason: there, every one of them
+    # is written.
     writing = {decision.project for decision in applied}
-    repairs = _outstanding_repairs(declarations, env_values, changes)
+    repairs = _outstanding_repairs(declarations, env_values, applied)
 
     # Validate before writing: a project whose `.env` cannot be read, or whose
     # fence is corrupted, is dropped whole -- it never gets a lease it cannot
@@ -344,47 +358,56 @@ def _current_port(decision: Decision, leases: Sequence[Lease]) -> int | None:
 def _outstanding_repairs(
     declarations: Sequence[Declaration],
     env_values: dict[str, dict[str, str]],
-    reported: Sequence[Decision],
+    written: Sequence[Decision],
 ) -> _Repairs:
-    """Drifted projects, minus those this run already speaks for in full.
+    """Projects drifted in some way this run's own writes do not already cover.
 
     The one predicate `scan` and `sync` both compute their repair set through,
-    so that `scan` is a truthful preview of what `sync` will do. Both pass the
-    same `reported`: every decision the caller is about to print or write.
+    so that `scan` is a truthful preview. `written` is the decisions whose ports
+    this run's write pass will actually land: every change for `scan`, which
+    previews a full `sync`, and the applied ones for `sync`, which under
+    `--new-only` is not the same set.
 
-    A project is spoken for only to the extent of the *ports* named in
-    `reported`. A port with a decision needs no repair -- the decision writes
-    it, and naming it again double-counts it -- so a project every one of whose
-    published variables carries a decision is dropped here. A project with a
-    port left over is not: those ports are exactly what this run is not
-    otherwise writing, and they are the ordinary way a lease ends up with no
-    `.env` behind it.
+    A port with a decision landing this run is *covered*: the decision writes
+    its variable, and a project every one of whose published variables is
+    covered is spoken for in full -- the grant line names it, the write that
+    lands the grant lands its `HARBOR_PORTS.md` too, and naming it again would
+    report a repair of a project that has not drifted. That was the reading of
+    "covered" this predicate got wrong: it discounted covered ports when
+    choosing which projects to name, then judged drift by comparing the *whole*
+    expected fence, decided ports included, against `.env`. Adding one new port
+    to a project in perfect sync changed its fence, so every such grant printed
+    a repair beside it -- inverting the distinction between "granted" and "your
+    files have drifted from a lease you hold", on the most routine event there
+    is. It also split `scan` from `sync --new-only`, which judge fences that
+    differ by exactly the withheld port.
 
-    Excluding the whole project instead, on the strength of *any* decision,
-    was too wide by one case, and it was the common one. Under `--new-only` a
-    project with a withheld port and a second port it genuinely leases was
-    dropped whole: the withheld port contributed nothing to write, and the
-    leased one went unrepaired, so a fresh clone kept running on its compose
-    default with nothing said about it. What keeps a withheld port from being
-    published anyway is `_current_port` returning None for a port with no
-    lease, plus the empty-`expected` skip in `_repairs_needed`; neither is this
-    filter, and neither needs its help.
+    So drift is judged against the *uncovered* variables only. A project with
+    covered variables is dropped when `.env` already publishes the expected
+    value for every variable left over and its `HARBOR_PORTS.md` is current;
+    otherwise it is a genuine repair and is named. A project with no decision at
+    all is judged as before, against its whole fence.
+
+    What keeps a withheld port from being published is not this predicate:
+    `_current_port` returns None for a port with no lease, so the port
+    contributes no variable at all, and `_repairs_needed` skips a project whose
+    expected fence is then empty. A withheld port *with* a lease is uncovered
+    here -- nothing writes it under `--new-only` -- so the number its lease
+    already says is repaired back into `.env`, which is the one number this run
+    is entitled to publish for it and is not the renumbering it refused.
     """
     covered: dict[str, set[str]] = {}
-    for decision in reported:
+    for decision in written:
         variable = env_var_name(decision.port_name)
         covered.setdefault(decision.project, set()).add(variable)
 
-    return {
-        project: reasons
-        for project, reasons in _repairs_needed(declarations, env_values).items()
-        if set(env_values.get(project, {})) - covered.get(project, set())
-    }
+    return _repairs_needed(declarations, env_values, covered)
 
 
 def _repairs_needed(
     declarations: Sequence[Declaration],
     env_values: dict[str, dict[str, str]],
+    covered: dict[str, set[str]],
 ) -> _Repairs:
     """Projects whose own files no longer say what the ledger says, and why.
 
@@ -401,6 +424,12 @@ def _repairs_needed(
     is what keeps a project holding no lease out of the repair set -- it has no
     effective port, whatever its own `.harbor.toml` says it was once assigned.
 
+    `covered` names, per project, the variables this run is writing anyway (see
+    `_outstanding_repairs`). A project with covered variables and none left over
+    is spoken for in full and skipped. One with variables left over is judged on
+    exactly those, and on its explainer: comparing the whole fence would report
+    the covered write itself as drift.
+
     The reasons are phrased for an operator to read. Reading `.env` can fail --
     a directory, a cp1252 password, a corrupted fence -- and that is reported as
     the repair it is, rather than raising here; `_unwritable_projects` is what
@@ -414,8 +443,19 @@ def _repairs_needed(
         if not expected:
             continue
 
+        decided = covered.get(declaration.project, set())
+        judged = {
+            variable: value
+            for variable, value in expected.items()
+            if variable not in decided
+        }
+        if decided and not judged:
+            continue
+
         project_dir = declaration.path.parent
-        reasons = _env_repairs(project_dir / ".env", expected)
+        reasons = _env_repairs(
+            project_dir / ".env", expected, judged if decided else None
+        )
         if explainer.is_outdated(project_dir / "HARBOR_PORTS.md"):
             reasons.append("HARBOR_PORTS.md is missing or outdated")
         if reasons:
@@ -424,21 +464,42 @@ def _repairs_needed(
     return needed
 
 
-def _env_repairs(env_path: Path, expected: dict[str, str]) -> list[str]:
-    """Why `env_path` disagrees with `expected`, or an empty list if it does not."""
+def _env_repairs(
+    env_path: Path, expected: dict[str, str], judged: dict[str, str] | None
+) -> list[str]:
+    """Why `env_path` disagrees with the ledger, or an empty list if it does not.
+
+    `judged` is None when the whole fence is the question -- no part of this
+    project is being written for any other reason, so any difference at all
+    between `.env` and `expected` is drift, including a variable left over from
+    a port that no longer exists.
+
+    When some of `expected` is being written anyway, `judged` is the rest of it,
+    and the question narrows to whether those variables are already published as
+    the ledger says. A file that disagrees only where this run is about to write
+    has not drifted, and saying it has turns every grant into a repair.
+    """
     exists = env_path.exists()
     try:
         existing = env_path.read_text(encoding="utf-8") if exists else ""
     except (OSError, UnicodeDecodeError) as exc:
         return [f".env cannot be read as UTF-8 text ({exc})"]
 
+    # Always against the whole `expected`: a corrupted fence is refused whatever
+    # part of it this run meant to write.
     try:
         wanted = envfile.apply_fence(existing, expected)
     except EnvFenceError as exc:
         return [f".env has a corrupted harbor-console fence ({exc})"]
 
-    if wanted == existing:
-        return []
+    if judged is None:
+        if wanted == existing:
+            return []
+    else:
+        published = envfile.fenced_values(existing)
+        if exists and all(published.get(name) == value for name, value in judged.items()):
+            return []
+
     return [".env is missing" if not exists else ".env does not match the ledger"]
 
 
@@ -502,7 +563,9 @@ def _write(
     repaired, and one message per project that could not be written completely.
 
     `repairs` names projects whose own files have drifted from a lease they
-    already hold on a port this run is not deciding. Usually they have no
+    already hold on a port this run is not writing -- which includes a port
+    whose reassignment `--new-only` withheld, since nothing is written for it
+    and the number it keeps is its lease's. Usually they have no
     decision at all, and are then written like any other project except that no
     `assigned` is rewritten -- there is nothing to record, and a project's
     `.harbor.toml` is not touched to say what it already says. One that *also*

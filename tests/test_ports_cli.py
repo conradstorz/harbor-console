@@ -875,3 +875,121 @@ def test_scan_predicts_the_repair_of_a_withheld_projects_leased_port(tmp_path: P
     assert sync_code == 1
     assert _repair_targets(scan_output) == _repair_targets(sync_output) == {"beta"}
     assert "HARBOR_PORT_API=8600" in (beta / ".env").read_text(encoding="utf-8")
+
+
+def _leased_and_in_sync(root: Path, ledger_path: Path) -> Path:
+    """`beta`, holding one leased port, with every file already matching it."""
+    beta = root / "beta"
+    beta.mkdir()
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n[[port]]\nname = "api"\nwant = 8600\n',
+        encoding="utf-8",
+    )
+    run(["sync"], root, ledger_path)
+    return beta
+
+
+def test_granting_a_new_port_is_not_also_reported_as_a_repair(tmp_path: Path):
+    # The most routine event there is: a project that is fully in sync adds a
+    # port. The grant changes its fence, so comparing the *whole* fence against
+    # `.env` found a difference and called the project drifted -- printing the
+    # line that is supposed to warn that a sibling clone is running on its
+    # compose default, with nothing whatever having drifted.
+    ledger_path = tmp_path / "services.toml"
+    beta = _leased_and_in_sync(tmp_path, ledger_path)
+    assert run(["sync"], tmp_path, ledger_path)[1] == "up to date\n"
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n'
+        '[[port]]\nname = "api"\nwant = 8600\nassigned = 8600\n\n'
+        '[[port]]\nname = "web"\nwant = 8700\n',
+        encoding="utf-8",
+    )
+
+    scan_code, scan_output = run(["scan"], tmp_path, ledger_path)
+    sync_code, sync_output = run(["sync"], tmp_path, ledger_path)
+
+    assert scan_code == 1
+    assert sync_code == 0
+    assert "would write beta/web = 8700" in scan_output
+    assert "wrote beta/web = 8700" in sync_output
+    assert _repair_targets(scan_output) == set()
+    assert _repair_targets(sync_output) == set()
+    env = (beta / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_API=8600" in env
+    assert "HARBOR_PORT_WEB=8700" in env
+
+
+def test_scan_and_new_only_agree_when_a_withheld_port_leaves_no_drift(tmp_path: Path):
+    # beta's `api` lease is published correctly and its `web` reassignment is
+    # withheld. `scan` judged beta's whole fence, which includes the move it
+    # previews, and called beta drifted; `sync --new-only` judged a fence
+    # without the withheld port in it at all, matched, and said nothing. Same
+    # tree, two different answers to "has this project drifted?".
+    ledger_path = tmp_path / "services.toml"
+    make_project(tmp_path, "alpha", 8080)
+    run(["sync"], tmp_path, ledger_path)
+    beta = tmp_path / "beta"
+    beta.mkdir()
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n'
+        '[[port]]\nname = "web"\nwant = 8080\nassigned = 8080\n\n'
+        '[[port]]\nname = "api"\nwant = 8600\n',
+        encoding="utf-8",
+    )
+    run(["sync", "--new-only"], tmp_path, ledger_path)  # beta earns its api lease
+
+    scan_code, scan_output = run(["scan"], tmp_path, ledger_path)
+    sync_code, sync_output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert scan_code == 1
+    assert sync_code == 1
+    assert _repair_targets(scan_output) == _repair_targets(sync_output) == set()
+    assert "withheld beta/web" in sync_output
+    assert (beta / ".env").read_text(encoding="utf-8").count("HARBOR_PORT_") == 1
+
+
+def test_new_only_repairs_the_lease_of_a_project_whose_only_port_it_withheld(
+    tmp_path: Path,
+):
+    # The commonest project shape -- one port -- on the unattended path. beta
+    # holds a real lease on 127.0.0.1:8600 and its declaration has widened to
+    # 0.0.0.0, which collides with senior gamma, so the move is withheld. Its
+    # `.env` is gitignored and absent. Discounting the whole project because
+    # its one port carried a decision left it with no `.env` at all and said
+    # nothing about it -- the founding failure, unattended. Publishing the
+    # number its own lease says is not the renumbering that was refused.
+    ledger_path = tmp_path / "services.toml"
+    save_leases(
+        ledger_path,
+        [
+            Lease("gamma", "web", "hpz440", "127.0.0.2", 8600, date(2026, 7, 5)),
+            Lease("beta", "web", "hpz440", "127.0.0.1", 8600, date(2026, 8, 1)),
+        ],
+    )
+    before = ledger_path.read_text(encoding="utf-8")
+    gamma = tmp_path / "gamma"
+    gamma.mkdir()
+    (gamma / ".harbor.toml").write_text(
+        'project = "gamma"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+        'addr = "127.0.0.2"\nwant = 8600\nassigned = 8600\n',
+        encoding="utf-8",
+    )
+    beta = tmp_path / "beta"
+    beta.mkdir()
+    (beta / ".harbor.toml").write_text(
+        'project = "beta"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+        'addr = "0.0.0.0"\nwant = 8600\nassigned = 8600\n',
+        encoding="utf-8",
+    )
+
+    code, output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert code == 1
+    assert "withheld beta/web" in output  # the move is still refused, and said
+    assert "beta" in _repair_targets(output)
+    env = (beta / ".env").read_text(encoding="utf-8")
+    assert "HARBOR_PORT_WEB=8600" in env  # the number its own lease says
+    assert "8100" not in env  # never the move that was withheld
+    # A repair grants nothing: the ledger is untouched, addr included.
+    assert ledger_path.read_text(encoding="utf-8") == before
+    assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8600
