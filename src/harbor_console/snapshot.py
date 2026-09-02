@@ -34,6 +34,11 @@ class Snapshot:
     the pattern this serves -- the prober publishes one, handlers only read it
     -- but a handler that mutates `metrics` in place edits what every other
     reader sees; build a new snapshot instead.
+
+    `probed` separates "collected, found nothing" from "collected nothing
+    yet". It defaults to False because that is the honest default: a
+    snapshot nobody has filled in must not read as a clean bill of health
+    for a fleet that has never been looked at.
     """
 
     collected: datetime
@@ -44,4 +49,11 @@ class Snapshot:
     docker_available: bool = True
     health: dict[tuple[str, str], Health] = field(default_factory=dict)
     drift: tuple[Drift, ...] = ()
-    ledger_error: str | None = None
+    #: Why the last collection cycle failed, whatever its source -- the
+    #: ledger, a collector, the prober or the reconciler. Naming it for the
+    #: ledger alone pointed every failure at `services.toml`.
+    collection_error: str | None = None
+    #: True once a collection cycle has completed. The starting snapshot,
+    #: which collects nothing, leaves it False so the page can say "not yet"
+    #: rather than assert a state it has never looked at.
+    probed: bool = False

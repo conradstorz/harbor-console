@@ -37,7 +37,10 @@ def snapshot(**overrides):
         docker_available=True,
         health={("gte", "console"): Health(True, "ok", "3 queued", (Detail("queue", "3"),), None)},
         drift=(),
-        ledger_error=None,
+        collection_error=None,
+        # These render tests describe a page that has been collected; the
+        # unprobed page is its own case, below.
+        probed=True,
     )
     base.update(overrides)
     return Snapshot(**base)
@@ -140,6 +143,15 @@ def test_page_says_so_when_there_is_no_drift():
     assert "no drift" in html.lower()
 
 
+def test_page_does_not_call_an_unprobed_fleet_clean():
+    """Before the first cycle nothing is known, and the page must say so."""
+    html = render_page(snapshot(probed=False, health={}, drift=())).decode()
+
+    assert "DOWN" not in html
+    assert "no drift" not in html.lower()
+    assert "unknown" in html.lower()
+
+
 def test_page_shows_the_collected_timestamp():
     html = render_page(snapshot()).decode()
 
@@ -152,8 +164,8 @@ def test_page_notes_when_docker_could_not_be_read():
     assert "docker" in html.lower()
 
 
-def test_page_shows_a_ledger_error_banner():
-    html = render_page(snapshot(ledger_error="services.toml: boom")).decode()
+def test_page_shows_a_collection_failure_banner():
+    html = render_page(snapshot(collection_error="services.toml: boom")).decode()
 
     assert "services.toml: boom" in html
 
@@ -210,7 +222,7 @@ def test_page_escapes_every_field_that_originates_outside_this_project():
             leases=(Lease(PAYLOAD, PAYLOAD, PAYLOAD, PAYLOAD, 8080, date(2026, 9, 1)),),
             health=health,
             drift=(Drift(PAYLOAD, PAYLOAD),),
-            ledger_error=PAYLOAD,
+            collection_error=PAYLOAD,
         )
     ).decode()
 

@@ -77,10 +77,10 @@ def render_page(snapshot: Snapshot) -> bytes:
         f"<h1>{escape(str(snapshot.metrics['hostname']))}</h1>",
     ]
 
-    if snapshot.ledger_error is not None:
+    if snapshot.collection_error is not None:
         parts.append(
-            f"<p class=\"banner\">The lease ledger could not be reloaded: "
-            f"{escape(snapshot.ledger_error)}. Showing the last good directory.</p>"
+            f"<p class=\"banner\">The last collection cycle failed: "
+            f"{escape(snapshot.collection_error)}. Showing the last good page.</p>"
         )
     if not snapshot.docker_available:
         parts.append(
@@ -118,6 +118,13 @@ def _host_table(snapshot: Snapshot) -> str:
 
 
 def _services_table(snapshot: Snapshot) -> str:
+    """Render the directory, saying "unknown" until something has been probed.
+
+    Before the first cycle the health map is empty, and reading that as DOWN
+    would report the whole fleet dead on the strength of having looked at
+    none of it. The leases are real either way -- they come from the ledger,
+    not from a probe -- so the directory is still shown.
+    """
     if not snapshot.leases:
         return "<h2>Services</h2><p>No services are declared.</p>"
 
@@ -126,7 +133,10 @@ def _services_table(snapshot: Snapshot) -> str:
         health = snapshot.health.get((lease.project, lease.name))
         up = health is not None and health.up
         url = f"http://{lease.host}:{lease.port}/"
-        status = "UP" if up else "<span class=\"down\">DOWN</span>"
+        if not snapshot.probed:
+            status = "UNKNOWN"
+        else:
+            status = "UP" if up else "<span class=\"down\">DOWN</span>"
         summary = escape(health.summary) if health and health.summary else ""
         rows.append(
             f"<tr><td>{escape(lease.project)}/{escape(lease.name)}</td>"
@@ -144,8 +154,16 @@ def _services_table(snapshot: Snapshot) -> str:
                     f"<tr class=\"detail\"><td colspan=\"4\">{escape(health.warning)}</td></tr>"
                 )
 
+    note = (
+        ""
+        if snapshot.probed
+        else "<p>Nothing has been collected yet: the first cycle has not "
+        "completed, so service state is unknown.</p>"
+    )
     return (
-        "<h2>Services</h2><table>"
+        "<h2>Services</h2>"
+        + note
+        + "<table>"
         "<tr><th>Project</th><th>Address</th><th>State</th><th></th></tr>"
         + "".join(rows)
         + "</table>"
@@ -153,6 +171,15 @@ def _services_table(snapshot: Snapshot) -> str:
 
 
 def _drift_section(snapshot: Snapshot) -> str:
+    """Report drift, distinguishing "none found" from "nothing looked at".
+
+    An empty tuple means both, and only one of them is good news.
+    """
+    if not snapshot.probed:
+        return (
+            "<h2>Drift</h2><p>Nothing has been collected yet: the first "
+            "cycle has not completed, so drift is unknown.</p>"
+        )
     if not snapshot.drift:
         return "<h2>Drift</h2><p>No drift: every lease matches what is running.</p>"
 
