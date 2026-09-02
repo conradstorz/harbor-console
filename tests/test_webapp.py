@@ -1,5 +1,6 @@
 import inspect
 import os
+import re
 from datetime import date, datetime
 from http.server import ThreadingHTTPServer
 
@@ -392,6 +393,16 @@ def test_main_refuses_to_start_when_its_own_lease_is_ambiguous(monkeypatch):
     assert called["served"] is False
 
 
+def _banners(html: str) -> str:
+    """The failure banners only, so an assertion about blame cannot veto page copy.
+
+    Asserting a word is absent from the whole document makes every future line of
+    copy answerable to a test about failure attribution -- which is how this one
+    silently dictated the footer's wording once already.
+    """
+    return " ".join(re.findall(r'<p class="banner">.*?</p>', html, re.DOTALL))
+
+
 def test_a_collector_failure_is_not_blamed_on_the_ledger():
     """psutil raising must not send the operator to read services.toml."""
     good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
@@ -407,7 +418,7 @@ def test_a_collector_failure_is_not_blamed_on_the_ledger():
     html = web.render_page(holder.get()).decode()
 
     assert "psutil fell over" in html
-    assert "ledger" not in html.lower()
+    assert "ledger" not in _banners(html).lower()
 
 
 def test_a_ledger_failure_is_still_named_as_one():
