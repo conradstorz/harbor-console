@@ -58,3 +58,32 @@ def test_results_are_sorted_and_deduplicated():
     result = listening_sockets(net_connections=lambda kind: conns)
 
     assert [item.port for item in result] == [22, 9000]
+
+
+def test_a_connection_missing_an_expected_attribute_is_skipped():
+    # No `status` attribute at all -- unlike a psutil connection, which always
+    # has one. A single malformed entry must not take the good one with it.
+    bad = SimpleNamespace(laddr=SimpleNamespace(ip="10.0.0.2", port=9000), pid=5)
+    good = conn("0.0.0.0", 8080, pid=10)
+
+    result = listening_sockets(net_connections=lambda kind: [bad, good])
+
+    assert result == (Listener("0.0.0.0", 8080, 10),)
+
+
+def test_a_laddr_that_is_a_plain_tuple_is_skipped():
+    # psutil's laddr is a named `addr(ip, port)` tuple; a plain 2-tuple has no
+    # `.ip` attribute. This should be skipped like any other malformed entry.
+    bad = SimpleNamespace(laddr=("10.0.0.2", 9000), status=psutil.CONN_LISTEN, pid=5)
+    good = conn("0.0.0.0", 8080, pid=10)
+
+    result = listening_sockets(net_connections=lambda kind: [bad, good])
+
+    assert result == (Listener("0.0.0.0", 8080, 10),)
+
+
+def test_an_unexpected_exception_from_net_connections_degrades_to_empty():
+    def boom(kind):
+        raise RuntimeError("partly-readable /proc")
+
+    assert listening_sockets(net_connections=boom) == ()

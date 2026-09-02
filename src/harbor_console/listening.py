@@ -32,20 +32,35 @@ class Listener:
 def listening_sockets(
     net_connections: Callable[..., object] = psutil.net_connections,
 ) -> tuple[Listener, ...]:
-    """Collect listening TCP sockets. Degrades to empty rather than raising."""
+    """Collect listening TCP sockets.
+
+    Two distinct failure modes, both degrading rather than raising:
+
+    - `net_connections` itself failing -- access denied, a partly-readable
+      `/proc`, anything -- yields `()`. There is nothing to salvage.
+    - One malformed connection in an otherwise good list -- a missing
+      attribute, a `laddr` that isn't psutil's named tuple, a port that
+      won't `int()` -- is skipped. The rest of the list is still trustworthy
+      and dropping the whole collection over one bad entry would be worse:
+      the allocator would see a suspiciously empty host instead of a host
+      missing one listener.
+    """
     try:
         connections = net_connections(kind="tcp")
-    except (psutil.Error, OSError):
+    except Exception:
         return ()
 
     found: set[Listener] = set()
     for connection in connections:  # type: ignore[union-attr]
-        if connection.status != psutil.CONN_LISTEN:
+        try:
+            if connection.status != psutil.CONN_LISTEN:
+                continue
+            laddr = connection.laddr
+            if not laddr:
+                continue
+            addr = IPV4_ANY if laddr.ip == IPV6_ANY else laddr.ip
+            found.add(Listener(addr=addr, port=int(laddr.port), pid=connection.pid))
+        except Exception:
             continue
-        laddr = connection.laddr
-        if not laddr:
-            continue
-        addr = IPV4_ANY if laddr.ip == IPV6_ANY else laddr.ip
-        found.add(Listener(addr=addr, port=int(laddr.port), pid=connection.pid))
 
     return tuple(sorted(found, key=lambda item: (item.port, item.addr)))
