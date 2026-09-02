@@ -1,7 +1,17 @@
 # Web surface — design
 
 Date: 2026-09-02
-Status: approved, not implemented
+Status: implemented. Shipped on `feat/web-surface`; see PR #5.
+
+Where this document and the code disagree, **the code is right** — read it
+for the reasoning, not as a description of what exists. Three things changed
+during implementation: it names six modules and eight shipped (`reconcile.py`
+holds the pure drift policy and `snapshot.py` is the prober-renderer contract
+that keeps the two from importing each other); the served host is decided once
+from this service's own lease rather than from the host's metrics; and
+`/ports.json` answers 503 not only before the first probe cycle but also
+whenever Docker could not be read, because an empty listener list and an
+unasked question are indistinguishable to the allocator.
 
 Builds `harbor-console-web`, the second surface of v0.2.0: a read-only status
 page served to the tailnet, and the `/ports.json` endpoint the allocator already
