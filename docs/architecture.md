@@ -57,29 +57,75 @@ Three properties of the allocator are structural:
   `.harbor.toml` in one project does not stop an operator reading the lease
   table — which is exactly when they need it (ADR 11).
 
-## Specified, not yet implemented (v0.2.0)
+## Shipped (v0.2.0): the tailnet status page
 
 A second process, `harbor-console-web`, serves a read-only status page to the
-tailnet. It reuses the same collectors rather than duplicating them — which is
-the payoff of the split above: a web view is a second renderer, not a second
-application.
+tailnet, and serves the `/ports.json` the allocator reads. It reuses the same
+collectors rather than duplicating them — which is the payoff of the split
+above: a web view is a second renderer, not a second application.
 
-- `docker.py` collects: live container state, for reconciliation against the
-  declaration.
-- `web.py` renders: one self-contained HTML page, served over stdlib
-  `http.server`.
-- `webapp.py` coordinates: a background prober thread and the HTTP server.
+Collect:
 
-It also serves the `/ports.json` the allocator reads, which is why an allocation
-run today can be refused for want of authoritative host state.
+- `tailnet.py` — the host's Tailscale address, from `tailscale ip -4`. It is
+  the one collector in the project permitted to **raise**: every other one
+  degrades quietly, but a silent fallback here would publish an inventory of
+  every service on the host to the whole LAN
+  ([ADR 7](adr/0007-bind-tailscale-address-only.md)).
+- `listening.py` — every listening TCP socket, from `psutil`. Only the host
+  itself can see loopback-bound and non-Docker listeners. IPv6 `::` is
+  normalised to `0.0.0.0`, the wildcard the ledger's overlap rule knows.
+- `docker.py` — running containers and the host ports they publish. "Docker
+  could not be asked" is a distinct result from "asked, nothing running": the
+  difference decides whether the page may call a service undeclared.
+- `probe.py` — liveness and optional detail for one service, by convention:
+  `/` for up, `/hcstatus` for detail. Any HTTP response means up
+  ([ADR 12](adr/0012-web-surface-collectors-and-conventions.md)).
+
+Decide:
+
+- `reconcile.py` — the drift policy, and pure, for the same reason
+  `ports/allocate.py` is: leases, listeners and containers in, findings out.
+  The join key is `(addr, port)`, compared by address overlap, because that is
+  the key the ledger owns.
+
+The contract:
+
+- `snapshot.py` — data only, the handoff between the prober and the renderer.
+  Its own module so neither side has to import the other, the way
+  `ports/keys.py` serves the allocator. `Snapshot.probed` separates "collected,
+  found nothing" from "collected nothing yet", and `Snapshot.collection_error`
+  carries why a cycle failed, whatever its source — a collector, the prober or
+  the ledger. It is not named for the ledger, because naming it that pointed
+  every failure at `services.toml`.
+
+Render and coordinate:
+
+- `web.py` renders: one self-contained HTML page from a snapshot, plus the
+  `/ports.json` body. It never collects and never probes.
+- `webapp.py` coordinates: the background prober thread and the HTTP server, as
+  the `harbor-console-web` systemd entry point.
+
+Four properties of that service are structural rather than incidental:
+
+- It binds the host's Tailscale address only, and **refuses to start** without
+  it. There is no fallback, no `--host`, and no dev mode (ADR 7).
+- It also refuses to start when its own service is declared more than once in
+  the ledger. Multi-host operation needs an explicit choice of identity, and
+  that choice is deferred rather than guessed.
+- The host it serves is decided **once**, from the lease this process holds,
+  and passed down explicitly. It is never re-derived from
+  `socket.gethostname()`: the ledger's `host` is a hand-authored string, and a
+  name disagreeing with the OS — `hpz440` against `hpz440.lan` — would silently
+  empty this host's share of the ledger.
+- Probing never runs inside a request handler, so one hung service cannot make
+  the page slow to load. Until the first probe cycle completes, `/ports.json`
+  answers **503**: an unprobed snapshot has no listeners because none were
+  looked for, and serving that as 200 would read to the allocator as a verified
+  empty host and let it grant a port already in use.
 
 The two processes have independent lifetimes. Logging in at the attached
 monitor must not take the tailnet page down, and the page must not depend on
 anyone being logged in.
-
-Two properties are structural rather than incidental: the page binds the host's
-Tailscale address only and refuses to start otherwise, and probing never runs
-inside a request handler.
 
 See `founding_document.txt` for the full v0.2.0 specification, including the
 questions it leaves deliberately open.

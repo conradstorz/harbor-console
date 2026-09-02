@@ -1,0 +1,22 @@
+[Unit]
+Description=Harbor Console web status page
+After=tailscaled.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/opt/harbor-console/.venv/bin/harbor-console-web
+Restart=always
+RestartSec=2
+User=harbor
+Group=harbor
+SupplementaryGroups=docker
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

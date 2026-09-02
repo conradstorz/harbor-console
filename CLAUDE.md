@@ -8,9 +8,9 @@ Harbor Console is a lightweight operational console for a small fleet of Linux s
 
 - **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU/memory/disk, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
 - **`harbor-console ports`** (v0.2.0, shipped) — the port allocator. Projects declare what they need in `.harbor.toml`; harbor-console leases a port from `services.toml` and writes it into the project's own `.env` ([ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)).
-- **`harbor-console-web`** (v0.2.0, **specified but not yet implemented**) — a read-only status page served to the tailnet: the service directory from `services.toml`, live/down state, and drift against Docker.
+- **`harbor-console-web`** (v0.2.0, shipped) — a read-only status page served to the tailnet: the service directory from `services.toml`, live/down state, and drift against Docker. It also serves the `/ports.json` the allocator reads. Runs as its own systemd unit (`deploy/harbor-console-web.service`), bound to the host's Tailscale address only ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)), collecting by convention rather than from declarations the server does not have ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)).
 
-`founding_document.txt` is the authoritative spec — read it before adding features. Under its "v0.2.0" heading the allocator is built; the web surface is still design, not code. `plan.md` is the handoff brief that motivated the expansion and records what is still open.
+`founding_document.txt` is the authoritative spec — read it before adding features. Everything under its "v0.2.0" heading is now built. `plan.md` is the dated handoff brief that motivated the expansion; it is a historical record of how v0.2.0 was decided, not a description of the code — read it for reasoning, not for what exists (it still names a `registry.py` that was never written). The one question genuinely still open is under Scope discipline below.
 
 ## Commands
 
@@ -26,6 +26,7 @@ Uses `uv` (not pip/venv). Python 3.13+.
 | Report pending port changes | `uv run harbor-console ports scan` |
 | Apply port assignments, and repair drifted projects | `uv run harbor-console ports sync` |
 | Print the lease table (reads no declarations) | `uv run harbor-console ports show` |
+| Run the tailnet status page | `uv run harbor-console-web` (binds the Tailscale address; refuses without one) |
 
 `pyproject.toml` sets `pythonpath = ["src"]`, so tests import `harbor_console` without an editable install.
 
@@ -53,11 +54,22 @@ Two behaviours of that CLI are load-bearing and easy to undo by accident ([ADR 1
 - **`sync` writes a project whose files have drifted, not only one whose decision changed.** `.env` is gitignored, so every fresh clone of a participating project starts without one while its lease stands and its decision is "keep"; writing only changes would report "up to date" over a project about to fall back to its compose default, on a port that may be leased to somebody else. A missing or mangled fence and a missing `HARBOR_PORTS.md` are repaired the same way. `scan` reports the same condition and writes nothing. A repair is reported *as* a repair, distinctly from a grant, and a tree that already matches stays a genuine no-op.
 - **`show` loads no declarations at all.** It reads the ledger and prints it, so a broken `.harbor.toml` anywhere in the tree — which does fail `scan` and `sync` — still leaves an operator able to read the lease table, which is exactly when they need it.
 
-Still planned for v0.2.0 (**none of these exist yet** — do not describe them as if they do):
+The web surface, implemented for v0.2.0, is eight modules at the top level, and keeps the same split:
 
-- `docker.py` — **collects**: live container state for reconciliation against the ledger.
-- `web.py` — **renders**: the HTML page, and serves it over stdlib `http.server`. No collection.
+- `tailnet.py` — **collects** the host's Tailscale address from `tailscale ip -4`. The one collector allowed to raise (see Graceful degradation below).
+- `listening.py` — **collects** every listening TCP socket via `psutil`, including loopback-bound and non-Docker ones. IPv6 `::` is normalised to `0.0.0.0`.
+- `docker.py` — **collects** running containers and the host ports they publish. `DOCKER_UNAVAILABLE` distinguishes "could not ask Docker" from "asked, nothing running"; the difference decides whether the page may call a service undeclared.
+- `probe.py` — **collects** liveness and optional detail for one service: `/` for up, `/hcstatus` for detail, both by convention ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)). Any HTTP response means up.
+- `reconcile.py` — the drift policy. Pure, like `ports/allocate.py`: leases, listeners and containers in, findings out. Joins on `(addr, port)` by address overlap.
+- `snapshot.py` — the **contract** between prober and renderer, data only. Its own module so neither imports the other, the way `ports/keys.py` serves the allocator. `Snapshot.probed` separates "found nothing" from "not looked yet"; `Snapshot.collection_error` — not `ledger_error` — carries why a cycle failed, whatever its source.
+- `web.py` — **renders** the HTML page from a snapshot and the `/ports.json` body, and serves both over stdlib `http.server`. No collection, no probing.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
+
+Three behaviours of that service are load-bearing and easy to undo by accident:
+
+- **The served host is decided once, in `webapp.main`, from the lease this process holds** — never from `socket.gethostname()`. The ledger's `host` is a hand-authored string; a name that disagrees with the OS (`hpz440` against `hpz440.lan`) would silently empty this host's share of the ledger and report every healthy container as undeclared.
+- **`harbor-console-web` refuses to start if its own service is declared more than once in the ledger.** Multi-host operation needs an explicit choice of identity, and that is deferred rather than guessed.
+- **`/ports.json` answers 503 until the first probe cycle completes.** An unprobed snapshot has no listeners because none were looked for; serving it as 200 would read to the allocator as a verified empty host and let it grant a port already in use. The 503 becomes the refusal `ports/live.py` already has.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
 
@@ -71,11 +83,11 @@ The dict returned by `collect_system_metrics()` is the contract between `system`
 
 Collectors never raise on a hostile environment: `get_docker_container_count()` returns `0` when the `docker` binary is missing or errors; `get_ipv4_address()` falls back to `127.0.0.1`. New collectors should follow suit — the dashboard "never crashes during normal operation" is a release criterion.
 
-Two deliberate exceptions, where failing loudly is the point:
+Three deliberate exceptions, where failing loudly is the point:
 
 - A duplicate `(host, addr, port)` in `services.toml` is a hard error at load time, not a warning. Catching that collision is why the ledger exists.
 - A `.harbor.toml` that cannot be parsed fails `scan` and `sync`: the allocator will not allocate against data it cannot read. `show` is deliberately exempt.
-- `harbor-console-web` refuses to start if it cannot bind the host's Tailscale address. There is no fallback to `0.0.0.0` — see the hard constraints below.
+- `harbor-console-web` refuses to start if it cannot determine or bind the host's Tailscale address, if the ledger will not load, or if its own service is declared more than once. There is no fallback to `0.0.0.0` — see the hard constraints below. `tailnet.py` is therefore the one collector that raises rather than degrading.
 
 ### The `.harbor-tmp.*` sweep pattern
 

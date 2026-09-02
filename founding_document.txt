@@ -199,6 +199,22 @@ The page shows three things: server health (the same metrics as the terminal
 console), the service directory with live or down state, and the drift list.
 It auto-refreshes on a timer.
 
+The host it serves is decided once, at startup, from the lease this process
+holds in the ledger - never from the operating system's hostname. The ledger's
+host is a hand-authored string, and a name that disagrees with the OS (hpz440
+against hpz440.lan) would silently empty this host's share of the ledger and
+report every healthy container as undeclared.
+
+It therefore also refuses to start when its own service is declared more than
+once in the ledger. Running one page for several hosts needs an explicit choice
+of identity, and that choice is deferred rather than guessed.
+
+The same page serves /ports.json, the authoritative host state the allocator
+reads. Until the first probe cycle completes it answers 503, not an empty
+listing: a snapshot nobody has filled in has no listeners because none were
+looked for, and serving that as success would let the allocator grant a port
+that is already in use.
+
 The page is read only. No buttons that do anything. Port allocation authority
 was chosen over lifecycle control, so nothing here can start or stop a
 container.
@@ -242,7 +258,12 @@ harbor-console/
 │       ├── app.py          tty1 refresh loop
 │       ├── webapp.py       systemd web service entry point
 │       ├── system.py       collect host metrics
+│       ├── tailnet.py      the Tailscale address, or a refusal
+│       ├── listening.py    every listening socket on this host
 │       ├── docker.py       live container state
+│       ├── probe.py        liveness and optional /hcstatus detail
+│       ├── reconcile.py    the drift policy, pure
+│       ├── snapshot.py     the prober-to-renderer contract, data only
 │       ├── ui.py           render terminal
 │       ├── web.py          render and serve HTTP
 │       └── ports/          the port allocator
@@ -259,14 +280,19 @@ harbor-console/
 │           └── cli.py          scan / sync / show
 ├── tests/
 ├── deploy/
+│   ├── harbor-console.service      the tty1 unit
+│   ├── harbor-console-web.service  the tailnet status page unit
+│   ├── install.sh                  installs both, idempotent; the update path
+│   └── uninstall.sh
 └── docs/
     ├── architecture.md
     └── adr/
 
 There is no registry.py. Reading and validating services.toml is ports/ledger.py,
 and it is one half of a pair: a project's own .harbor.toml is read by
-ports/declaration.py. docker.py, web.py and webapp.py are specified here but not
-yet built; everything under ports/ is shipped.
+ports/declaration.py. Everything listed here is shipped: the allocator under
+ports/, and the eight modules of the web surface - tailnet.py, listening.py,
+docker.py, probe.py, reconcile.py, snapshot.py, web.py and webapp.py.
 
 Initial Features
 
@@ -319,10 +345,42 @@ compose file would fall back to a default that may collide. show reads the
 ledger alone, so a broken declaration somewhere in the tree does not stop an
 operator reading the lease table.
 
+tailnet.py
+
+Reports the host's Tailscale address, asking tailscale itself rather than
+guessing from an interface or an address range. The one collector in this
+project that raises instead of degrading: a silent fallback here would publish
+the whole directory to the LAN. See ADR 7.
+
+listening.py
+
+Reports every listening TCP socket on this host, including loopback-bound and
+non-Docker ones that Docker cannot see. A socket bound to IPv6 :: is normalised
+to 0.0.0.0, the wildcard the ledger's overlap rule knows.
+
 docker.py
 
 Reports live container state for reconciliation. Degrades to empty rather than
-raising when Docker is unavailable.
+raising when Docker is unavailable - and reports that it could not ask Docker
+at all as a distinguishable result, because "nothing is running" and "nobody
+answered" must not both read as an undeclared fleet.
+
+probe.py
+
+Probes one service: / for liveness, /hcstatus for optional detail, both by
+convention rather than from a declaration the server does not have. See ADR 12.
+
+reconcile.py
+
+Decides where the ledger and reality disagree. Pure - no I/O - for the same
+reason allocate.py is. Joins leases against listeners and published container
+ports on (addr, port), compared by address overlap.
+
+snapshot.py
+
+The contract between the prober and the renderer, and data only. Its own module
+so neither side imports the other, the way ports/keys.py serves the allocator.
+It records whether a cycle has ever completed, and why the last one failed.
 
 ui.py
 
@@ -346,7 +404,11 @@ Refresh interval:
 
 webapp.py
 
-Coordinates the web service: the background prober and the HTTP server.
+Coordinates the web service: the background prober and the HTTP server. Every
+refusal lives here and happens at startup - no Tailscale address, no readable
+ledger, no lease of its own, or more than one lease that could be its own. It
+ships as its own systemd unit, deploy/harbor-console-web.service, installed
+alongside the tty1 unit by deploy/install.sh.
 
 Collect, render, and coordinate stay separate. A web view is a second renderer
 over the same collectors, not a second application.

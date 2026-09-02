@@ -4,8 +4,8 @@
 set -euo pipefail
 
 INSTALL_DIR=/opt/harbor-console
-UNIT_NAME=harbor-console.service
-UNIT_DEST=/etc/systemd/system/${UNIT_NAME}
+UNIT_DIR=/etc/systemd/system
+UNIT_NAMES=(harbor-console.service harbor-console-web.service)
 
 PURGE=0
 if [[ "${1:-}" == "--purge" ]]; then
@@ -17,11 +17,15 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-echo "==> Stopping and disabling ${UNIT_NAME}"
-systemctl disable --now "${UNIT_NAME}" 2>/dev/null || true
+for unit in "${UNIT_NAMES[@]}"; do
+  echo "==> Stopping and disabling ${unit}"
+  systemctl disable --now "${unit}" 2>/dev/null || true
+done
 
-echo "==> Removing ${UNIT_DEST}"
-rm -f "${UNIT_DEST}"
+for unit in "${UNIT_NAMES[@]}"; do
+  echo "==> Removing ${UNIT_DIR}/${unit}"
+  rm -f "${UNIT_DIR}/${unit}"
+done
 systemctl daemon-reload
 
 echo "==> Restoring the login prompt on tty1"
