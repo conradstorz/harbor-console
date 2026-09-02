@@ -26,7 +26,15 @@ class Drift:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """Everything the page shows, collected at one moment."""
+    """Everything the page shows, collected at one moment.
+
+    `frozen=True` here is shallow: it stops a field being rebound, but `metrics`
+    and `health` are ordinary dicts whose contents can still be mutated, and a
+    snapshot is unhashable, so there is no `set[Snapshot]`. That is enough for
+    the pattern this serves -- the prober publishes one, handlers only read it
+    -- but a handler that mutates `metrics` in place edits what every other
+    reader sees; build a new snapshot instead.
+    """
 
     collected: datetime
     metrics: dict[str, str | float | int]
