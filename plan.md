@@ -1,5 +1,13 @@
 # Harbor Console — service registry and tailnet status page
 
+> **Superseded — kept as a record of the reasoning.** Everything below was
+> built: the allocator shipped in PR #4 (2026-09-01) and the web surface on
+> the `feat/web-surface` branch (2026-09-02). Read it for *why* the decisions
+> were made, not for what exists. Where it disagrees with the code, the code
+> is right — in particular there is no `registry.py`; that job belongs to
+> `ports/ledger.py` and `ports/declaration.py`. See `founding_document.txt`
+> and `docs/architecture.md` for the shipped design.
+
 **Status: handoff brief, not an implementation plan.** Design work started
 2026-09-01 in a session rooted in another repo; this document moves it here so
 it can be finished and built in place. Each section below is marked

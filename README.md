@@ -2,6 +2,37 @@
 
 A linux server attached monitor showing system health and projects status on every boot.
 
+## Status page
+
+`harbor-console-web` serves a read-only page to the tailnet answering the other
+question: what is running on this host, on which port, and is it up. It shows the
+same health metrics as the attached monitor, the service directory from
+`services.toml` with live or down state, and the ways the ledger and Docker
+disagree — declared but not running, running but not declared, and running on a
+port that does not match its lease.
+
+It binds the host's Tailscale address and nothing else. If that address cannot be
+determined it refuses to start rather than falling back to a broader one, because
+the page is an inventory of every service on the host and binding *is* the access
+control — which is why there is no login page
+([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)). Probing runs in a
+background thread, so one hung service cannot make the page slow to load, and the
+page is strictly read-only: nothing on it can start or stop anything.
+
+It also serves `/ports.json`, which is how `harbor-console ports` learns what is
+actually listening — including loopback-bound and non-Docker sockets that Docker
+cannot report. Until its first probe cycle completes, that endpoint returns 503
+rather than an empty list, so the allocator refuses to grant instead of trusting
+state nobody has looked at yet.
+
+Health probing is deliberately dumb: any HTTP response means up, including a
+redirect to a login page. A project can offer `/hcstatus` returning a little JSON
+to add detail to its row; a missing or broken one never makes it show as down.
+
+Run it with `uv run harbor-console-web`. `deploy/install.sh` installs it as a
+second systemd unit alongside the tty1 dashboard; the two have independent
+lifetimes, so restarting one does not disturb the other.
+
 ## Port assignment
 
 `harbor-console ports` hands out the published host ports for every project in

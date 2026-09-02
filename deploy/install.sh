@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Harbor Console installer — sets up the tty1 dashboard service.
+# Harbor Console installer — sets up the tty1 dashboard and the tailnet status page.
 # Run as root from a checkout of the repository. Idempotent.
 set -euo pipefail
 
 INSTALL_DIR=/opt/harbor-console
-UNIT_NAME=harbor-console.service
-UNIT_DEST=/etc/systemd/system/${UNIT_NAME}
+UNIT_DIR=/etc/systemd/system
+# Both units are installed together: they share one checkout, one venv and one
+# service user, so a partial deploy is a state nobody wants to debug.
+UNIT_NAMES=(harbor-console.service harbor-console-web.service)
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
@@ -79,19 +81,29 @@ usermod -aG docker harbor
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"
 
-echo "==> Installing systemd unit to ${UNIT_DEST}"
-install -m 0644 "${SCRIPT_DIR}/${UNIT_NAME}" "${UNIT_DEST}"
+for unit in "${UNIT_NAMES[@]}"; do
+  echo "==> Installing systemd unit to ${UNIT_DIR}/${unit}"
+  install -m 0644 "${SCRIPT_DIR}/${unit}" "${UNIT_DIR}/${unit}"
+done
 systemctl daemon-reload
 
 echo "==> Masking getty@tty1 (disables the login prompt on tty1 only)"
 systemctl mask getty@tty1.service
 
-echo "==> Enabling ${UNIT_NAME} and (re)starting it to load current code"
-systemctl enable "${UNIT_NAME}"
-systemctl restart "${UNIT_NAME}"
+# enable, then restart -- not `enable --now`, which starts a stopped unit but
+# leaves a running one on the old code. This script is the update path.
+for unit in "${UNIT_NAMES[@]}"; do
+  echo "==> Enabling ${unit} and (re)starting it to load current code"
+  systemctl enable "${unit}"
+  systemctl restart "${unit}"
+done
 
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
+echo "The status page is served to the tailnet by harbor-console-web, on the"
+echo "port services.toml leases it."
 echo "Admin logins remain on tty2-tty6 (Ctrl+Alt+F2 ... F6) and via SSH."
 echo
-systemctl status "${UNIT_NAME}" --no-pager || true
+for unit in "${UNIT_NAMES[@]}"; do
+  systemctl status "${unit}" --no-pager || true
+done
