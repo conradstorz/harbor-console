@@ -14,11 +14,21 @@ import subprocess
 from collections.abc import Callable
 
 
+#: A bound on `tailscale ip -4`. This runs on the startup path, before
+#: anything is bound, so a binary that hangs rather than exits would keep the
+#: service in "starting" forever, with no page and nothing in the journal. A
+#: timeout is the same failure as any other: refuse, and let systemd retry.
+TAILSCALE_TIMEOUT_SECONDS = 5.0
+
+
 class TailnetUnavailable(Exception):
     """The host's Tailscale address could not be determined."""
 
 
-def tailscale_address(run: Callable[..., object] = subprocess.run) -> str:
+def tailscale_address(
+    run: Callable[..., object] = subprocess.run,
+    timeout: float = TAILSCALE_TIMEOUT_SECONDS,
+) -> str:
     """Return the host's Tailscale IPv4 address.
 
     Asks `tailscale` itself rather than guessing from an interface name or an
@@ -30,7 +40,12 @@ def tailscale_address(run: Callable[..., object] = subprocess.run) -> str:
             check=False,
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise TailnetUnavailable(
+            f"tailscale ip -4 did not answer within {timeout}s"
+        ) from exc
     except (FileNotFoundError, OSError) as exc:
         raise TailnetUnavailable(f"could not run tailscale: {exc}") from exc
 
