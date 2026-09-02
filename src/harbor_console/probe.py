@@ -11,6 +11,7 @@ project got it wrong, and silently where it simply does not offer one.
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -59,28 +60,49 @@ def probe(
 
 
 def _answers(url: str, opener: Callable[..., object], timeout: float) -> bool:
-    """True when anything answers over HTTP, including an error status."""
+    """True when anything answers over HTTP, including an error status.
+
+    The whole call is somebody else's code -- a platform-dependent transport
+    -- so the catch here is deliberately broad: any way it can fail, short of
+    an actual response, means down.
+    """
     try:
         with opener(url, timeout=timeout):  # type: ignore[union-attr]
             return True
     except urllib.error.HTTPError:
         # A 404 or a 500 is still a service answering.
         return True
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
 
 
 def _hcstatus(
     url: str, opener: Callable[..., object], timeout: float
 ) -> tuple[str | None, str | None, tuple[Detail, ...], str | None]:
-    """Fetch and validate /hcstatus. Never decides up or down."""
+    """Fetch and validate /hcstatus. Never decides up or down.
+
+    The fetch is guarded broadly, because it is the external call -- the
+    injected opener and reading its response -- and any way that can fail is
+    this module's problem, not a bug in it. A 404 is the ordinary case of a
+    project simply not offering the endpoint, so it alone produces no
+    warning; every other failure to fetch does. Parsing and validating the
+    bytes once they are in hand is this module's own logic, so it gets its
+    own narrow handling below, outside this block.
+    """
     try:
         with opener(url, timeout=timeout) as response:  # type: ignore[union-attr]
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError:
-        # Not offering /hcstatus is the ordinary case, not a fault.
-        return None, None, (), None
-    except (OSError, ValueError) as exc:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            # Not offering /hcstatus is the ordinary case, not a fault.
+            return None, None, (), None
+        return None, None, (), f"{HCSTATUS_PATH} returned {exc.code}"
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        return None, None, (), f"{HCSTATUS_PATH} unreadable: {exc}"
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return None, None, (), f"{HCSTATUS_PATH} unreadable: {exc}"
 
     if not isinstance(payload, dict):

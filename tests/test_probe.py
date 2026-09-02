@@ -1,6 +1,10 @@
+import http.client
 import json
 import urllib.error
 
+import pytest
+
+import harbor_console.probe as probe_module
 from harbor_console.probe import Detail, probe
 
 HCSTATUS = {
@@ -131,3 +135,77 @@ def test_detail_rows_that_are_not_label_value_are_dropped():
 
     assert health.detail == ()
     assert health.warning is not None
+
+
+def test_a_malformed_status_line_on_root_means_down():
+    """http.client.HTTPException is not an OSError -- must still mean down."""
+    routes = {
+        "/": http.client.BadStatusLine("garbage"),
+        "/hcstatus": http_error(404),
+    }
+
+    health = probe("h", 1, opener=opener_for(routes))
+
+    assert health.up is False
+    assert health.detail == ()
+
+
+class ReadRaisesResponse:
+    """A response whose body read fails after a successful connect."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self):
+        raise http.client.IncompleteRead(b"partial")
+
+
+def test_an_incomplete_hcstatus_body_warns_but_stays_up():
+    """http.client.IncompleteRead surfaces from response.read(), not the
+    opener call itself -- must still be caught at the fetch boundary."""
+
+    def opener(url, timeout):
+        if url.endswith("/hcstatus"):
+            return ReadRaisesResponse()
+        return FakeResponse(b"")
+
+    health = probe("h", 1, opener=opener)
+
+    assert health.up is True
+    assert health.warning is not None
+
+
+def test_hcstatus_500_warns_but_stays_up():
+    routes = {"/hcstatus": http_error(500), "/": b""}
+
+    health = probe("h", 1, opener=opener_for(routes))
+
+    assert health.up is True
+    assert health.warning is not None
+
+
+def test_hcstatus_404_still_produces_no_warning():
+    routes = {"/hcstatus": http_error(404), "/": b""}
+
+    health = probe("h", 1, opener=opener_for(routes))
+
+    assert health.up is True
+    assert health.warning is None
+
+
+def test_a_bug_in_hcstatus_parsing_is_not_swallowed(monkeypatch):
+    """The fetch boundary must not widen into this module's own parsing and
+    validation logic: a genuine bug there has to propagate, not become a
+    silent warning."""
+
+    def broken_json_loads(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(probe_module.json, "loads", broken_json_loads)
+    routes = {"/hcstatus": b"{}", "/": b""}
+
+    with pytest.raises(RuntimeError):
+        probe("h", 1, opener=opener_for(routes))
