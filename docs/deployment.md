@@ -171,8 +171,8 @@ journalctl -u harbor-console-web -b | grep '^.*error:'
 | `error: tailscale ip -4 exited 1` | Tailscale is installed but logged out or not running. | `sudo systemctl start tailscaled`, `sudo tailscale up`. |
 | `error: tailscale ip -4 returned no address` | Running, but this node holds no IPv4 address yet. | Wait for it to come up, or re-authenticate the node. |
 | `error: tailscale ip -4 did not answer within 5.0s` | The binary hung. The timeout is deliberate: a hang with no timeout would leave the unit "starting" forever with nothing in the journal. | Investigate `tailscaled`; restarting it usually clears it. |
-| `error: /opt/harbor-console/services.toml: ...` | **Unreadable ledger** — missing, not valid TOML, a lease missing a field, a bad port or `granted` date, or the same `(host, port)` claimed twice. The message names the file and the fault. | Fix `services.toml` in your checkout, re-run `sudo deploy/install.sh`. Do not hand-edit the deployed copy; the next install overwrites it. |
-| `error: no lease for harbor-console/web; this service must be declared` | **Not declared** — the ledger carries no lease for this service. A page bound to a port no lease reserves is exactly the collision the ledger exists to prevent, so there is no default port. | Declare it in `.harbor.toml`, run `harbor-console ports sync` on the dev box, re-run the installer. |
+| `error: /opt/harbor-console/services.toml: ...` | **Unreadable ledger** — the file exists but is not valid TOML, a lease is missing a field, a lease has a bad `port` or `granted` date, or the same `(host, addr, port)` is claimed twice. The message names the file and the fault. A *missing* `services.toml` does **not** land here — `load_leases` treats a missing file as an empty ledger, which surfaces below as "not declared" instead. | Fix `services.toml` in your checkout, re-run `sudo deploy/install.sh`. Do not hand-edit the deployed copy; the next install overwrites it. |
+| `error: no lease for harbor-console/web; this service must be declared` | **Not declared** — the ledger carries no lease for this service. This is also what a completely missing `services.toml` produces, since a missing file loads as an empty ledger rather than an error. A page bound to a port no lease reserves is exactly the collision the ledger exists to prevent, so there is no default port. | Declare it in `.harbor.toml`, run `harbor-console ports sync` on the dev box, re-run the installer. |
 | `error: 2 leases for harbor-console/web, on hpz440 (0.0.0.0:8090), other (0.0.0.0:8090); running on more than one host needs an explicit choice of identity, which this service does not have` | **Declared more than once.** The ledger is fleet-wide, so two machines may each legitimately declare it; picking the first would bind a port this host may not hold and label the page a machine it is not. There is no hostname tiebreak on purpose. | Leave exactly one `harbor-console`/`web` lease in `services.toml` until multi-host operation is designed. |
 | `error: could not bind 100.69.239.123:8090: [Errno 98] Address already in use` | Something else holds the leased port — often a previous instance that has not exited, or an undeclared container. | `sudo ss -ltnp \| grep 8090` to find the holder. |
 | `error: could not bind 100.69.239.123:8090: [Errno 99] Cannot assign requested address` | The Tailscale address answered but is not on this machine's interfaces yet — usually a race just after boot. Systemd's retry normally resolves it. | If it persists, check `ip -4 addr show tailscale0`. |
@@ -194,7 +194,7 @@ These are findings, not faults in the service:
 
 ## Smoke test (run once on the target)
 
-Steps 1–6 cover the dashboard; 7–10 cover the status page and the two v0.2.0
+Steps 1–5 cover the dashboard; 6–11 cover the status page and the two v0.2.0
 release criteria that need a live host to verify.
 
 1. Validate both installed units:

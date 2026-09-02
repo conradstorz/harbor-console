@@ -1,8 +1,44 @@
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from harbor_console.ports.explainer import TEMPLATE_VERSION, write_explainer
+from harbor_console.ports.explainer import TEMPLATE, TEMPLATE_VERSION, write_explainer
+
+#: A fingerprint of `TEMPLATE`'s content, pinned beside the version it was
+#: taken at. Nothing else couples the two: `is_outdated` only ever compares
+#: `TEMPLATE_VERSION` against the number written into a downstream project's
+#: `HARBOR_PORTS.md`, so a content edit that leaves `TEMPLATE_VERSION`
+#: unchanged is invisible to `write_explainer` -- every project that already
+#: has a current copy keeps it, stale, forever.
+_EXPECTED_TEMPLATE_VERSION = 3
+_EXPECTED_TEMPLATE_HASH = "cbccad699bb8d606bbedaa72fa84b221967e129ecbb9f447e7f54dec0121b7e3"
+
+
+def test_template_content_is_coupled_to_its_version():
+    """`TEMPLATE` and `TEMPLATE_VERSION` must change together.
+
+    A previous fix correctly removed a test that pinned the literal version
+    number -- that pin broke on every legitimate bump. But nothing replaced
+    it, so the suite passed whether `TEMPLATE` was edited without bumping
+    `TEMPLATE_VERSION`, or `TEMPLATE_VERSION` was bumped without touching
+    `TEMPLATE`. The failure mode is a stale `HARBOR_PORTS.md` sitting in every
+    downstream repository, because `is_outdated` repairs on the version
+    number alone and never looks at content.
+
+    If you changed the template, bump TEMPLATE_VERSION and update this hash.
+    """
+    actual_hash = hashlib.sha256(TEMPLATE.encode("utf-8")).hexdigest()
+
+    assert (TEMPLATE_VERSION, actual_hash) == (
+        _EXPECTED_TEMPLATE_VERSION,
+        _EXPECTED_TEMPLATE_HASH,
+    ), (
+        "TEMPLATE and/or TEMPLATE_VERSION changed since this test was last "
+        "updated. If you changed the template, bump TEMPLATE_VERSION and "
+        "update this hash. Current values: "
+        f"TEMPLATE_VERSION={TEMPLATE_VERSION}, hash={actual_hash}"
+    )
 
 
 def test_writes_when_missing(tmp_path: Path):

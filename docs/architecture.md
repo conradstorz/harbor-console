@@ -128,7 +128,9 @@ Four properties of that service are structural rather than incidental:
   the page slow to load. Until the first probe cycle completes, `/ports.json`
   answers **503**: an unprobed snapshot has no listeners because none were
   looked for, and serving that as 200 would read to the allocator as a verified
-  empty host and let it grant a port already in use.
+  empty host and let it grant a port already in use. It answers 503 again
+  whenever Docker could not be read: the sockets are real but nothing can be
+  attributed to a container, which is just as dangerous a 200.
 
 The two processes have independent lifetimes. Logging in at the attached
 monitor must not take the tailnet page down, and the page must not depend on

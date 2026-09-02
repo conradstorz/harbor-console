@@ -159,7 +159,20 @@ def _lease_has_listener(snapshot: Snapshot, lease: Lease) -> bool:
     Uses `ports.keys.addrs_overlap`, the same address-overlap rule the ledger,
     `ports/live.py` and `reconcile.py` join on, so a wildcard listener answers
     a specific lease and vice versa.
+
+    `snapshot.listeners` is always local -- it comes from this machine's own
+    sockets -- but `snapshot.leases` is fleet-wide, the same ledger every
+    other host reads too. A lease belonging to another host must never be
+    credited with a listener here: `reconcile.find_drift` already filters by
+    `lease.host`, and this is that same filter, applied where the page
+    decides LISTENING vs DOWN rather than where it decides drift. Without it,
+    a lease on another host whose port happens to coincide with something
+    listening here would read as LISTENING for a service that, on this host,
+    is not running at all.
     """
+    served_host = str(snapshot.metrics["hostname"])
+    if lease.host != served_host:
+        return False
     return any(
         listener.port == lease.port and addrs_overlap(listener.addr, lease.addr)
         for listener in snapshot.listeners

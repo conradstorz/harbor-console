@@ -25,6 +25,16 @@ class _Unavailable(tuple):
 #: still distinguishes it from an ordinary empty result.
 DOCKER_UNAVAILABLE = _Unavailable()
 
+#: A bound on `docker ps`. This runs inside the prober thread on every
+#: collection cycle, unlike `tailnet.py`'s one-shot startup check -- so a
+#: wedged daemon here does not just delay one boot, it blocks the thread
+#: forever and freezes the last good snapshot in place. Served as a 200 with
+#: `probed=True` and `docker_available=True`, that snapshot's age keeps
+#: growing while the allocator treats it as current evidence. A timeout is
+#: the same failure as any other Docker outage: refuse, and let the next
+#: cycle try again.
+DOCKER_TIMEOUT_SECONDS = 2.0
+
 IPV6_ANY = "::"
 IPV4_ANY = "0.0.0.0"
 
@@ -42,15 +52,26 @@ class Container:
 
 def running_containers(
     run: Callable[..., object] = subprocess.run,
+    timeout: float = DOCKER_TIMEOUT_SECONDS,
 ) -> tuple[Container, ...]:
-    """Collect running containers. Returns DOCKER_UNAVAILABLE if Docker cannot be read."""
+    """Collect running containers. Returns DOCKER_UNAVAILABLE if Docker cannot be read.
+
+    A `docker ps` that hangs is treated exactly like one that is missing or
+    exits non-zero: without the bound, a wedged daemon would block the caller
+    forever and the last good snapshot would keep being served as current,
+    since nothing else in this collector's contract distinguishes "still
+    running" from "will never return".
+    """
     try:
         result = run(
             ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
             check=False,
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        return DOCKER_UNAVAILABLE
     except (FileNotFoundError, OSError):
         return DOCKER_UNAVAILABLE
 

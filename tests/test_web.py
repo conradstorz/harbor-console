@@ -535,6 +535,28 @@ def test_a_wildcard_listener_covers_a_specific_lease():
     assert "DOWN" not in html
 
 
+def test_an_off_host_lease_whose_port_coincides_locally_is_not_listening():
+    """`_lease_has_listener` must credit a listener only to a lease on the
+    host this page serves. `snapshot.leases` is fleet-wide -- every lease in
+    `services.toml`, not just this host's -- while `snapshot.listeners` is
+    always local. A lease belonging to another host whose port happens to
+    coincide with something listening here must not read as LISTENING for a
+    service that, on this host, is not running at all.
+    """
+    elsewhere = Lease("elsewhere-proj", "svc", "other-host", "0.0.0.0", 9999, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(elsewhere,),
+            listeners=(Listener("0.0.0.0", 9999, None),),
+            containers=(),
+            health={("elsewhere-proj", "svc"): Health(False, None, None, (), None)},
+        )
+    ).decode()
+
+    assert "LISTENING" not in html
+    assert "DOWN" in html
+
+
 def test_the_listening_legend_is_absent_when_nothing_is_listening_only():
     """A page with no third state must not carry an explanation of one."""
     html = render_page(snapshot()).decode()

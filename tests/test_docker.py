@@ -1,3 +1,4 @@
+import subprocess
 from types import SimpleNamespace
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
@@ -51,6 +52,32 @@ def test_several_published_ports_on_one_container():
 
 def test_missing_binary_reports_unavailable():
     assert running_containers(run=fake_run(raises=FileNotFoundError())) is DOCKER_UNAVAILABLE
+
+
+def test_a_hanging_daemon_reports_unavailable_rather_than_blocking_forever():
+    """A wedged `docker ps` must not be treated as the last good answer.
+
+    Without a timeout on the subprocess, a hung daemon blocks the prober
+    thread indefinitely and the last snapshot keeps being served as current
+    -- 200, probed=True, docker_available=True -- with an ever-staler
+    `collected` timestamp, while the allocator grants against it as though it
+    were fresh.
+    """
+    raises = subprocess.TimeoutExpired(cmd=["docker", "ps"], timeout=2.0)
+
+    assert running_containers(run=fake_run(raises=raises)) is DOCKER_UNAVAILABLE
+
+
+def test_the_subprocess_is_given_a_timeout():
+    seen = {}
+
+    def run(*_args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="", returncode=0)
+
+    running_containers(run=run, timeout=2.5)
+
+    assert seen["timeout"] == 2.5
 
 
 def test_non_zero_exit_reports_unavailable():

@@ -226,7 +226,9 @@ The same page serves /ports.json, the authoritative host state the allocator
 reads. Until the first probe cycle completes it answers 503, not an empty
 listing: a snapshot nobody has filled in has no listeners because none were
 looked for, and serving that as success would let the allocator grant a port
-that is already in use.
+that is already in use. It answers 503 again whenever Docker could not be
+read: the sockets are real but nothing can be attributed to a container,
+which is just as dangerous a success response.
 
 The page is read only. No buttons that do anything. Port allocation authority
 was chosen over lifecycle control, so nothing here can start or stop a
