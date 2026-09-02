@@ -31,7 +31,7 @@ it is rather than forced into a finding.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Sequence, Set as AbstractSet
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import Listener
@@ -53,7 +53,7 @@ def _covers(pairs: Iterable[tuple[str, int]], addr: str, port: int) -> bool:
 
 
 def _cover_for(
-    containers: Sequence[Container], project: str, projects: Iterable[str]
+    containers: Sequence[Container], project: str, projects: AbstractSet[str]
 ) -> list[tuple[str, int]]:
     """Return the published ports allowed to answer `project`'s leases.
 
@@ -62,12 +62,17 @@ def _cover_for(
     port on the project's behalf. A container named for a *different* project
     is excluded: pooling every container's ports lets two projects that have
     swapped ports satisfy each other's leases, and the swap disappears.
+
+    `projects` is fleet-wide, not just this host's: a container named for a
+    project whose leases all live on another host is still that project's
+    container, not an anonymous sidecar, so it must not cover a local lease
+    either. It is taken as an already-built set so this function need not
+    copy it on every call.
     """
-    named = set(projects)
     return [
         pair
         for container in containers
-        if container.name == project or container.name not in named
+        if container.name == project or container.name not in projects
         for pair in container.published
     ]
 
@@ -101,7 +106,10 @@ def find_drift(
     mine = sorted((lease for lease in leases if lease.host == host), key=_lease_order)
     leased = {(lease.addr, lease.port) for lease in mine}
     bound = [(listener.addr, listener.port) for listener in listeners]
-    projects = {lease.project for lease in mine}
+    # Fleet-wide, not `mine`: a container named for a project whose leases all
+    # live on another host is still a named project's container, not an
+    # anonymous sidecar, so it must not cover a lease on this host either.
+    projects = frozenset(lease.project for lease in leases)
 
     findings: list[Drift] = []
     # Two separate records, because the mismatch decision is per lease: one
@@ -113,11 +121,18 @@ def find_drift(
 
     if docker_available:
         by_name = {container.name: container for container in containers}
+        # Every lease of the same project shares one cover list; a project
+        # with several leases (a sibling-container shape) would otherwise
+        # rebuild it once per lease for no new evidence.
+        cover_by_project: dict[str, list[tuple[str, int]]] = {}
         for lease in mine:
             container = by_name.get(lease.project)
             if container is None or not container.published:
                 continue
-            cover = _cover_for(containers, lease.project, projects)
+            cover = cover_by_project.get(lease.project)
+            if cover is None:
+                cover = _cover_for(containers, lease.project, projects)
+                cover_by_project[lease.project] = cover
             if _covers(cover, lease.addr, lease.port):
                 continue
             own = {

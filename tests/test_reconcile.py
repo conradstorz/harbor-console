@@ -180,6 +180,31 @@ def test_an_unmatched_name_reports_both_halves_instead_of_a_mismatch():
     assert kinds(drift) == [DECLARED_NOT_RUNNING, RUNNING_NOT_DECLARED]
 
 
+def test_a_named_swap_is_still_a_mismatch_when_the_other_lease_is_on_another_host():
+    """A container named for a fleet project is not a sidecar just because its
+    own lease lives elsewhere.
+
+    `arm` holds no lease on this host, so it generates no finding of its own
+    here -- but its name still names a fleet project. Treating it as an
+    anonymous sidecar because its lease is out of scope lets it cover `gte`'s
+    lease and swallow the swap `gte` made with it.
+    """
+    drift = find_drift(
+        [lease("gte", 8080), lease("arm", 8080, host="other")],
+        [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9090, None)],
+        [
+            Container("gte", (("0.0.0.0", 9090),)),
+            Container("arm", (("0.0.0.0", 8080),)),
+        ],
+        host=HOST,
+    )
+
+    assert kinds(drift) == [PORT_MISMATCH]
+    assert "gte" in drift[0].detail
+    assert "8080" in drift[0].detail
+    assert "9090" in drift[0].detail
+
+
 def test_another_hosts_leases_are_neither_drift_nor_cover():
     drift = find_drift(
         [lease("gte", 8080), lease("elsewhere", 9999, host="nas")],
