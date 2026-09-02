@@ -43,6 +43,14 @@ class Snapshot:
 
     collected: datetime
     metrics: dict[str, str | float | int]
+    #: When the ledger file this snapshot's leases came from was last written
+    #: to disk, or None when that could not be determined -- a missing or
+    #: unreadable ledger, or a snapshot collected before the first cycle. The
+    #: server never writes `services.toml`; only `ports sync`, run on the dev
+    #: box, does, and `install.sh` is what carries a fresh copy here. This is
+    #: how a copy stale because `install.sh` was forgotten becomes visible on
+    #: the page instead of silently degrading its directory and drift section.
+    ledger_written: datetime | None = None
     leases: tuple[Lease, ...] = ()
     listeners: tuple[Listener, ...] = ()
     containers: tuple[Container, ...] = ()

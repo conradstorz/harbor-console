@@ -174,6 +174,22 @@ def test_page_shows_the_collected_timestamp():
     assert "2026-09-02 14:02:11" in html
 
 
+def test_page_shows_when_the_ledger_was_last_written():
+    """Beside "Collected", so `ports sync` without `install.sh` -- a stale
+    server-side ledger -- is legible on the page rather than silent."""
+    html = render_page(snapshot(ledger_written=datetime(2026, 9, 1, 22, 20, 0))).decode()
+
+    assert "2026-09-01 22:20:00" in html
+
+
+def test_page_says_ledger_written_is_unknown_when_the_ledger_could_not_be_read():
+    """A missing or unreadable ledger file must degrade on the page, not
+    render a bare `None`."""
+    html = render_page(snapshot(ledger_written=None)).decode()
+
+    assert "unknown" in html.lower()
+
+
 def test_page_notes_when_docker_could_not_be_read():
     html = render_page(snapshot(docker_available=False)).decode()
 

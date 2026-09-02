@@ -23,6 +23,7 @@ the reasoning, including reasoning we later moved away from.
 | 0010 | [Scope the port key to the bind address: `(host, addr, port)`](0010-address-scoped-port-key.md) | Accepted |
 | 0011 | [`sync` repairs drifted projects, and `show` stands alone](0011-sync-repairs-drift-and-show-stands-alone.md) | Accepted |
 | 0012 | [The web surface collects by convention, not by declaration](0012-web-surface-collectors-and-conventions.md) | Accepted |
+| 0013 | [The ledger stays in the repository](0013-ledger-lives-in-repo.md) | Accepted |
 
 ## Adding a new ADR
 

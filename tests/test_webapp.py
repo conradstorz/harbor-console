@@ -1,4 +1,5 @@
 import inspect
+import os
 from datetime import date, datetime
 from http.server import ThreadingHTTPServer
 
@@ -495,6 +496,45 @@ def test_collect_snapshot_publishes_the_listeners_it_found():
         ("0.0.0.0", 8080),
         ("127.0.0.1", 5432),
     }
+
+
+def test_collect_snapshot_records_when_the_ledger_was_last_written():
+    """The staleness indicator comes from the injected collector, not a live
+    stat call inside collect_snapshot itself."""
+    written = datetime(2026, 9, 1, 22, 20, 0)
+
+    snapshot = webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (),
+        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        prober=lambda host, port: Health(True, None, None, (), None),
+        ledger_mtime=lambda: written,
+    )
+
+    assert snapshot.ledger_written == written
+
+
+def test_read_ledger_mtime_returns_the_files_modification_time(tmp_path):
+    ledger = tmp_path / "services.toml"
+    ledger.write_text("", encoding="utf-8")
+    stamp = datetime(2026, 9, 1, 22, 20, 0).timestamp()
+    os.utime(ledger, (stamp, stamp))
+
+    result = webapp.read_ledger_mtime(ledger)
+
+    assert result == datetime.fromtimestamp(stamp)
+
+
+def test_read_ledger_mtime_degrades_when_the_ledger_is_missing(tmp_path):
+    """Every collector in this project degrades on a hostile environment
+    rather than raising -- a missing or unreadable ledger yields no
+    timestamp, not a traceback."""
+    missing = tmp_path / "does-not-exist.toml"
+
+    assert webapp.read_ledger_mtime(missing) is None
 
 
 def test_probe_loop_sleeps_for_the_interval_it_was_given():

@@ -168,6 +168,23 @@ def starting_snapshot(
     )
 
 
+def read_ledger_mtime(path: Path = LEDGER_PATH) -> datetime | None:
+    """When the ledger this page serves was last written, or None.
+
+    Uses the file's modification time, not its contents: staleness here is
+    about whether `install.sh` ran after the last `ports sync`, not whether
+    the ledger parses -- `load_leases` already answers that question, and
+    fails loudly when it does not. Degrades like every other collector in
+    this project: a missing or unreadable ledger yields no timestamp rather
+    than raising, because making that condition visible on the page is the
+    whole point, not a reason to crash over it.
+    """
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def collect_snapshot(
     leases: Iterable[Lease],
     host: str,
@@ -176,6 +193,7 @@ def collect_snapshot(
     listeners: Callable[[], tuple[Listener, ...]] = listening_sockets,
     containers: Callable[[], tuple[Container, ...]] = running_containers,
     prober: Callable[[str, int], Health] = probe,
+    ledger_mtime: Callable[[], datetime | None] = read_ledger_mtime,
 ) -> Snapshot:
     """Gather every source once and fold it into one snapshot.
 
@@ -216,6 +234,7 @@ def collect_snapshot(
     return Snapshot(
         collected=now,
         metrics=metrics,
+        ledger_written=ledger_mtime(),
         leases=held,
         listeners=found,
         containers=tuple(running),

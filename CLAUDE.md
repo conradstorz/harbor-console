@@ -110,9 +110,7 @@ The project is deliberately minimal (MVP / YAGNI / KISS). `founding_document.txt
 
 v0.2.0 expanded the scope once, and the bar it cleared is the bar: a real collision on port 8080 that would have failed silently. `services.toml` is a declared authority owned by this repo, not user configuration of the dashboard — the no-config stance still holds for everything it originally targeted ([ADR 6](docs/adr/0006-service-registry-and-web-status-page.md) amends [ADR 3](docs/adr/0003-no-plugins-in-mvp.md)).
 
-How the port authority is enforced was answered on 2026-09-01: by allocation, which is the option that touches other repositories ([ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)). One question is still open and deliberately undecided — do not answer it by writing code:
-
-- **Where the ledger lives on disk** (in-repo and installed to `/opt/harbor-console/`, or a path under `/etc`). It is in-repo today because that is where `ports sync` runs, not because the question is settled.
+How the port authority is enforced was answered on 2026-09-01: by allocation, which is the option that touches other repositories ([ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)). Where the ledger lives on disk was answered on 2026-09-02: it stays in-repo, deployed to `/opt/harbor-console/` by `deploy/install.sh` — nothing on the server writes it, so the deploy step is the only way a fresh copy reaches the server, and `/etc` would need the identical rsync to get there ([ADR 13](docs/adr/0013-ledger-lives-in-repo.md)). Both questions this section once carried are now decided; there is no open question here to leave unanswered.
 
 Development follows TDD and "main is always deployable."
 

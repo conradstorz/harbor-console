@@ -130,10 +130,25 @@ def render_page(snapshot: Snapshot) -> bytes:
     parts.append(
         f"<p class=\"stamp\">Collected "
         f"{escape(snapshot.collected.strftime('%Y-%m-%d %H:%M:%S'))}, "
+        f"services.toml written {_ledger_written_text(snapshot)}, "
         f"refreshing every {REFRESH_SECONDS}s.</p>"
     )
     parts.append("</body></html>")
     return "".join(parts).encode("utf-8")
+
+
+def _ledger_written_text(snapshot: Snapshot) -> str:
+    """Render when the ledger this page serves was last written, or say so.
+
+    `snapshot.ledger_written` is None when the ledger file is missing or
+    unreadable, or before the first collection cycle -- both hostile
+    conditions this project's collectors degrade on rather than raise.
+    Rendering "unknown" in that case, instead of a bare `None`, is what makes
+    a forgotten `install.sh` legible on the page rather than a silent gap.
+    """
+    if snapshot.ledger_written is None:
+        return "unknown"
+    return escape(snapshot.ledger_written.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def _host_table(snapshot: Snapshot) -> str:

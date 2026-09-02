@@ -505,16 +505,17 @@ They will be added only after a real operational need is demonstrated.
 
 Open Questions
 
-These are known and deliberately undecided. Decide them before implementing,
-and record the outcome as an ADR.
+Both questions this section once posed have been decided and recorded as
+ADRs; none remain open.
 
 How the port authority is enforced was decided on 2026-09-01: by allocation.
 Projects declare what they need in .harbor.toml, harbor-console leases a port and
 writes it into the project's .env, and the incumbent always keeps what it holds.
-See ADR 8. The remaining open question is below.
+See ADR 8.
 
-Where the registry lives on disk. In repository and copied to
-/opt/harbor-console/services.toml by the installer, or a path under /etc.
+Where the registry lives on disk was decided on 2026-09-02: it stays in
+repository, deployed to /opt/harbor-console/services.toml by the installer.
+See ADR 13.
 
 Definition of Success
 
