@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harbor_console.ports.atomic import write_text_atomic
 
-TEMPLATE_VERSION = 2
+TEMPLATE_VERSION = 3
 
 _VERSION_LINE = re.compile(r"harbor-console-template-version:\s*(\d+)")
 
@@ -93,15 +93,21 @@ automatically.
 
 ## Health and status endpoints
 
-harbor-console probes each declared port to show whether this project is up.
+harbor-console's status page probes every leased port to show whether this
+project is up. **The two paths it probes are fixed by convention and cannot be
+configured.** The status page runs on the server, where it has the lease ledger
+and nothing else — your `.harbor.toml` never leaves this repository, so nothing
+there can change what is probed. Setting `health_path` or `hcstatus_path` in
+`.harbor.toml` is accepted by the parser and then ignored by everything.
 
-- `health_path` (usually `/`) — **any HTTP response means up**, including a
-  redirect to a login page. A probe insisting on 200 would call a healthy service
-  down.
-- `hcstatus_path` (optional, conventionally `/hcstatus`) — richer detail,
-  rendered on the status page. It never affects up/down: if it is missing,
-  broken, slow, or malformed, this project still shows as up, with a warning.
-  Return:
+- **`/` — liveness.** Any HTTP response means up, including a 404, a 500, or a
+  redirect to a login page. A probe insisting on 200 would call a healthy
+  service down. If your `/` is bare, that is fine: it only has to answer.
+- **`/hcstatus` — optional detail.** Offer it and the status page renders it;
+  omit it and nothing is said. It never affects up/down: if it is missing,
+  broken, slow, or malformed, this project still shows as up — with a warning
+  where the endpoint exists and is wrong, silently where it simply is not
+  offered. Return:
 
       {{"state": "ok",
         "summary": "3 queued",
@@ -110,6 +116,14 @@ harbor-console probes each declared port to show whether this project is up.
 
   `state` is `ok`, `warn`, or `error`. `summary` is one short line. `detail` is a
   list of label/value pairs of your choosing, rendered verbatim.
+
+### `LISTENING` is not an error
+
+A port that does not speak HTTP — an MQTT broker, a database, anything else the
+probe cannot talk to — shows as `LISTENING`, not `DOWN`. It means something
+holds the leased port but did not answer an HTTP probe, which is the correct and
+expected state for that service. `DOWN` is reserved for a leased port with
+nothing listening on it at all.
 
 ## If harbor-console is gone
 

@@ -49,6 +49,23 @@ def test_contains_no_project_specific_numbers(tmp_path: Path):
     assert "hcstatus" in text
 
 
+def test_does_not_offer_a_configurable_health_path(tmp_path: Path):
+    # The template ships into other people's repositories, so a knob described
+    # there is a knob they will set. `health_path` and `hcstatus_path` parse
+    # and are then ignored: the status page holds the ledger and never a
+    # declaration, and probes `/` and `/hcstatus` by convention (ADR 12). The
+    # template must say the paths are fixed, not offer them as a choice.
+    path = tmp_path / "HARBOR_PORTS.md"
+    write_explainer(path)
+    text = path.read_text(encoding="utf-8")
+
+    assert "fixed by convention" in text
+    assert "ignored by everything" in text
+    # A lease whose port is held by something that does not speak HTTP is not
+    # a fault, and a project owner seeing it should know that.
+    assert "LISTENING" in text
+
+
 def _truncating_disk_full(monkeypatch) -> None:
     """Make every `Path.write_text` empty its target and then fail.
 

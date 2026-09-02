@@ -109,9 +109,16 @@ Four properties of that service are structural rather than incidental:
 
 - It binds the host's Tailscale address only, and **refuses to start** without
   it. There is no fallback, no `--host`, and no dev mode (ADR 7).
-- It also refuses to start when its own service is declared more than once in
-  the ledger. Multi-host operation needs an explicit choice of identity, and
-  that choice is deferred rather than guessed.
+- That is one of **four** startup refusals, and there are only four: no tailnet
+  address, a ledger that will not load, its own service not declared in that
+  ledger, and its own service declared more than once. Each happens before
+  anything is bound and exits non-zero with the reason on stderr, so systemd
+  retries and the operator reads it in journald. The last two are about
+  identity: binding a port no lease reserves is the collision the ledger exists
+  to prevent, and running one page for several hosts needs an explicit choice
+  of identity, which is deferred rather than guessed. (A leased port already in
+  use fails the bind and refuses the same way; that is the environment, not a
+  fifth rule.)
 - The host it serves is decided **once**, from the lease this process holds,
   and passed down explicitly. It is never re-derived from
   `socket.gethostname()`: the ledger's `host` is a hand-authored string, and a

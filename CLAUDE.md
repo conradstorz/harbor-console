@@ -68,7 +68,7 @@ The web surface, implemented for v0.2.0, is eight modules at the top level, and 
 Three behaviours of that service are load-bearing and easy to undo by accident:
 
 - **The served host is decided once, in `webapp.main`, from the lease this process holds** — never from `socket.gethostname()`. The ledger's `host` is a hand-authored string; a name that disagrees with the OS (`hpz440` against `hpz440.lan`) would silently empty this host's share of the ledger and report every healthy container as undeclared.
-- **`harbor-console-web` refuses to start if its own service is declared more than once in the ledger.** Multi-host operation needs an explicit choice of identity, and that is deferred rather than guessed.
+- **`harbor-console-web` has four startup refusals, and only four:** no tailnet address, an unreadable ledger, its own service not declared, and its own service declared more than once. Every one of them happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The last two are about identity: a page bound to a port no lease reserves is the collision the ledger exists to prevent, and multi-host operation needs an explicit choice of identity, which is deferred rather than guessed.
 - **`/ports.json` answers 503 until the first probe cycle completes.** An unprobed snapshot has no listeners because none were looked for; serving it as 200 would read to the allocator as a verified empty host and let it grant a port already in use. The 503 becomes the refusal `ports/live.py` already has.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
@@ -87,7 +87,7 @@ Three deliberate exceptions, where failing loudly is the point:
 
 - A duplicate `(host, addr, port)` in `services.toml` is a hard error at load time, not a warning. Catching that collision is why the ledger exists.
 - A `.harbor.toml` that cannot be parsed fails `scan` and `sync`: the allocator will not allocate against data it cannot read. `show` is deliberately exempt.
-- `harbor-console-web` refuses to start if it cannot determine or bind the host's Tailscale address, if the ledger will not load, or if its own service is declared more than once. There is no fallback to `0.0.0.0` — see the hard constraints below. `tailnet.py` is therefore the one collector that raises rather than degrading.
+- `harbor-console-web` refuses to start on any of four conditions: no tailnet address, a ledger that will not load, its own service not declared in that ledger, and its own service declared more than once. There is no fallback to `0.0.0.0` — see the hard constraints below. `tailnet.py` is therefore the one collector that raises rather than degrading. A leased port that is already in use fails the bind and refuses the same way, but it is a failure of the environment rather than a fifth rule.
 
 ### The `.harbor-tmp.*` sweep pattern
 

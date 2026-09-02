@@ -113,9 +113,13 @@ assigned - the number it got; written by harbor-console, never hand-edited
 
 container - for reconciliation against Docker
 
-health_path - probed; any HTTP response means up
+health_path - accepted and ignored. The web surface holds the ledger and never
+a declaration, so it probes / by convention on every leased port; any HTTP
+response means up. See ADR 12.
 
-hcstatus_path - optional, richer status detail; never affects up or down
+hcstatus_path - accepted and ignored, for the same reason. The web surface
+fetches /hcstatus by convention; it is optional, adds richer status detail, and
+never affects up or down.
 
 description
 
@@ -179,6 +183,15 @@ Deliberately dumb. Connect, and any HTTP response means up.
 A service answering / with a 303 redirect to /login is a healthy service. A
 probe insisting on 200 would call it down, and a status page that cries wolf
 is worse than no status page.
+
+The probed paths are fixed by convention: / for liveness and /hcstatus for
+optional detail, on every leased port. The server holds the ledger and never a
+project's .harbor.toml, so no project can choose its own. See ADR 12.
+
+A leased port that is held but does not answer an HTTP probe shows as
+LISTENING, not DOWN. That is the correct state for a service that does not
+speak HTTP - ice-colder's MQTT broker on 1883 - and DOWN is reserved for a
+leased port with nothing listening on it at all.
 
 The Web Surface
 

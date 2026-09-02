@@ -9,6 +9,7 @@ from harbor_console import app
 from harbor_console.ports import cli
 from harbor_console.ports.declaration import load_declaration
 from harbor_console.ports.envfile import FENCE_END, FENCE_START
+from harbor_console.ports.explainer import TEMPLATE_VERSION
 from harbor_console.ports.ledger import Lease, load_leases, save_leases
 from harbor_console.ports.live import Listener, LiveState
 
@@ -802,7 +803,7 @@ def test_a_repair_of_the_explainer_alone_does_not_touch_env(tmp_path: Path):
 
     assert code == 0
     assert "repaired" in output.lower()
-    assert "harbor-console-template-version: 2" in (
+    assert f"harbor-console-template-version: {TEMPLATE_VERSION}" in (
         project / "HARBOR_PORTS.md"
     ).read_text(encoding="utf-8")
     unchanged = {path: stamp for path, stamp in before.items() if path.name != "HARBOR_PORTS.md"}
