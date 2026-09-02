@@ -313,7 +313,10 @@ def test_handler_refuses_ports_json_before_the_first_cycle():
     status, _headers, body = _get(handler_cls, "/ports.json")
 
     assert status == 503
-    assert b"not" in body.lower()
+    # Pin the real text: `b"not" in body.lower()` is also satisfied by the 404
+    # body, `b"not found\n"`, so it proved nothing about the highest-stakes
+    # gate in this module.
+    assert body == b"not yet probed: no collection cycle has completed\n"
 
 
 def test_handler_still_serves_the_page_before_the_first_cycle():
@@ -389,3 +392,183 @@ def test_handler_only_ever_calls_get_snapshot():
 
     _get(handler_cls, "/nope")
     assert calls == [1, 1]  # 404 never touches the snapshot at all
+
+
+def test_handler_refuses_ports_json_when_docker_could_not_be_read():
+    """The half-blind window beside the unprobed one.
+
+    `ports_payload` derives `container` purely from `snapshot.containers`,
+    which is empty both when Docker reports nothing and when Docker could not
+    be asked. Served as a 200, the allocator reads a verified answer in which
+    no container owns anything -- so a project already running on its wanted
+    port looks unowned, loses its "already running" grandfathering, and gets a
+    different port written into its `.env` because the Docker daemon was
+    briefly unreachable.
+    """
+    handler_cls = make_handler(lambda: snapshot(docker_available=False, containers=()))
+
+    status, headers, body = _get(handler_cls, "/ports.json")
+
+    assert status == 503
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert body == b"docker could not be read: container attribution is incomplete\n"
+
+
+def test_the_ports_json_refusal_says_which_window_it_is():
+    """Wait, or go fix the Docker daemon -- the operator's next move differs."""
+    handler_cls = make_handler(
+        lambda: snapshot(probed=False, listeners=(), health={}, docker_available=False)
+    )
+
+    status, _headers, body = _get(handler_cls, "/ports.json")
+
+    assert status == 503
+    assert body == (
+        b"not yet probed: no collection cycle has completed; "
+        b"docker could not be read: container attribution is incomplete\n"
+    )
+
+
+def test_a_docker_outage_reaches_the_allocator_as_live_unavailable():
+    """End-to-end, through the allocator's real reader.
+
+    A complete-but-unattributed `LiveState` is what moves other people's
+    services. `fetch_live` must never build one out of this window.
+    """
+    handler_cls = make_handler(lambda: snapshot(docker_available=False, containers=()))
+
+    def opener(url, timeout):
+        status, _headers, body = _get(handler_cls, "/ports.json")
+        if status >= 400:
+            raise urllib.error.HTTPError(url, status, "docker unavailable", {}, BytesIO(body))
+        return FakeResponse(body)
+
+    with pytest.raises(LiveUnavailable):
+        fetch_live("http://x/ports.json", opener=opener)
+
+
+def test_the_page_still_serves_while_docker_is_unreadable():
+    """The 503 is /ports.json-only. The page reports the outage in its banner
+    and keeps serving -- an operator looking at a Docker outage needs the page
+    most, not least.
+    """
+    handler_cls = make_handler(lambda: snapshot(docker_available=False, containers=()))
+
+    status, _headers, body = _get(handler_cls, "/")
+
+    assert status == 200
+    assert b"<html" in body.lower()
+    assert b"docker could not be read" in body.lower()
+
+
+def test_a_listening_non_http_lease_is_not_reported_down():
+    """`services.toml` leases 1883 to ice-colder/mqtt, and the probe speaks
+    only HTTP -- so that lease is `up=False` forever, on day one, on the real
+    ledger. Meanwhile `find_drift` sees the listener and reports nothing
+    wrong, so the first real page read "No drift: every lease matches what is
+    running" directly above a red DOWN.
+    """
+    mqtt = Lease("ice-colder", "mqtt", "hpz440", "0.0.0.0", 1883, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(mqtt,),
+            listeners=(Listener("0.0.0.0", 1883, None),),
+            containers=(),
+            health={("ice-colder", "mqtt"): Health(False, None, None, (), None)},
+            drift=(),
+        )
+    ).decode()
+
+    assert "DOWN" not in html
+    assert "LISTENING" in html
+    # And it says what that means, rather than leaving a third word unexplained.
+    assert "does not" in html.lower()
+    assert "http probe" in html.lower()
+
+
+def test_a_lease_with_no_listener_is_still_down():
+    """DOWN keeps its meaning: nothing is holding the port at all."""
+    html = render_page(
+        snapshot(
+            listeners=(),
+            containers=(),
+            health={("gte", "console"): Health(False, None, None, (), None)},
+        )
+    ).decode()
+
+    assert "DOWN" in html
+    assert "LISTENING" not in html
+
+
+def test_a_listener_on_another_address_does_not_excuse_a_dead_lease():
+    """The join is `addrs_overlap`, as everywhere else in this codebase: a
+    stranger's listener on an unrelated specific address says nothing about
+    this lease.
+    """
+    lease = Lease("gte", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(lease,),
+            listeners=(Listener("192.168.1.5", 8080, None),),
+            containers=(),
+            health={("gte", "console"): Health(False, None, None, (), None)},
+        )
+    ).decode()
+
+    assert "DOWN" in html
+    assert "LISTENING" not in html
+
+
+def test_a_wildcard_listener_covers_a_specific_lease():
+    """The overlap rule runs both directions."""
+    lease = Lease("gte", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(lease,),
+            listeners=(Listener("0.0.0.0", 8080, None),),
+            containers=(),
+            health={("gte", "console"): Health(False, None, None, (), None)},
+        )
+    ).decode()
+
+    assert "LISTENING" in html
+    assert "DOWN" not in html
+
+
+def test_the_listening_legend_is_absent_when_nothing_is_listening_only():
+    """A page with no third state must not carry an explanation of one."""
+    html = render_page(snapshot()).decode()
+
+    assert "LISTENING" not in html
+
+
+def test_handler_returns_500_rather_than_an_empty_reply_when_rendering_raises():
+    """A `KeyError` or `ValueError` out of `render_page` used to propagate
+    straight out of `do_GET` with no response written at all: the client got
+    an empty reply rather than a status, on every request, while the prober
+    went on publishing. That contradicts this module's promise that nothing
+    takes the page down.
+    """
+    # A metrics dict missing `hostname` is the real shape of this failure.
+    handler_cls = make_handler(lambda: snapshot(metrics={}))
+
+    status, headers, body = _get(handler_cls, "/")
+
+    assert status == 500
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert int(headers["Content-Length"]) == len(body)
+    assert body == b"internal error\n"
+
+
+def test_handler_returns_500_when_the_snapshot_source_itself_raises():
+    """The same guard covers /ports.json, and a `get_snapshot` that fails."""
+
+    def boom():
+        raise ValueError("the holder is wedged")
+
+    handler_cls = make_handler(boom)
+
+    status, _headers, body = _get(handler_cls, "/ports.json")
+
+    assert status == 500
+    assert body == b"internal error\n"

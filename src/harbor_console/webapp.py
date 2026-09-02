@@ -309,10 +309,6 @@ def main(
     host = lease.host
     holder = SnapshotHolder(starting_snapshot(host, leases, datetime.now()))
 
-    if start_prober is None:
-        start_prober = _default_prober
-    start_prober(holder, host)
-
     try:
         server = server_factory((address, lease.port), make_handler(holder.get))
     except OSError as exc:
@@ -321,6 +317,16 @@ def main(
         # journal beats a traceback.
         print(f"error: could not bind {address}:{lease.port}: {exc}", file=sys.stderr)
         return EXIT_REFUSED
+
+    # Only now, with the port actually held. Starting the prober first made a
+    # refusal expensive: a bind that fails would still have fired a whole
+    # collection cycle -- `docker ps` plus an HTTP probe of every leased port
+    # -- on its way out, and `RestartSec=2` repeats that every two seconds for
+    # as long as the port stays taken. The bind is also what `starting_snapshot`
+    # promises comes first.
+    if start_prober is None:
+        start_prober = _default_prober
+    start_prober(holder, host)
 
     print(f"harbor-console-web listening on http://{address}:{lease.port}/")
     try:

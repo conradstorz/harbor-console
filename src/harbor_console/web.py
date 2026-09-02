@@ -17,9 +17,16 @@ from html import escape
 from http.server import BaseHTTPRequestHandler
 
 from harbor_console.ports.keys import addrs_overlap
+from harbor_console.ports.ledger import Lease
 from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
+
+#: Why `/ports.json` may refuse. Both windows are "we looked at less than the
+#: whole host", and the allocator writes other repositories' `.env` files from
+#: what this endpoint says, so both are refusals rather than a thin 200.
+UNPROBED_REASON = "not yet probed: no collection cycle has completed"
+DOCKER_REASON = "docker could not be read: container attribution is incomplete"
 
 _STYLE = """
 body { font-family: ui-monospace, monospace; margin: 2rem; max-width: 60rem; }
@@ -65,6 +72,25 @@ def ports_payload(snapshot: Snapshot) -> dict:
         "collected": snapshot.collected.isoformat(),
         "listening": listening,
     }
+
+
+def _ports_refusals(snapshot: Snapshot) -> tuple[str, ...]:
+    """Every reason `/ports.json` must refuse for this snapshot.
+
+    Empty means the payload is answerable. Two conditions, not one: a snapshot
+    nothing has been collected into yet, and one collected while Docker could
+    not be read. The second is the half-blind window beside the first -- the
+    sockets are real, but nothing can be attributed to a container, so a
+    project already running on its wanted port looks unowned and the allocator
+    reassigns it. The HTML page keeps serving in both windows; it reports the
+    Docker outage in its own banner.
+    """
+    reasons = []
+    if not snapshot.probed:
+        reasons.append(UNPROBED_REASON)
+    if not snapshot.docker_available:
+        reasons.append(DOCKER_REASON)
+    return tuple(reasons)
 
 
 def render_page(snapshot: Snapshot) -> bytes:
@@ -127,6 +153,19 @@ def _host_table(snapshot: Snapshot) -> str:
     return f"<h2>Host</h2><table>{cells}</table>"
 
 
+def _lease_has_listener(snapshot: Snapshot, lease: Lease) -> bool:
+    """True when something on this host holds the lease's `(addr, port)`.
+
+    Uses `ports.keys.addrs_overlap`, the same address-overlap rule the ledger,
+    `ports/live.py` and `reconcile.py` join on, so a wildcard listener answers
+    a specific lease and vice versa.
+    """
+    return any(
+        listener.port == lease.port and addrs_overlap(listener.addr, lease.addr)
+        for listener in snapshot.listeners
+    )
+
+
 def _services_table(snapshot: Snapshot) -> str:
     """Render the directory, saying "unknown" until something has been probed.
 
@@ -134,19 +173,34 @@ def _services_table(snapshot: Snapshot) -> str:
     would report the whole fleet dead on the strength of having looked at
     none of it. The leases are real either way -- they come from the ledger,
     not from a probe -- so the directory is still shown.
+
+    Three states, not two. The probe speaks only HTTP, and the ledger leases
+    ports that do not: `ice-colder/mqtt` holds 1883 today. Calling a listening
+    MQTT broker DOWN would print a red state directly under "No drift: every
+    lease matches what is running", because `find_drift` joins on the listener
+    and correctly finds nothing wrong. So a lease whose port is held but whose
+    HTTP probe failed is LISTENING -- something is there, it just does not
+    speak HTTP -- and DOWN is reserved for a lease with no listener at all,
+    which is the finding this page exists to make.
     """
     if not snapshot.leases:
         return "<h2>Services</h2><p>No services are declared.</p>"
 
     rows = []
+    listening_shown = False
     for lease in snapshot.leases:
         health = snapshot.health.get((lease.project, lease.name))
         up = health is not None and health.up
         url = f"http://{lease.host}:{lease.port}/"
         if not snapshot.probed:
             status = "UNKNOWN"
+        elif up:
+            status = "UP"
+        elif _lease_has_listener(snapshot, lease):
+            status = "LISTENING"
+            listening_shown = True
         else:
-            status = "UP" if up else "<span class=\"down\">DOWN</span>"
+            status = "<span class=\"down\">DOWN</span>"
         summary = escape(health.summary) if health and health.summary else ""
         rows.append(
             f"<tr><td>{escape(lease.project)}/{escape(lease.name)}</td>"
@@ -170,6 +224,13 @@ def _services_table(snapshot: Snapshot) -> str:
         else "<p>Nothing has been collected yet: the first cycle has not "
         "completed, so service state is unknown.</p>"
     )
+    legend = (
+        "<p>LISTENING: something holds the leased port but did not answer an "
+        "HTTP probe. That is the expected state for a service that does not "
+        "speak HTTP, such as an MQTT broker.</p>"
+        if listening_shown
+        else ""
+    )
     return (
         "<h2>Services</h2>"
         + note
@@ -177,6 +238,7 @@ def _services_table(snapshot: Snapshot) -> str:
         "<tr><th>Project</th><th>Address</th><th>State</th><th></th></tr>"
         + "".join(rows)
         + "</table>"
+        + legend
     )
 
 
@@ -208,22 +270,46 @@ def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHa
         protocol_version = "HTTP/1.1"
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib's required name
+            """Dispatch one read-only request, and never fail silently.
+
+            The guard is at the dispatch boundary only. A `KeyError` from a
+            metrics dict missing a key, or a `ValueError` from anything the
+            renderer touches, used to propagate out of the handler with no
+            response written at all: the client got an empty reply rather
+            than a status, on every request, while the prober went on
+            publishing. That contradicts this module's own promise that
+            nothing takes the page down. It does not wrap the rendering
+            internals, where a blanket catch would hide the bug instead of
+            reporting it.
+            """
+            try:
+                self._dispatch()
+            except Exception:  # noqa: BLE001 - a request boundary, see above
+                self._send(500, "text/plain; charset=utf-8", b"internal error\n")
+
+        def _dispatch(self) -> None:
             if self.path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", render_page(get_snapshot()))
             elif self.path == "/ports.json":
                 snapshot = get_snapshot()
-                if not snapshot.probed:
-                    # An unprobed snapshot has no listeners in it -- not
-                    # because none are found, but because none were looked
-                    # for. Serving that as 200 reads to the allocator as a
-                    # verified empty host, and `ports/allocate.py` grants on
-                    # it: a port already in use would be handed out in the
-                    # window between process start and the first probe
-                    # cycle. 503 makes `urllib` raise `HTTPError`, which
+                reasons = _ports_refusals(snapshot)
+                if reasons:
+                    # Two windows, one refusal. An unprobed snapshot has no
+                    # listeners in it -- not because none are found, but
+                    # because none were looked for. A snapshot collected
+                    # while Docker was unreachable has listeners but cannot
+                    # attribute them, and `container` reads as null for every
+                    # one: the allocator then sees a project's own container
+                    # nowhere on the port it already runs on, and moves it.
+                    # Serving either as 200 reads to the allocator as a
+                    # verified answer, and `ports/allocate.py` grants on it.
+                    # 503 makes `urllib` raise `HTTPError`, which
                     # `ports.live.fetch_live` turns into `LiveUnavailable`,
                     # so the allocator falls back to the refusal it already
-                    # has for a page it cannot reach at all.
-                    body = b"not yet probed: no collection cycle has completed\n"
+                    # has for a page it cannot reach at all. The body says
+                    # which window it is, because the operator's next move
+                    # differs: wait, or go fix the Docker daemon.
+                    body = ("; ".join(reasons) + "\n").encode("utf-8")
                     self._send(503, "text/plain; charset=utf-8", body)
                 else:
                     body = json.dumps(ports_payload(snapshot)).encode("utf-8")

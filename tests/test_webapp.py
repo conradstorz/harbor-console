@@ -208,7 +208,16 @@ def test_main_binds_the_tailnet_address_and_the_leased_port(monkeypatch):
     assert bound["closed"] is True
 
 
-def test_main_starts_the_prober_before_it_serves(monkeypatch):
+def test_main_starts_the_prober_after_the_bind_and_before_it_serves(monkeypatch):
+    """The bind comes first, then the prober, then serving.
+
+    Starting the prober first made a refusal expensive: a bind that fails --
+    the leased port already taken -- would still have fired a whole collection
+    cycle on its way out, `docker ps` plus an HTTP probe of every leased port,
+    and `RestartSec=2` repeats that every two seconds for as long as the port
+    stays taken. It also contradicted `starting_snapshot`'s own docstring,
+    which promises the server binds before any collector runs.
+    """
     order = []
     given = {}
 
@@ -231,7 +240,7 @@ def test_main_starts_the_prober_before_it_serves(monkeypatch):
         given["host"] = host
 
     assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
-    assert order == ["probing", "bound", "served", "closed"]
+    assert order == ["bound", "probing", "served", "closed"]
     # The prober reconciles against the host this process bound for, which
     # is the lease's host and never the OS's idea of it.
     assert given["host"] == WEB_LEASE.host
@@ -432,3 +441,139 @@ def test_the_starting_snapshot_claims_no_clean_bill_of_health():
     assert "no drift" not in html.lower()
     # Said in both places that would otherwise assert a state: services and drift.
     assert html.lower().count("nothing has been collected yet") == 2
+
+
+def test_a_failed_bind_starts_no_prober(monkeypatch):
+    """A refusal must cost nothing but the refusal.
+
+    The prober used to start before the bind, so a process that could not hold
+    its port still ran a full cycle -- `docker ps` and an HTTP probe of every
+    leased port -- before exiting. `RestartSec=2` turns that into a collection
+    storm against every service on the host, every two seconds, for as long as
+    the port stays taken.
+    """
+    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
+    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
+
+    started = {"probing": False}
+
+    def factory(_address, _handler):
+        raise OSError("address already in use")
+
+    def start(_holder, _host):
+        started["probing"] = True
+
+    assert webapp.main(server_factory=factory, start_prober=start) != 0
+    assert started["probing"] is False
+
+
+def test_collect_snapshot_publishes_the_listeners_it_found():
+    """The listener list is the payload `/ports.json` is built from.
+
+    Dropping it on the floor here serves `"listening": []` with a 200: the
+    allocator's `fetch_live` reads that as a complete, verified-empty host and
+    grants ports that are already in use -- the same failure the 503 gate
+    exists to prevent, arriving through the other door. Nothing else in the
+    suite asserts `snapshot.listeners`.
+    """
+    found = (Listener("0.0.0.0", 8080, None), Listener("127.0.0.1", 5432, 42))
+
+    snapshot = webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: found,
+        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        prober=lambda host, port: Health(True, None, None, (), None),
+    )
+
+    assert snapshot.listeners == found
+    # And it survives all the way into the body the allocator reads.
+    payload = web.ports_payload(snapshot)
+    assert {(entry["addr"], entry["port"]) for entry in payload["listening"]} == {
+        ("0.0.0.0", 8080),
+        ("127.0.0.1", 5432),
+    }
+
+
+def test_probe_loop_sleeps_for_the_interval_it_was_given():
+    """A busy-spin prober is invisible to a fake sleep that ignores its argument.
+
+    `sleep(0)` between cycles would hammer `docker ps` and every service on the
+    host at full CPU, and every other test here passes a `fake_sleep` that
+    discards what it is handed. Assert the value actually passed.
+    """
+    holder = webapp.SnapshotHolder(
+        Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS)
+    )
+    slept = []
+
+    def collect():
+        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    def fake_sleep(interval):
+        slept.append(interval)
+        raise KeyboardInterrupt
+
+    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
+
+    assert slept == [30.0]
+
+
+def test_the_default_probe_interval_is_not_a_busy_spin():
+    """The default the real prober thread runs on, asserted where it is read."""
+    assert webapp.PROBE_INTERVAL_SECONDS >= 1.0
+    assert (
+        inspect.signature(webapp.probe_loop).parameters["interval"].default
+        == webapp.PROBE_INTERVAL_SECONDS
+    )
+
+
+def test_every_refusal_says_why_on_stderr(monkeypatch, capsys):
+    """The refusal design's whole payoff is a line in journald.
+
+    Four refusals plus the bind, all silent-passing until now: no test in the
+    suite read stderr, so deleting every message left 289 tests green and an
+    operator with nothing but a non-zero exit code.
+    """
+    elsewhere = Lease("harbor-console", "web", "nas", "0.0.0.0", 8090, date(2026, 9, 1))
+
+    def no_tailnet():
+        raise TailnetUnavailable("tailscaled is not up")
+
+    def bad_ledger(_path):
+        raise LedgerError("services.toml: unreadable")
+
+    def bad_bind(_address, _handler):
+        raise OSError("address already in use")
+
+    cases = [
+        (no_tailnet, lambda _path: [WEB_LEASE], lambda *a: None, "tailscaled is not up"),
+        (lambda: "100.69.239.123", bad_ledger, lambda *a: None, "services.toml: unreadable"),
+        (lambda: "100.69.239.123", lambda _path: [GTE_LEASE], lambda *a: None, "harbor-console/web"),
+        (
+            lambda: "100.69.239.123",
+            lambda _path: [WEB_LEASE, elsewhere],
+            lambda *a: None,
+            "nas",
+        ),
+        (
+            lambda: "100.69.239.123",
+            lambda _path: [WEB_LEASE],
+            bad_bind,
+            "100.69.239.123:8090",
+        ),
+    ]
+
+    for address, leases, factory, expected in cases:
+        monkeypatch.setattr(webapp, "tailscale_address", address)
+        monkeypatch.setattr(webapp, "load_leases", leases)
+        capsys.readouterr()
+
+        result = webapp.main(server_factory=factory, start_prober=lambda _h, _host: None)
+
+        captured = capsys.readouterr()
+        assert result != 0
+        assert expected in captured.err, f"{expected!r} missing from {captured.err!r}"
+        assert captured.err.startswith("error:")
