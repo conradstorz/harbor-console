@@ -846,7 +846,12 @@ git commit -m "feat(web): probe liveness dumbly, and /hcstatus optionally"
   - `snapshot.Drift` frozen dataclass: `kind: str`, `detail: str`
   - `snapshot.Snapshot` frozen dataclass: `collected: datetime`, `metrics: dict[str, str | float | int]`, `leases: tuple[Lease, ...]`, `listeners: tuple[Listener, ...]`, `containers: tuple[Container, ...]`, `docker_available: bool`, `health: dict[tuple[str, str], Health]`, `drift: tuple[Drift, ...]`, `ledger_error: str | None`
   - `reconcile.DECLARED_NOT_RUNNING`, `RUNNING_NOT_DECLARED`, `PORT_MISMATCH` — the three `kind` strings
-  - `reconcile.find_drift(leases, listeners, containers, docker_available) -> tuple[Drift, ...]`
+  - `reconcile.find_drift(leases, listeners, containers, host) -> tuple[Drift, ...]`
+    (**corrected during implementation**: `docker_available` was dropped — it is derived
+    from `containers is DOCKER_UNAVAILABLE`, so it cannot contradict the data — and a
+    required `host` was added, because the ledger carries leases for more than one
+    machine and another host's leases would otherwise invent phantom findings and mask
+    genuine local ones.)
 
 `snapshot.py` holds only data, so the prober and the renderer can both import it
 without a cycle — the role `ports/keys.py` plays for the allocator.
@@ -1831,7 +1836,7 @@ def collect_snapshot(
         containers=tuple(running),
         docker_available=docker_available,
         health=health,
-        drift=find_drift(leases, found, running, docker_available),
+        drift=find_drift(leases, found, running, host),
         ledger_error=None,
     )
 
