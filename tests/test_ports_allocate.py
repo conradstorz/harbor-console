@@ -69,21 +69,21 @@ def test_existing_assignment_held_by_this_project_is_kept():
 
 
 def test_want_held_by_another_project_moves_the_newcomer_into_the_band():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
     [decision] = decide([decl("imageharbor", "dashboard", want=8080)], leases, live(), TODAY)
 
     assert decision.action == "grant"
     assert decision.port == BAND_START
     assert decision.incumbent is not None
-    assert decision.incumbent.project == "gte"
-    assert "gte/console" in decision.reason
+    assert decision.incumbent.project == "acme"
+    assert "acme/console" in decision.reason
 
 
 def test_a_held_lease_is_written_back_when_the_declaration_lacks_it():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
-    [decision] = decide([decl("gte", "console", want=8080)], leases, live(), TODAY)
+    [decision] = decide([decl("acme", "console", want=8080)], leases, live(), TODAY)
 
     assert decision.action == "grant"
     assert decision.port == 8080
@@ -92,11 +92,11 @@ def test_a_held_lease_is_written_back_when_the_declaration_lacks_it():
 
 def test_incumbent_is_never_moved():
     leases = [
-        Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
+        Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
         Lease("imageharbor", "dashboard", "hpz440", "0.0.0.0", 8090, date(2026, 8, 9)),
     ]
     declarations = [
-        decl("gte", "console", want=8080, assigned=8080),
+        decl("acme", "console", want=8080, assigned=8080),
         decl("imageharbor", "dashboard", want=8080, assigned=8090),
     ]
 
@@ -166,13 +166,13 @@ def test_two_new_declarations_do_not_receive_the_same_port():
 
 
 def test_apply_decisions_records_grants_and_preserves_grant_dates():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
     decisions = decide([decl("imageharbor", "dashboard", want=8080)], leases, live(), TODAY)
 
     updated = apply_decisions(leases, decisions, TODAY)
 
     assert len(updated) == 2
-    incumbent = next(lease for lease in updated if lease.project == "gte")
+    incumbent = next(lease for lease in updated if lease.project == "acme")
     newcomer = next(lease for lease in updated if lease.project == "imageharbor")
     assert incumbent.granted == date(2026, 7, 5)
     assert newcomer.granted == TODAY
@@ -180,8 +180,8 @@ def test_apply_decisions_records_grants_and_preserves_grant_dates():
 
 
 def test_a_stale_assignment_against_a_held_port_is_reassigned():
-    """The declaration claims 8080, but gte holds it and this project has no lease."""
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    """The declaration claims 8080, but acme holds it and this project has no lease."""
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
     [decision] = decide(
         [decl("imageharbor", "dashboard", want=8080, assigned=8080)], leases, live(), TODAY
@@ -189,12 +189,12 @@ def test_a_stale_assignment_against_a_held_port_is_reassigned():
 
     assert decision.action == "reassign"
     assert decision.port == BAND_START
-    assert decision.incumbent.project == "gte"
+    assert decision.incumbent.project == "acme"
 
 
 def test_apply_decisions_moves_a_project_off_its_previous_port():
     leases = [
-        Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
+        Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
         Lease("p", "web", "hpz440", "0.0.0.0", 8200, date(2026, 8, 1)),
     ]
     decisions = [
@@ -206,7 +206,7 @@ def test_apply_decisions_moves_a_project_off_its_previous_port():
     ports = {(lease.project, lease.port) for lease in updated}
     assert ("p", 8200) not in ports
     assert ("p", 8300) in ports
-    assert ("gte", 8080) in ports
+    assert ("acme", 8080) in ports
 
 
 def contending_pairs(leases):
@@ -296,9 +296,9 @@ def test_live_state_for_another_host_does_not_block_a_port():
 def test_the_earlier_granted_lease_is_the_incumbent():
     """The headline rule: seniority decides who stays, and the dates are what decide it."""
 
-    def incumbent_of(gte_granted, river_granted):
+    def incumbent_of(acme_granted, river_granted):
         leases = [
-            Lease("gte", "console", "hpz440", "100.69.239.123", 8080, gte_granted),
+            Lease("acme", "console", "hpz440", "100.69.239.123", 8080, acme_granted),
             Lease("river", "web", "hpz440", "127.0.0.1", 8080, river_granted),
         ]
         declaration = decl("imageharbor", "dashboard", want=8080, assigned=8080)
@@ -306,7 +306,7 @@ def test_the_earlier_granted_lease_is_the_incumbent():
         assert decision.incumbent is not None
         return decision.incumbent.project
 
-    assert incumbent_of(date(2026, 1, 1), date(2026, 6, 1)) == "gte"
+    assert incumbent_of(date(2026, 1, 1), date(2026, 6, 1)) == "acme"
     assert incumbent_of(date(2026, 6, 1), date(2026, 1, 1)) == "river"
 
 
@@ -326,20 +326,20 @@ def test_apply_decisions_records_an_addr_change_on_an_unchanged_port():
 def test_widening_onto_a_port_held_under_this_projects_other_name_does_not_double_claim():
     """One project's two named ports contend with each other like anybody else's.
 
-    gte holds 8100 twice over, on two addresses that do not overlap. Widening
+    acme holds 8100 twice over, on two addresses that do not overlap. Widening
     either one to 0.0.0.0 would sit on top of the other, and `load_leases` reads
     that as "port 8100 claimed twice" and refuses the whole ledger.
     """
     leases = [
-        Lease("gte", "web", "hpz440", "127.0.0.1", 8100, date(2026, 1, 1)),
-        Lease("gte", "api", "hpz440", "10.0.0.5", 8100, date(2026, 2, 1)),
+        Lease("acme", "web", "hpz440", "127.0.0.1", 8100, date(2026, 1, 1)),
+        Lease("acme", "api", "hpz440", "10.0.0.5", 8100, date(2026, 2, 1)),
     ]
-    declaration = decl("gte", "api", want=8100, assigned=8100, addr="0.0.0.0")
+    declaration = decl("acme", "api", want=8100, assigned=8100, addr="0.0.0.0")
 
     [decision] = decide([declaration], leases, live(), TODAY)
 
     assert decision.action == "reassign"
-    # 8100 is BAND_START itself, and gte/web still holds it, so the band starts
+    # 8100 is BAND_START itself, and acme/web still holds it, so the band starts
     # handing out at the port after it.
     assert decision.port == BAND_START + 1
     assert decision.incumbent is not None

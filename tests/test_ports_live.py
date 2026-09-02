@@ -14,7 +14,7 @@ PAYLOAD = {
     "host": "hpz440",
     "collected": "2026-09-01T14:02:11Z",
     "listening": [
-        {"addr": "0.0.0.0", "port": 8080, "container": "gte"},
+        {"addr": "0.0.0.0", "port": 8080, "container": "acme"},
         {"addr": "127.0.0.1", "port": 5432, "container": "shared-postgres"},
         {"addr": "100.69.239.123", "port": 49152, "container": "arm-rippers-dev"},
         {"addr": "0.0.0.0", "port": 22, "container": None},
@@ -77,7 +77,7 @@ def test_fetch_raises_live_unavailable_when_port_is_float():
     payload = {
         "host": "hpz440",
         "listening": [
-            {"addr": "0.0.0.0", "port": 8080.7, "container": "gte"},
+            {"addr": "0.0.0.0", "port": 8080.7, "container": "acme"},
         ],
     }
     with pytest.raises(LiveUnavailable, match="port must be an integer"):
@@ -91,7 +91,7 @@ def test_fetch_raises_live_unavailable_when_port_is_string():
     payload = {
         "host": "hpz440",
         "listening": [
-            {"addr": "0.0.0.0", "port": "8080", "container": "gte"},
+            {"addr": "0.0.0.0", "port": "8080", "container": "acme"},
         ],
     }
     with pytest.raises(LiveUnavailable, match="port must be an integer"):

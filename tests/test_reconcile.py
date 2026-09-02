@@ -23,17 +23,17 @@ def kinds(drift):
 
 
 def test_a_lease_with_nothing_listening_is_declared_not_running():
-    drift = find_drift([lease("gte", 8080)], [], [], host=HOST)
+    drift = find_drift([lease("acme", 8080)], [], [], host=HOST)
 
     assert kinds(drift) == [DECLARED_NOT_RUNNING]
-    assert "gte" in drift[0].detail
+    assert "acme" in drift[0].detail
 
 
 def test_a_lease_with_a_listener_is_no_drift():
     drift = find_drift(
-        [lease("gte", 8080)],
+        [lease("acme", 8080)],
         [Listener("0.0.0.0", 8080, None)],
-        [Container("gte", (("0.0.0.0", 8080),))],
+        [Container("acme", (("0.0.0.0", 8080),))],
         host=HOST,
     )
 
@@ -65,9 +65,9 @@ def test_a_container_publishing_an_unleased_port_is_running_not_declared():
 
 def test_a_container_named_for_a_project_on_the_wrong_port_is_a_mismatch():
     drift = find_drift(
-        [lease("gte", 8080)],
+        [lease("acme", 8080)],
         [Listener("0.0.0.0", 9090, None)],
-        [Container("gte", (("0.0.0.0", 9090),))],
+        [Container("acme", (("0.0.0.0", 9090),))],
         host=HOST,
     )
 
@@ -79,11 +79,11 @@ def test_a_container_named_for_a_project_on_the_wrong_port_is_a_mismatch():
 def test_a_sibling_container_honouring_the_lease_is_not_a_mismatch():
     """A multi-port project is ordinary: each lease may be served by its own container."""
     drift = find_drift(
-        [lease("gte", 8080, name="web"), lease("gte", 9000, name="metrics")],
+        [lease("acme", 8080, name="web"), lease("acme", 9000, name="metrics")],
         [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9000, None)],
         [
-            Container("gte", (("0.0.0.0", 8080),)),
-            Container("gte-metrics", (("0.0.0.0", 9000),)),
+            Container("acme", (("0.0.0.0", 8080),)),
+            Container("acme-metrics", (("0.0.0.0", 9000),)),
         ],
         host=HOST,
     )
@@ -94,9 +94,9 @@ def test_a_sibling_container_honouring_the_lease_is_not_a_mismatch():
 def test_a_sidecar_that_is_down_is_declared_not_running_not_a_mismatch():
     """The named container never held the sidecar's port, so it has moved nothing."""
     drift = find_drift(
-        [lease("gte", 8080, name="web"), lease("gte", 9000, name="metrics")],
+        [lease("acme", 8080, name="web"), lease("acme", 9000, name="metrics")],
         [Listener("0.0.0.0", 8080, None)],
-        [Container("gte", (("0.0.0.0", 8080),))],
+        [Container("acme", (("0.0.0.0", 8080),))],
         host=HOST,
     )
 
@@ -111,18 +111,18 @@ def test_two_projects_on_each_others_leased_ports_are_both_a_mismatch():
     could, a straight swap would answer every lease and show a clean page.
     """
     drift = find_drift(
-        [lease("gte", 8080), lease("arm", 9090)],
+        [lease("acme", 8080), lease("arm", 9090)],
         [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9090, None)],
         [
-            Container("gte", (("0.0.0.0", 9090),)),
+            Container("acme", (("0.0.0.0", 9090),)),
             Container("arm", (("0.0.0.0", 8080),)),
         ],
         host=HOST,
     )
 
     assert kinds(drift) == [PORT_MISMATCH, PORT_MISMATCH]
-    assert "arm" in drift[0].detail
-    assert "gte" in drift[1].detail
+    assert "acme" in drift[0].detail
+    assert "arm" in drift[1].detail
 
 
 def test_a_three_way_rotation_names_every_project():
@@ -149,15 +149,15 @@ def test_a_three_way_rotation_names_every_project():
 def test_a_mismatch_does_not_mute_the_projects_other_dead_lease():
     """Mismatch is decided per lease, so it may only silence the lease it names.
 
-    Here `gte` has moved off 8080, while its 9000 lease is covered by a
+    Here `acme` has moved off 8080, while its 9000 lease is covered by a
     stranger's container and has nothing listening. That second lease is the
     dangerous one: it must still be reported.
     """
     drift = find_drift(
-        [lease("gte", 8080, name="web"), lease("gte", 9000, name="metrics")],
+        [lease("acme", 8080, name="web"), lease("acme", 9000, name="metrics")],
         [],
         [
-            Container("gte", (("0.0.0.0", 7777),)),
+            Container("acme", (("0.0.0.0", 7777),)),
             Container("other", (("0.0.0.0", 9000),)),
         ],
         host=HOST,
@@ -186,31 +186,31 @@ def test_a_named_swap_is_still_a_mismatch_when_the_other_lease_is_on_another_hos
 
     `arm` holds no lease on this host, so it generates no finding of its own
     here -- but its name still names a fleet project. Treating it as an
-    anonymous sidecar because its lease is out of scope lets it cover `gte`'s
-    lease and swallow the swap `gte` made with it.
+    anonymous sidecar because its lease is out of scope lets it cover `acme`'s
+    lease and swallow the swap `acme` made with it.
     """
     drift = find_drift(
-        [lease("gte", 8080), lease("arm", 8080, host="other")],
+        [lease("acme", 8080), lease("arm", 8080, host="other")],
         [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9090, None)],
         [
-            Container("gte", (("0.0.0.0", 9090),)),
+            Container("acme", (("0.0.0.0", 9090),)),
             Container("arm", (("0.0.0.0", 8080),)),
         ],
         host=HOST,
     )
 
     assert kinds(drift) == [PORT_MISMATCH]
-    assert "gte" in drift[0].detail
+    assert "acme" in drift[0].detail
     assert "8080" in drift[0].detail
     assert "9090" in drift[0].detail
 
 
 def test_another_hosts_leases_are_neither_drift_nor_cover():
     drift = find_drift(
-        [lease("gte", 8080), lease("elsewhere", 9999, host="nas")],
+        [lease("acme", 8080), lease("elsewhere", 9999, host="nas")],
         [Listener("0.0.0.0", 8080, None)],
         [
-            Container("gte", (("0.0.0.0", 8080),)),
+            Container("acme", (("0.0.0.0", 8080),)),
             Container("squatter", (("0.0.0.0", 9999),)),
         ],
         host=HOST,
@@ -221,7 +221,7 @@ def test_another_hosts_leases_are_neither_drift_nor_cover():
 
 
 def test_docker_unavailable_suppresses_the_container_side_only():
-    drift = find_drift([lease("gte", 8080)], [], DOCKER_UNAVAILABLE, host=HOST)
+    drift = find_drift([lease("acme", 8080)], [], DOCKER_UNAVAILABLE, host=HOST)
 
     assert kinds(drift) == [DECLARED_NOT_RUNNING]
 
@@ -267,7 +267,7 @@ def test_undeclared_ports_sharing_a_port_on_one_container_are_ordered_by_address
 
 def test_leases_sharing_a_port_on_different_addresses_are_ordered_by_address():
     drift = find_drift(
-        [lease("gte", 8080, addr="10.0.0.2"), lease("gte", 8080, addr="10.0.0.1")],
+        [lease("acme", 8080, addr="10.0.0.2"), lease("acme", 8080, addr="10.0.0.1")],
         [],
         [],
         host=HOST,

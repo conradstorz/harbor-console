@@ -491,8 +491,6 @@ UPS monitoring
 
 Atlas integration
 
-GTE integration
-
 Harbor Window integration
 
 ARM integration

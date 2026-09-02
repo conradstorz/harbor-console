@@ -87,26 +87,26 @@ def test_sync_is_idempotent(tmp_path: Path):
 
 
 def test_incumbent_keeps_the_port_and_the_newcomer_is_moved(tmp_path: Path):
-    make_project(tmp_path, "gte", 8080)
+    make_project(tmp_path, "acme", 8080)
     ledger_path = tmp_path / "services.toml"
-    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    save_leases(ledger_path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
     newcomer = make_project(tmp_path, "imageharbor", 8080)
 
     code, output = run(["sync"], tmp_path, ledger_path)
 
     assert code == 0
-    assert "gte" in output
+    assert "acme" in output
     assert load_declaration(newcomer / ".harbor.toml").ports[0].assigned == 8100
     held = {lease.project: lease.port for lease in load_leases(ledger_path)}
-    assert held == {"gte": 8080, "imageharbor": 8100}
+    assert held == {"acme": 8080, "imageharbor": 8100}
 
 
 def test_new_only_grants_new_but_withholds_a_reassignment(tmp_path: Path):
     ledger_path = tmp_path / "services.toml"
-    # Only gte holds a lease. imageharbor's declaration still claims 8080, so it
+    # Only acme holds a lease. imageharbor's declaration still claims 8080, so it
     # must be reassigned -- and an unattended run must refuse to do that.
-    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
-    make_project(tmp_path, "gte", 8080)
+    save_leases(ledger_path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    make_project(tmp_path, "acme", 8080)
     moved = make_project(tmp_path, "imageharbor", 8080)
     (moved / ".harbor.toml").write_text(
         'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
@@ -151,12 +151,12 @@ def test_scan_warns_when_a_compose_default_has_drifted(tmp_path: Path):
 
 def test_show_lists_leases_and_writes_nothing(tmp_path: Path):
     ledger_path = tmp_path / "services.toml"
-    save_leases(ledger_path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    save_leases(ledger_path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
 
     code, output = run(["show"], tmp_path, ledger_path)
 
     assert code == 0
-    assert "gte" in output
+    assert "acme" in output
     assert "8080" in output
 
 
@@ -339,7 +339,7 @@ def _widened_onto_an_incumbent(root: Path, ledger_path: Path, extra: str = "") -
     The incumbent is never renumbered, so a project can only be reassigned off a
     port it actually holds by widening its own address onto a senior lease:
     imageharbor holds 192.168.1.5:8080 and now asks to bind 0.0.0.0:8080, which
-    gte has held at 127.0.0.1:8080 since longer ago. Two specific addresses do
+    acme has held at 127.0.0.1:8080 since longer ago. Two specific addresses do
     not contend, so both leases are legal in the ledger; the widening is what
     makes them contend, and the junior is the one that moves.
 
@@ -348,14 +348,14 @@ def _widened_onto_an_incumbent(root: Path, ledger_path: Path, extra: str = "") -
     save_leases(
         ledger_path,
         [
-            Lease("gte", "web", "hpz440", "127.0.0.1", 8080, date(2026, 7, 5)),
+            Lease("acme", "web", "hpz440", "127.0.0.1", 8080, date(2026, 7, 5)),
             Lease("imageharbor", "web", "hpz440", "192.168.1.5", 8080, date(2026, 8, 1)),
         ],
     )
-    incumbent = root / "gte"
+    incumbent = root / "acme"
     incumbent.mkdir()
     (incumbent / ".harbor.toml").write_text(
-        'project = "gte"\nhost = "hpz440"\n\n[[port]]\n'
+        'project = "acme"\nhost = "hpz440"\n\n[[port]]\n'
         'name = "web"\nwant = 8080\nassigned = 8080\naddr = "127.0.0.1"\n',
         encoding="utf-8",
     )
@@ -397,7 +397,7 @@ def test_new_only_keeps_the_withheld_ports_current_number_in_env(tmp_path: Path)
         for lease in load_leases(ledger_path)
     }
     assert held == {
-        ("gte", "web"): ("127.0.0.1", 8080),
+        ("acme", "web"): ("127.0.0.1", 8080),
         ("imageharbor", "web"): ("192.168.1.5", 8080),  # the withheld lease stands
         ("imageharbor", "api"): ("0.0.0.0", 8600),
     }
@@ -465,18 +465,18 @@ def test_a_failed_reassignment_says_the_project_keeps_the_lease_it_already_had(
     save_leases(
         ledger_path,
         [
-            Lease("gte", "web", "hpz440", "100.69.239.123", 8080, date(2026, 7, 5)),
+            Lease("acme", "web", "hpz440", "100.69.239.123", 8080, date(2026, 7, 5)),
             Lease("beta", "web", "hpz440", "127.0.0.1", 8080, date(2026, 8, 9)),
         ],
     )
-    gte = tmp_path / "gte"
-    gte.mkdir()
-    (gte / ".harbor.toml").write_text(
-        'project = "gte"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+    acme = tmp_path / "acme"
+    acme.mkdir()
+    (acme / ".harbor.toml").write_text(
+        'project = "acme"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
         'want = 8080\nassigned = 8080\naddr = "100.69.239.123"\n',
         encoding="utf-8",
     )
-    # beta wants to widen to every address, which collides with gte's lease.
+    # beta wants to widen to every address, which collides with acme's lease.
     # beta is the junior, so it is the one that moves -- to 8100.
     beta = tmp_path / "beta"
     beta.mkdir()
@@ -492,7 +492,7 @@ def test_a_failed_reassignment_says_the_project_keeps_the_lease_it_already_had(
     assert code == 2
     held = {(lease.project, lease.addr, lease.port) for lease in load_leases(ledger_path)}
     assert held == {
-        ("gte", "100.69.239.123", 8080),
+        ("acme", "100.69.239.123", 8080),
         ("beta", "127.0.0.1", 8080),  # the lease beta walked in with, still there
     }
     assert "withdrawn from the ledger" in output
@@ -524,7 +524,7 @@ def test_a_degraded_run_reports_drift_against_the_held_port_not_the_refused_one(
     assert not (moved / ".env").exists()
     assert {
         (lease.project, lease.addr): lease.port for lease in load_leases(ledger_path)
-    } == {("gte", "127.0.0.1"): 8080, ("imageharbor", "192.168.1.5"): 8080}
+    } == {("acme", "127.0.0.1"): 8080, ("imageharbor", "192.168.1.5"): 8080}
 
 
 def test_a_compose_file_that_is_not_utf8_is_skipped_not_a_traceback(tmp_path: Path):
@@ -654,11 +654,11 @@ def test_two_directories_declaring_one_project_is_a_hard_error(tmp_path: Path):
     # worktree declares the same project twice. Keying declarations by project
     # name silently drops one of them: the lease is written for one directory
     # and the files for the other.
-    gte = make_project(tmp_path, "gte", 8080)
-    backup = tmp_path / "gte-backup"
+    acme = make_project(tmp_path, "acme", 8080)
+    backup = tmp_path / "acme-backup"
     backup.mkdir()
     (backup / ".harbor.toml").write_text(
-        'project = "gte"\nhost = "hpz440"\n\n[[port]]\nname = "web"\nwant = 8080\n',
+        'project = "acme"\nhost = "hpz440"\n\n[[port]]\nname = "web"\nwant = 8080\n',
         encoding="utf-8",
     )
     ledger_path = tmp_path / "services.toml"
@@ -666,12 +666,12 @@ def test_two_directories_declaring_one_project_is_a_hard_error(tmp_path: Path):
     code, output = run(["sync"], tmp_path, ledger_path)
 
     assert code == 2
-    assert "gte-backup" in output  # both paths are named, not just the winner
-    assert str(gte / ".harbor.toml") in output
+    assert "acme-backup" in output  # both paths are named, not just the winner
+    assert str(acme / ".harbor.toml") in output
     assert not ledger_path.exists()
-    assert not (gte / ".env").exists()
+    assert not (acme / ".env").exists()
     assert not (backup / ".env").exists()
-    assert not (gte / "HARBOR_PORTS.md").exists()
+    assert not (acme / "HARBOR_PORTS.md").exists()
 
 
 def test_scan_says_its_grants_are_unverified_when_live_state_is_incomplete(tmp_path: Path):
