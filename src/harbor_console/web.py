@@ -16,6 +16,7 @@ from collections.abc import Callable
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
+from harbor_console.ports.keys import addrs_overlap
 from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
@@ -37,7 +38,10 @@ def ports_payload(snapshot: Snapshot) -> dict:
 
     Container attribution is by (addr, port) against Docker's published ports,
     not by PID: running unprivileged we cannot see another user's process, and
-    container processes are never ours.
+    container processes are never ours. The fallback match uses
+    `ports.keys.addrs_overlap`, the same address-overlap rule the ledger and
+    `ports/live.py` use, so a wildcard listener matches a specific publish and
+    vice versa -- reimplementing that comparison here would drift from it.
     """
     owners: dict[tuple[str, int], str] = {}
     for container in snapshot.containers:
@@ -49,7 +53,7 @@ def ports_payload(snapshot: Snapshot) -> dict:
         container = owners.get((listener.addr, listener.port))
         if container is None:
             for (owner_addr, owner_port), name in owners.items():
-                if owner_port == listener.port and owner_addr in (listener.addr, "0.0.0.0"):
+                if owner_port == listener.port and addrs_overlap(owner_addr, listener.addr):
                     container = name
                     break
         listening.append(
