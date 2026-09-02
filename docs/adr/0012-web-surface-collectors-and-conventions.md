@@ -38,6 +38,15 @@ when a container's name equals a lease's project name. An unmatched pair is
 reported as what it literally is — declared-not-running plus
 running-not-declared, the same event seen from both sides.
 
+That name match is **necessary but not sufficient**. Three further conditions
+each withhold a mismatch: the named container must publish something at all;
+nothing in the project's cover set may already answer the leased
+`(addr, port)`; and the container must not be publishing a port that another
+of the same project's leases covers. Each exists to stop a phantom finding on
+a host where nothing is wrong — a multi-port project served by a sidecar is
+the common shape. The full rule lives in `reconcile.py`'s module docstring;
+this record states the decision, not the whole predicate.
+
 Sockets are enumerated with `psutil.net_connections`, which is already a
 dependency and sees loopback-bound and non-Docker listeners that Docker cannot
 report. A socket bound to IPv6 `::` is normalised to `0.0.0.0`, because it
