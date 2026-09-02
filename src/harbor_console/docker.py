@@ -78,7 +78,9 @@ def _publish_pairs(ports: str) -> tuple[tuple[str, int], ...]:
         if match is None:
             continue
         addr = match.group("addr")
-        addr = IPV4_ANY if addr in ("", IPV6_ANY, "::") else addr
+        if addr.startswith("[") and addr.endswith("]"):
+            addr = addr[1:-1]
+        addr = IPV4_ANY if addr in ("", IPV6_ANY) else addr
         pairs.append((addr, int(match.group("port"))))
 
     return tuple(sorted(set(pairs)))

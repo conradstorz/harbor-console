@@ -68,3 +68,23 @@ def test_a_malformed_line_is_skipped_not_fatal():
     result = running_containers(run=fake_run("gte\t0.0.0.0:notaport->8080/tcp\n"))
 
     assert result == (Container("gte", ()),)
+
+
+def test_a_bad_entry_among_valid_ones_is_dropped_not_fatal():
+    out = "app\t0.0.0.0:8501->8501/tcp, 0.0.0.0:notaport->8502/tcp, 0.0.0.0:8503->8503/tcp\n"
+
+    result = running_containers(run=fake_run(out))
+
+    assert result[0].published == (("0.0.0.0", 8501), ("0.0.0.0", 8503))
+
+
+def test_bracketed_ipv6_publish_loses_its_brackets():
+    result = running_containers(run=fake_run("web\t[::1]:8080->8080/tcp\n"))
+
+    assert result[0].published == (("::1", 8080),)
+
+
+def test_bracketed_ipv6_wildcard_publish_is_normalised():
+    result = running_containers(run=fake_run("web\t[::]:8080->8080/tcp\n"))
+
+    assert result[0].published == (("0.0.0.0", 8080),)
