@@ -60,7 +60,7 @@ def listening_sockets(
                 continue
             addr = IPV4_ANY if laddr.ip == IPV6_ANY else laddr.ip
             found.add(Listener(addr=addr, port=int(laddr.port), pid=connection.pid))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             continue
 
     return tuple(sorted(found, key=lambda item: (item.port, item.addr)))

@@ -82,6 +82,21 @@ def test_a_laddr_that_is_a_plain_tuple_is_skipped():
     assert result == (Listener("0.0.0.0", 8080, 10),)
 
 
+def test_a_port_that_will_not_int_is_skipped():
+    # laddr.port as a non-numeric string can't be int()'d. Skipped like any
+    # other malformed entry; its well-formed neighbour still comes back.
+    bad = SimpleNamespace(
+        laddr=SimpleNamespace(ip="10.0.0.2", port="not-a-port"),
+        status=psutil.CONN_LISTEN,
+        pid=5,
+    )
+    good = conn("0.0.0.0", 8080, pid=10)
+
+    result = listening_sockets(net_connections=lambda kind: [bad, good])
+
+    assert result == (Listener("0.0.0.0", 8080, 10),)
+
+
 def test_an_unexpected_exception_from_net_connections_degrades_to_empty():
     def boom(kind):
         raise RuntimeError("partly-readable /proc")
