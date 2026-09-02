@@ -15,7 +15,28 @@ ANY_ADDR = "0.0.0.0"
 #: punctuation slugs to nothing and would publish a bare `HARBOR_PORT_=`.
 VAR_PREFIX = "HARBOR_PORT_"
 
+#: The lowest and highest port a lease may record. Port 0 is excluded on
+#: purpose: it means "let the kernel choose", which is not something a ledger
+#: entry can name, publish through `.env` or hand to a compose file.
+MIN_PORT = 1
+MAX_PORT = 65535
+
 _NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+
+
+def is_port_number(value: object) -> bool:
+    """Return True when `value` is a real integer inside the valid port range.
+
+    `bool` is refused explicitly, because `True` satisfies `isinstance(x, int)`
+    and would then be emitted into the ledger as `port = True` -- TOML booleans
+    are lowercase, so that file is one no later command could load. A float is
+    refused for a quieter reason: `int()` would truncate `8080.9` back to 8080
+    without a word, and `.env` would publish `8080.9` to a compose file that
+    cannot use it.
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return False
+    return MIN_PORT <= value <= MAX_PORT
 
 
 def addrs_overlap(a: str, b: str) -> bool:

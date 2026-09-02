@@ -215,3 +215,67 @@ def test_a_punctuation_only_port_name_is_refused(tmp_path: Path):
     text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "--"\n'
     with pytest.raises(DeclarationError, match="port name"):
         load_declaration(_write(tmp_path, text))
+
+
+def test_a_non_utf8_declaration_is_a_declaration_error(tmp_path: Path):
+    # A `.harbor.toml` saved by an editor in cp1252 decodes to a
+    # `UnicodeDecodeError`, which is a `ValueError` and not an `OSError`: before
+    # it was caught here it escaped the loader as a raw traceback rather than a
+    # named, dropped declaration.
+    path = tmp_path / ".harbor.toml"
+    path.write_bytes('project = "caf\u00e9"\nhost = "h"\n'.encode("cp1252"))
+
+    with pytest.raises(DeclarationError, match="codec|decode"):
+        load_declaration(path)
+
+
+def test_a_boolean_want_is_refused(tmp_path: Path):
+    # `True` satisfies `isinstance(x, int)`, so an unchecked `want = true` rode
+    # all the way into the ledger and was emitted as `port    = True`. TOML
+    # booleans are lowercase, so that ledger could never be loaded again and
+    # every later command failed. It is refused at the door instead.
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = true\n'
+    with pytest.raises(DeclarationError, match="want"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_a_float_want_is_refused(tmp_path: Path):
+    # `8080.0` reached the emitter as `port    = 8080.0`; the ledger then loaded
+    # it back through `int()`, silently, while `.env` published
+    # `HARBOR_PORT_WEB=8080.0` -- which no compose file can use as a port.
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = 8080.0\n'
+    with pytest.raises(DeclarationError, match="want"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_a_string_want_is_refused(tmp_path: Path):
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = "8080"\n'
+    with pytest.raises(DeclarationError, match="want"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_a_want_outside_the_port_range_is_refused(tmp_path: Path):
+    for value in ("0", "-1", "65536"):
+        text = f'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = {value}\n'
+        with pytest.raises(DeclarationError, match="want"):
+            load_declaration(_write(tmp_path, text))
+
+
+def test_a_boolean_assigned_is_refused(tmp_path: Path):
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nassigned = true\n'
+    with pytest.raises(DeclarationError, match="assigned"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_a_float_assigned_is_refused(tmp_path: Path):
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nassigned = 8080.0\n'
+    with pytest.raises(DeclarationError, match="assigned"):
+        load_declaration(_write(tmp_path, text))
+
+
+def test_the_boundaries_of_the_port_range_are_accepted(tmp_path: Path):
+    text = 'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = 1\nassigned = 65535\n'
+    port = load_declaration(_write(tmp_path, text)).ports[0]
+
+    assert port.want == 1
+    assert port.assigned == 65535

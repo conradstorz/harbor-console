@@ -2,6 +2,15 @@
 
 The ledger is the authority on what is *reserved*. Live state is only evidence
 about what is *running*; a stopped service keeps its lease.
+
+Nothing read back out of the file is taken on trust. `services.toml` is written
+by this tool but sits on disk where a person can edit it, and every field goes
+straight back out through `dumps_leases`, which interpolates values verbatim: a
+`port` that is a float or a bool emits TOML no later command can load, and a
+`granted` that is a string rather than a date literal raises deep inside the
+emitter. So the types are checked here, where the file is read, and a bad one
+is a `LedgerError` naming the file -- including when the file cannot be read or
+decoded at all, so that `ports show` still reports rather than crashes.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ from datetime import date
 from pathlib import Path
 
 from harbor_console.ports.atomic import write_text_atomic
-from harbor_console.ports.keys import addrs_overlap
+from harbor_console.ports.keys import MAX_PORT, MIN_PORT, addrs_overlap, is_port_number
 
 
 class LedgerError(Exception):
@@ -34,6 +43,12 @@ class Lease:
 
 _FIELDS = ("project", "name", "host", "addr", "port", "granted")
 
+#: The lease fields that are emitted back out inside TOML string quotes. A
+#: non-string here reaches `dumps_leases` and is formatted by `str()`, which is
+#: how an integer or a list ends up quoted in the ledger as though it had always
+#: been a name.
+_STRING_FIELDS = ("project", "name", "host", "addr")
+
 
 def load_leases(path: Path) -> list[Lease]:
     """Read and validate the ledger. A missing file is an empty ledger."""
@@ -44,20 +59,49 @@ def load_leases(path: Path) -> list[Lease]:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise LedgerError(f"{path}: {exc}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        # A ledger that exists but cannot be read -- permissions, a transient
+        # I/O error, a non-UTF-8 rewrite by a hand editor -- used to escape as
+        # a raw traceback and take `ports show` down with it. `show` is the one
+        # command that stands alone precisely so it still answers when the rest
+        # is broken, so an unreadable file is reported, not raised through.
+        raise LedgerError(f"{path}: {exc}") from exc
 
     leases: list[Lease] = []
     for entry in data.get("lease", []):
         missing = [field for field in _FIELDS if field not in entry]
         if missing:
             raise LedgerError(f"{path}: lease missing {', '.join(missing)}")
+
+        for field in _STRING_FIELDS:
+            value = entry[field]
+            if not isinstance(value, str):
+                raise LedgerError(
+                    f"{path}: lease {field} {value!r} is not a string"
+                )
+
+        port = entry["port"]
+        if not is_port_number(port):
+            raise LedgerError(
+                f"{path}: lease port {port!r} is not usable; it must be a whole "
+                f"number between {MIN_PORT} and {MAX_PORT}"
+            )
+
+        granted = entry["granted"]
+        if not isinstance(granted, date):
+            raise LedgerError(
+                f"{path}: lease granted {granted!r} is not a date; write it as a "
+                f"bare TOML date such as 2026-09-01, not as a quoted string"
+            )
+
         leases.append(
             Lease(
                 project=entry["project"],
                 name=entry["name"],
                 host=entry["host"],
                 addr=entry["addr"],
-                port=int(entry["port"]),
-                granted=entry["granted"],
+                port=port,
+                granted=granted,
             )
         )
 

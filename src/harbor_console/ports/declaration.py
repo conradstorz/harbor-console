@@ -12,6 +12,13 @@ later command could load -- the tool could not start again until somebody
 hand-edited `services.toml`. Escaping in the emitter alone would not do: the
 same name flows on into `keys.env_var_name` and the `.env` fence, so the value
 is refused here rather than made safe for one consumer out of several.
+
+The two numbers, `want` and `assigned`, are checked at the same door and for
+the same reason. They too are interpolated verbatim into the ledger, where a
+`want = true` becomes `port = True` -- not TOML, since its booleans are
+lowercase -- and a `want = 8080.0` becomes a port `.env` publishes as `8080.0`
+to a compose file that cannot use it. Both must be whole numbers in the valid
+port range before they reach a `Decision`.
 """
 
 from __future__ import annotations
@@ -23,7 +30,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harbor_console.ports.atomic import write_text_atomic
-from harbor_console.ports.keys import ANY_ADDR, VAR_PREFIX, env_var_name
+from harbor_console.ports.keys import (
+    ANY_ADDR,
+    MAX_PORT,
+    MIN_PORT,
+    VAR_PREFIX,
+    env_var_name,
+    is_port_number,
+)
 
 #: What a `project`, `host` or port `name` may contain. Deliberately narrower
 #: than anything downstream strictly needs: these are identifiers that end up in
@@ -70,7 +84,11 @@ def load_declaration(path: Path) -> Declaration:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise DeclarationError(f"{path}: {exc}") from exc
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # A `.harbor.toml` saved in cp1252 or any other non-UTF-8 encoding is
+        # just as unreadable as a missing one, but `UnicodeDecodeError` is a
+        # `ValueError` rather than an `OSError`: uncaught, it escaped as a raw
+        # traceback instead of naming the project whose declaration was dropped.
         raise DeclarationError(f"{path}: {exc}") from exc
 
     for field in ("project", "host"):
@@ -118,11 +136,18 @@ def load_declaration(path: Path) -> Declaration:
         addr = entry.get("addr", ANY_ADDR)
         _check(path, "addr", addr, _ADDR)
 
+        want = entry.get("want")
+        if want is not None:
+            _check_port(path, f"port '{name}' want", want)
+        assigned = entry.get("assigned")
+        if assigned is not None:
+            _check_port(path, f"port '{name}' assigned", assigned)
+
         ports.append(
             PortRequest(
                 name=name,
-                want=entry.get("want"),
-                assigned=entry.get("assigned"),
+                want=want,
+                assigned=assigned,
                 addr=addr,
                 container=entry.get("container"),
                 health_path=entry.get("health_path", "/"),
@@ -177,6 +202,21 @@ def _check(path: Path, field: str, value: object, allowed: re.Pattern[str]) -> N
         raise DeclarationError(
             f"{path}: {field} {value!r} is not usable; it must be a non-empty "
             f"string of {allowed.pattern} characters"
+        )
+
+
+def _check_port(path: Path, field: str, value: object) -> None:
+    """Refuse a port number that is not a whole number in the valid range.
+
+    Mirrors the check `live.fetch_live` already makes on the numbers it reads
+    from `/ports.json`: the type is refused at the door rather than coerced
+    downstream, because by the time it reaches the ledger's emitter the only
+    remaining choices are to write invalid TOML or to truncate silently.
+    """
+    if not is_port_number(value):
+        raise DeclarationError(
+            f"{path}: {field} {value!r} is not usable; it must be a whole "
+            f"number between {MIN_PORT} and {MAX_PORT}"
         )
 
 

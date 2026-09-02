@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from harbor_console.ports import keys
+from harbor_console.ports.declaration import DeclarationError, load_declaration
 from harbor_console.ports.ledger import (
     Lease,
     LedgerError,
@@ -124,3 +125,128 @@ def test_a_failed_save_leaves_the_existing_ledger_intact(tmp_path: Path, monkeyp
 
     assert path.read_text(encoding="utf-8") == original
     assert [entry.name for entry in tmp_path.iterdir()] == ["services.toml"]
+
+
+def _lease_text(**overrides: str) -> str:
+    """One `[[lease]]` block, with any field replaced by a raw TOML value."""
+    fields = {
+        "project": '"gte"',
+        "name": '"console"',
+        "host": '"hpz440"',
+        "addr": '"0.0.0.0"',
+        "port": "8080",
+        "granted": "2026-07-05",
+    }
+    fields.update(overrides)
+    body = "".join(f"{key} = {value}\n" for key, value in fields.items())
+    return f"[[lease]]\n{body}"
+
+
+def test_an_unreadable_ledger_is_a_ledger_error(tmp_path: Path, monkeypatch):
+    # `ports show` is deliberately independent of declaration loading so that it
+    # still answers when everything else is broken. An `OSError` escaping the
+    # loader -- a permissions problem, a transient I/O error -- took it down
+    # with a raw traceback instead of a reported one.
+    path = tmp_path / "services.toml"
+    path.write_text(_lease_text(), encoding="utf-8")
+
+    def refuse(self: Path, encoding: str | None = None, **kwargs) -> str:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+
+    with pytest.raises(LedgerError, match="Permission denied"):
+        load_leases(path)
+
+
+def test_a_non_utf8_ledger_is_a_ledger_error(tmp_path: Path):
+    # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it escaped
+    # the loader untouched.
+    path = tmp_path / "services.toml"
+    path.write_bytes(_lease_text(project='"caf\u00e9"').encode("cp1252"))
+
+    with pytest.raises(LedgerError, match="codec|decode"):
+        load_leases(path)
+
+
+def test_a_float_port_in_the_ledger_is_refused(tmp_path: Path):
+    # `int(entry["port"])` truncated this silently, so a hand-edited `8080.9`
+    # loaded as 8080 and the ledger and the file disagreed from then on.
+    path = tmp_path / "services.toml"
+    path.write_text(_lease_text(port="8080.9"), encoding="utf-8")
+
+    with pytest.raises(LedgerError, match="port"):
+        load_leases(path)
+
+
+def test_a_boolean_port_in_the_ledger_is_refused(tmp_path: Path):
+    path = tmp_path / "services.toml"
+    path.write_text(_lease_text(port="true"), encoding="utf-8")
+
+    with pytest.raises(LedgerError, match="port"):
+        load_leases(path)
+
+
+def test_a_numeric_string_port_in_the_ledger_is_refused(tmp_path: Path):
+    # `int("8080")` accepted this too, so the ledger held a port whose type
+    # depended on which command had last written it.
+    path = tmp_path / "services.toml"
+    path.write_text(_lease_text(port='"8080"'), encoding="utf-8")
+
+    with pytest.raises(LedgerError, match="port"):
+        load_leases(path)
+
+
+def test_a_port_outside_the_range_is_refused(tmp_path: Path):
+    for value in ("0", "-1", "65536"):
+        path = tmp_path / f"services-{value}.toml"
+        path.write_text(_lease_text(port=value), encoding="utf-8")
+
+        with pytest.raises(LedgerError, match="port"):
+            load_leases(path)
+
+
+def test_a_quoted_granted_date_is_refused(tmp_path: Path):
+    # A hand-edited `granted = "2026-09-01"` is a string, not a TOML date
+    # literal. It loaded without complaint and then raised `AttributeError`
+    # deep inside `dumps_leases`, on the next run, in a different command.
+    path = tmp_path / "services.toml"
+    path.write_text(_lease_text(granted='"2026-09-01"'), encoding="utf-8")
+
+    with pytest.raises(LedgerError, match="granted"):
+        load_leases(path)
+
+
+def test_a_non_string_lease_field_is_refused(tmp_path: Path):
+    # These four are interpolated between quotes by `dumps_leases`, which would
+    # write `project = "42"` and turn a hand-editing slip into a permanent one.
+    for field in ("project", "name", "host", "addr"):
+        path = tmp_path / f"services-{field}.toml"
+        path.write_text(_lease_text(**{field: "42"}), encoding="utf-8")
+
+        with pytest.raises(LedgerError, match=field):
+            load_leases(path)
+
+
+def test_a_boolean_want_never_reaches_the_ledger(tmp_path: Path):
+    # The invariant, end to end: a declaration this tool does not own asks for
+    # `want = true`, and is refused where it is read. Had it not been, the
+    # emitter would have written `port    = True` -- shown here -- and the
+    # ledger would have been one no later command could load, bricking the tool
+    # until somebody hand-edited `services.toml`.
+    declaration = tmp_path / ".harbor.toml"
+    declaration.write_text(
+        'project = "p"\nhost = "h"\n\n[[port]]\nname = "web"\nwant = true\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeclarationError, match="want"):
+        load_declaration(declaration)
+
+    would_have_been = dumps_leases([Lease("p", "web", "h", "0.0.0.0", True, date(2026, 9, 1))])
+    assert "port    = True" in would_have_been
+
+    ledger = tmp_path / "services.toml"
+    ledger.write_text(would_have_been, encoding="utf-8")
+    with pytest.raises(LedgerError):
+        load_leases(ledger)
