@@ -17,7 +17,7 @@ sidecar is simply not running.
 
 Cover is not pooled across projects. A container covers a lease when it is the
 project's own container, or when its name is no project's name at all -- a
-sidecar like `gte-metrics`. Another *project's* container never covers, because
+sidecar like `acme-metrics`. Another *project's* container never covers, because
 if it did, two projects that had swapped ports would answer each other's leases
 and the page would go clean on exactly the collision this exists to catch.
 
@@ -58,7 +58,7 @@ def _cover_for(
     """Return the published ports allowed to answer `project`'s leases.
 
     A container covers when it is the project's own, or when its name is no
-    leased project's name -- a sidecar such as `gte-metrics`, which serves a
+    leased project's name -- a sidecar such as `acme-metrics`, which serves a
     port on the project's behalf. A container named for a *different* project
     is excluded: pooling every container's ports lets two projects that have
     swapped ports satisfy each other's leases, and the swap disappears.

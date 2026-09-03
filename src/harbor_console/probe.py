@@ -1,8 +1,9 @@
 """Liveness and optional detail for one declared service.
 
-Deliberately dumb: connect, and any HTTP response means up. GTE answers `/`
-with a 303 to `/login`; a probe insisting on 200 would call a healthy service
-down, and a status page that cries wolf is worse than no status page.
+Deliberately dumb: connect, and any HTTP response means up. A service that
+answers `/` with a 303 to `/login` is still up; a probe insisting on 200
+would call a healthy service down, and a status page that cries wolf is
+worse than no status page.
 
 `/hcstatus` only ever adds detail. A project whose endpoint is missing, slow,
 malformed or wrongly shaped still shows as up -- with a warning where the

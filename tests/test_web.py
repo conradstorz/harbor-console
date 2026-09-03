@@ -34,11 +34,11 @@ def snapshot(**overrides):
     base = dict(
         collected=datetime(2026, 9, 2, 14, 2, 11),
         metrics=METRICS,
-        leases=(Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1)),),
+        leases=(Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1)),),
         listeners=(Listener("0.0.0.0", 8080, None),),
-        containers=(Container("gte", (("0.0.0.0", 8080),)),),
+        containers=(Container("acme", (("0.0.0.0", 8080),)),),
         docker_available=True,
-        health={("gte", "console"): Health(True, "ok", "3 queued", (Detail("queue", "3"),), None)},
+        health={("acme", "console"): Health(True, "ok", "3 queued", (Detail("queue", "3"),), None)},
         drift=(),
         collection_error=None,
         # These render tests describe a page that has been collected; the
@@ -72,7 +72,7 @@ def test_ports_payload_round_trips_through_the_allocators_reader():
                 Listener("0.0.0.0", 22, None),
             ),
             containers=(
-                Container("gte", (("0.0.0.0", 8080),)),
+                Container("acme", (("0.0.0.0", 8080),)),
                 Container("shared-postgres", (("127.0.0.1", 5432),)),
             ),
         )
@@ -85,7 +85,7 @@ def test_ports_payload_round_trips_through_the_allocators_reader():
     assert live.complete is True
     assert live.is_listening("0.0.0.0", 8080) is True
     assert live.is_listening("127.0.0.1", 5432) is True
-    assert live.container_on(8080) == "gte"
+    assert live.container_on(8080) == "acme"
     assert live.container_on(22) is None
 
 
@@ -127,14 +127,14 @@ def test_page_shows_host_metrics_and_the_service():
 
 
 def test_page_shows_a_down_service():
-    health = {("gte", "console"): Health(False, None, None, (), None)}
+    health = {("acme", "console"): Health(False, None, None, (), None)}
     html = render_page(snapshot(health=health, listeners=())).decode()
 
     assert "DOWN" in html
 
 
 def test_page_shows_drift():
-    drift = (Drift("declared-not-running", "gte/console leases 0.0.0.0:8080, nothing is listening"),)
+    drift = (Drift("declared-not-running", "acme/console leases 0.0.0.0:8080, nothing is listening"),)
     html = render_page(snapshot(drift=drift)).decode()
 
     assert "nothing is listening" in html
@@ -203,7 +203,7 @@ def test_page_shows_a_collection_failure_banner():
 
 
 def test_page_shows_an_hcstatus_warning_without_calling_the_service_down():
-    health = {("gte", "console"): Health(True, None, None, (), "/hcstatus unreadable")}
+    health = {("acme", "console"): Health(True, None, None, (), "/hcstatus unreadable")}
     html = render_page(snapshot(health=health)).decode()
 
     assert "UP" in html
@@ -211,7 +211,7 @@ def test_page_shows_an_hcstatus_warning_without_calling_the_service_down():
 
 
 def test_page_escapes_values_from_services():
-    health = {("gte", "console"): Health(True, "ok", "<script>x</script>", (), None)}
+    health = {("acme", "console"): Health(True, "ok", "<script>x</script>", (), None)}
     html = render_page(snapshot(health=health)).decode()
 
     assert "<script>" not in html
@@ -508,7 +508,7 @@ def test_a_lease_with_no_listener_is_still_down():
         snapshot(
             listeners=(),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("acme", "console"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -521,13 +521,13 @@ def test_a_listener_on_another_address_does_not_excuse_a_dead_lease():
     stranger's listener on an unrelated specific address says nothing about
     this lease.
     """
-    lease = Lease("gte", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
+    lease = Lease("acme", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
     html = render_page(
         snapshot(
             leases=(lease,),
             listeners=(Listener("192.168.1.5", 8080, None),),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("acme", "console"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -537,13 +537,13 @@ def test_a_listener_on_another_address_does_not_excuse_a_dead_lease():
 
 def test_a_wildcard_listener_covers_a_specific_lease():
     """The overlap rule runs both directions."""
-    lease = Lease("gte", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
+    lease = Lease("acme", "console", "hpz440", "127.0.0.1", 8080, date(2026, 9, 1))
     html = render_page(
         snapshot(
             leases=(lease,),
             listeners=(Listener("0.0.0.0", 8080, None),),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("acme", "console"): Health(False, None, None, (), None)},
         )
     ).decode()
 

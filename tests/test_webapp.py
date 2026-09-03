@@ -27,39 +27,39 @@ METRICS = {
 }
 
 WEB_LEASE = Lease("harbor-console", "web", "hpz440", "0.0.0.0", 8090, date(2026, 9, 1))
-GTE_LEASE = Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1))
+ACME_LEASE = Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1))
 
 
 def test_own_port_comes_from_the_ledger():
-    assert webapp.own_port([GTE_LEASE, WEB_LEASE]) == 8090
+    assert webapp.own_port([ACME_LEASE, WEB_LEASE]) == 8090
 
 
 def test_own_port_missing_is_an_error():
     with pytest.raises(webapp.NotDeclared):
-        webapp.own_port([GTE_LEASE])
+        webapp.own_port([ACME_LEASE])
 
 
 def test_collect_snapshot_gathers_every_source():
     snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
+        leases=(ACME_LEASE,),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
         listeners=lambda: (Listener("0.0.0.0", 8080, None),),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(True, "ok", "fine", (), None),
     )
 
     assert snapshot.metrics == METRICS
     assert snapshot.docker_available is True
-    assert snapshot.health[("gte", "console")].up is True
+    assert snapshot.health[("acme", "console")].up is True
     assert snapshot.drift == ()
     assert snapshot.collection_error is None
 
 
 def test_collect_snapshot_marks_docker_unavailable():
     snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
+        leases=(ACME_LEASE,),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
@@ -74,7 +74,7 @@ def test_collect_snapshot_marks_docker_unavailable():
 
 def test_collect_snapshot_reconciles_against_the_host_it_serves():
     """The host is this machine, so another host's lease covers nothing here."""
-    elsewhere = Lease("gte", "console", "other-box", "0.0.0.0", 8080, date(2026, 9, 1))
+    elsewhere = Lease("acme", "console", "other-box", "0.0.0.0", 8080, date(2026, 9, 1))
 
     snapshot = webapp.collect_snapshot(
         leases=(elsewhere,),
@@ -82,7 +82,7 @@ def test_collect_snapshot_reconciles_against_the_host_it_serves():
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
         listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(False, None, None, (), None),
     )
 
@@ -92,16 +92,16 @@ def test_collect_snapshot_reconciles_against_the_host_it_serves():
 def test_collect_snapshot_hands_reconcile_a_concrete_sequence():
     """find_drift walks the leases twice; a generator would empty itself."""
     snapshot = webapp.collect_snapshot(
-        leases=iter((GTE_LEASE,)),
+        leases=iter((ACME_LEASE,)),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
         listeners=lambda: (Listener("0.0.0.0", 8080, None),),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(True, None, None, (), None),
     )
 
-    assert snapshot.leases == (GTE_LEASE,)
+    assert snapshot.leases == (ACME_LEASE,)
     assert snapshot.drift == ()
 
 
@@ -114,7 +114,7 @@ def test_probe_loop_publishes_a_snapshot_then_exits_cleanly():
     def collect():
         calls["count"] += 1
         return Snapshot(
-            collected=datetime(2026, 9, 2), metrics=METRICS, leases=(GTE_LEASE,)
+            collected=datetime(2026, 9, 2), metrics=METRICS, leases=(ACME_LEASE,)
         )
 
     def fake_sleep(_interval):
@@ -123,11 +123,11 @@ def test_probe_loop_publishes_a_snapshot_then_exits_cleanly():
     webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
 
     assert calls["count"] == 1
-    assert holder.get().leases == (GTE_LEASE,)
+    assert holder.get().leases == (ACME_LEASE,)
 
 
 def test_probe_loop_keeps_the_last_snapshot_when_collection_fails():
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
+    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(ACME_LEASE,))
     holder = webapp.SnapshotHolder(good)
 
     def collect():
@@ -138,13 +138,13 @@ def test_probe_loop_keeps_the_last_snapshot_when_collection_fails():
 
     webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
 
-    assert holder.get().leases == (GTE_LEASE,)
+    assert holder.get().leases == (ACME_LEASE,)
     assert holder.get().collection_error is not None
 
 
 def test_probe_loop_survives_a_failure_that_is_not_the_ledger():
     """Any collector can fail; the page must not become the thing that is wrong."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
+    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(ACME_LEASE,))
     holder = webapp.SnapshotHolder(good)
 
     def collect():
@@ -155,7 +155,7 @@ def test_probe_loop_survives_a_failure_that_is_not_the_ledger():
 
     webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
 
-    assert holder.get().leases == (GTE_LEASE,)
+    assert holder.get().leases == (ACME_LEASE,)
     assert "psutil fell over" in (holder.get().collection_error or "")
 
 
@@ -201,7 +201,7 @@ def test_main_binds_the_tailnet_address_and_the_leased_port(monkeypatch):
             bound["closed"] = True
 
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
+    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, ACME_LEASE])
 
     result = webapp.main(server_factory=FakeServer, start_prober=lambda _holder, _host: None)
 
@@ -301,7 +301,7 @@ def test_main_refuses_to_start_when_the_ledger_is_unreadable(monkeypatch):
 
 def test_main_refuses_to_start_when_its_own_lease_is_missing(monkeypatch):
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [GTE_LEASE])
+    monkeypatch.setattr(webapp, "load_leases", lambda _path: [ACME_LEASE])
 
     result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host: None)
 
@@ -326,12 +326,12 @@ def test_collect_snapshot_uses_the_host_it_was_given_not_the_os_hostname():
     metrics = dict(METRICS, hostname="hpz440.lan")
 
     snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
+        leases=(ACME_LEASE,),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: metrics,
         listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(False, None, None, (), None),
     )
 
@@ -405,7 +405,7 @@ def _banners(html: str) -> str:
 
 def test_a_collector_failure_is_not_blamed_on_the_ledger():
     """psutil raising must not send the operator to read services.toml."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
+    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(ACME_LEASE,))
     holder = webapp.SnapshotHolder(good)
 
     def collect():
@@ -423,7 +423,7 @@ def test_a_collector_failure_is_not_blamed_on_the_ledger():
 
 def test_a_ledger_failure_is_still_named_as_one():
     """The common case must stay legible after the field stopped naming it."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
+    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(ACME_LEASE,))
     holder = webapp.SnapshotHolder(good)
 
     def collect():
@@ -491,12 +491,12 @@ def test_collect_snapshot_publishes_the_listeners_it_found():
     found = (Listener("0.0.0.0", 8080, None), Listener("127.0.0.1", 5432, 42))
 
     snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
+        leases=(ACME_LEASE,),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
         listeners=lambda: found,
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(True, None, None, (), None),
     )
 
@@ -515,12 +515,12 @@ def test_collect_snapshot_records_when_the_ledger_was_last_written():
     written = datetime(2026, 9, 1, 22, 20, 0)
 
     snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
+        leases=(ACME_LEASE,),
         host="hpz440",
         now=datetime(2026, 9, 2, 14, 2, 11),
         collector=lambda: METRICS,
         listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        containers=lambda: (Container("acme", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(True, None, None, (), None),
         ledger_mtime=lambda: written,
     )
@@ -602,7 +602,7 @@ def test_every_refusal_says_why_on_stderr(monkeypatch, capsys):
     cases = [
         (no_tailnet, lambda _path: [WEB_LEASE], lambda *a: None, "tailscaled is not up"),
         (lambda: "100.69.239.123", bad_ledger, lambda *a: None, "services.toml: unreadable"),
-        (lambda: "100.69.239.123", lambda _path: [GTE_LEASE], lambda *a: None, "harbor-console/web"),
+        (lambda: "100.69.239.123", lambda _path: [ACME_LEASE], lambda *a: None, "harbor-console/web"),
         (
             lambda: "100.69.239.123",
             lambda _path: [WEB_LEASE, elsewhere],

@@ -44,8 +44,9 @@ def addrs_overlap(a: str, b: str) -> bool:
 
     ``0.0.0.0`` claims every address on the host, so it overlaps anything. Two
     different specific addresses can each hold the same port number without
-    conflict -- which is how ARM holds 100.69.239.123:49152 without claiming
-    49152 from every other project.
+    conflict -- which is how a container published to one specific address
+    holds 100.69.239.123:49152 without claiming 49152 from every other
+    project.
     """
     if a == b:
         return True

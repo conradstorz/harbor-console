@@ -14,13 +14,13 @@ def fake_run(stdout="", returncode=0, raises=None):
 
 
 def test_parses_names_and_published_ports():
-    out = "gte\t0.0.0.0:8080->8080/tcp\narm\t100.69.239.123:49152->8080/tcp\n"
+    out = "acme\t0.0.0.0:8080->8080/tcp\ndelta\t100.69.239.123:49152->8080/tcp\n"
 
     result = running_containers(run=fake_run(out))
 
     assert result == (
-        Container("arm", (("100.69.239.123", 49152),)),
-        Container("gte", (("0.0.0.0", 8080),)),
+        Container("acme", (("0.0.0.0", 8080),)),
+        Container("delta", (("100.69.239.123", 49152),)),
     )
 
 
@@ -92,9 +92,9 @@ def test_no_containers_is_empty_not_unavailable():
 
 
 def test_a_malformed_line_is_skipped_not_fatal():
-    result = running_containers(run=fake_run("gte\t0.0.0.0:notaport->8080/tcp\n"))
+    result = running_containers(run=fake_run("acme\t0.0.0.0:notaport->8080/tcp\n"))
 
-    assert result == (Container("gte", ()),)
+    assert result == (Container("acme", ()),)
 
 
 def test_a_bad_entry_among_valid_ones_is_dropped_not_fatal():

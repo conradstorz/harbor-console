@@ -102,7 +102,7 @@ These are load-bearing decisions, not preferences. Changing one needs a new ADR.
 - **Every whole-file write is atomic, and a project's `.env` is written last.** `.env` is what makes a container bind the port; writing it before the ledger's record is safe would leave a project publishing a port the ledger no longer reserves ([ADR 9](docs/adr/0009-atomic-writes-and-env-last.md)).
 - **Probing happens in a background thread, never inside a request handler.** One hung service must not make the status page slow to load.
 - **The page is read-only.** The registry's authority is port allocation only — not container lifecycle, not access control. No buttons that do anything.
-- **Health probing is dumb on purpose: any HTTP response means up.** GTE answers `/` with a 303 to `/login`; a probe insisting on 200 would call a healthy service down.
+- **Health probing is dumb on purpose: any HTTP response means up.** A service that answers `/` with a 303 to `/login` is still up; a probe insisting on 200 would call a healthy service down.
 
 ## Scope discipline
 

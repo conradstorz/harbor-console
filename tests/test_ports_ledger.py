@@ -32,8 +32,8 @@ def test_load_missing_file_returns_empty_list(tmp_path: Path):
 
 def test_round_trip_preserves_every_field(tmp_path: Path):
     leases = [
-        Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
-        Lease("arm", "web", "hpz440", "100.69.239.123", 49152, date(2026, 8, 1)),
+        Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
+        Lease("delta", "web", "hpz440", "100.69.239.123", 49152, date(2026, 8, 1)),
     ]
     path = tmp_path / "services.toml"
     save_leases(path, leases)
@@ -56,10 +56,10 @@ def test_duplicate_exact_key_is_a_hard_error(tmp_path: Path):
     path = tmp_path / "services.toml"
     path.write_text(
         "[[lease]]\n"
-        'project = "gte"\nname = "console"\nhost = "hpz440"\n'
+        'project = "acme"\nname = "console"\nhost = "hpz440"\n'
         'addr = "0.0.0.0"\nport = 8080\ngranted = 2026-07-05\n'
         "\n[[lease]]\n"
-        'project = "imageharbor"\nname = "dashboard"\nhost = "hpz440"\n'
+        'project = "bravo"\nname = "dashboard"\nhost = "hpz440"\n'
         'addr = "0.0.0.0"\nport = 8080\ngranted = 2026-08-09\n',
         encoding="utf-8",
     )
@@ -72,7 +72,7 @@ def test_overlapping_addresses_on_one_port_is_a_hard_error(tmp_path: Path):
     path = tmp_path / "services.toml"
     path.write_text(
         "[[lease]]\n"
-        'project = "gte"\nname = "console"\nhost = "hpz440"\n'
+        'project = "acme"\nname = "console"\nhost = "hpz440"\n'
         'addr = "0.0.0.0"\nport = 8080\ngranted = 2026-07-05\n'
         "\n[[lease]]\n"
         'project = "other"\nname = "web"\nhost = "hpz440"\n'
@@ -116,7 +116,7 @@ def test_a_failed_save_leaves_the_existing_ledger_intact(tmp_path: Path, monkeyp
     # The ledger is the only record of who holds what. Emptying it would free
     # every port at once, which is the worst possible outcome of a full disk.
     path = tmp_path / "services.toml"
-    save_leases(path, [Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
+    save_leases(path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
     original = path.read_text(encoding="utf-8")
     _truncating_disk_full(monkeypatch)
 
@@ -130,7 +130,7 @@ def test_a_failed_save_leaves_the_existing_ledger_intact(tmp_path: Path, monkeyp
 def _lease_text(**overrides: str) -> str:
     """One `[[lease]]` block, with any field replaced by a raw TOML value."""
     fields = {
-        "project": '"gte"',
+        "project": '"acme"',
         "name": '"console"',
         "host": '"hpz440"',
         "addr": '"0.0.0.0"',

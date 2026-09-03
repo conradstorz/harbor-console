@@ -69,21 +69,21 @@ def test_existing_assignment_held_by_this_project_is_kept():
 
 
 def test_want_held_by_another_project_moves_the_newcomer_into_the_band():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
-    [decision] = decide([decl("imageharbor", "dashboard", want=8080)], leases, live(), TODAY)
+    [decision] = decide([decl("bravo", "dashboard", want=8080)], leases, live(), TODAY)
 
     assert decision.action == "grant"
     assert decision.port == BAND_START
     assert decision.incumbent is not None
-    assert decision.incumbent.project == "gte"
-    assert "gte/console" in decision.reason
+    assert decision.incumbent.project == "acme"
+    assert "acme/console" in decision.reason
 
 
 def test_a_held_lease_is_written_back_when_the_declaration_lacks_it():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
-    [decision] = decide([decl("gte", "console", want=8080)], leases, live(), TODAY)
+    [decision] = decide([decl("acme", "console", want=8080)], leases, live(), TODAY)
 
     assert decision.action == "grant"
     assert decision.port == 8080
@@ -92,12 +92,12 @@ def test_a_held_lease_is_written_back_when_the_declaration_lacks_it():
 
 def test_incumbent_is_never_moved():
     leases = [
-        Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
-        Lease("imageharbor", "dashboard", "hpz440", "0.0.0.0", 8090, date(2026, 8, 9)),
+        Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
+        Lease("bravo", "dashboard", "hpz440", "0.0.0.0", 8090, date(2026, 8, 9)),
     ]
     declarations = [
-        decl("gte", "console", want=8080, assigned=8080),
-        decl("imageharbor", "dashboard", want=8080, assigned=8090),
+        decl("acme", "console", want=8080, assigned=8080),
+        decl("bravo", "dashboard", want=8080, assigned=8090),
     ]
 
     decisions = decide(declarations, leases, live(), TODAY)
@@ -122,9 +122,9 @@ def test_a_leased_but_stopped_port_is_not_reclaimed():
 
 
 def test_grandfathering_grants_an_out_of_band_port_the_project_already_runs_on():
-    state = live(("100.69.239.123", 49152, "arm-rippers-dev"))
+    state = live(("100.69.239.123", 49152, "delta-rippers-dev"))
     declaration = decl(
-        "arm", "web", want=49152, container="arm-rippers-dev", addr="100.69.239.123"
+        "delta", "web", want=49152, container="delta-rippers-dev", addr="100.69.239.123"
     )
 
     [decision] = decide([declaration], [], state, TODAY)
@@ -135,7 +135,7 @@ def test_grandfathering_grants_an_out_of_band_port_the_project_already_runs_on()
 
 
 def test_a_specific_address_does_not_collide_with_another_specific_address():
-    leases = [Lease("arm", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1))]
+    leases = [Lease("delta", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1))]
     declaration = decl("p", "web", want=8080, addr="127.0.0.1")
 
     [decision] = decide([declaration], leases, live(), TODAY)
@@ -166,35 +166,35 @@ def test_two_new_declarations_do_not_receive_the_same_port():
 
 
 def test_apply_decisions_records_grants_and_preserves_grant_dates():
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
-    decisions = decide([decl("imageharbor", "dashboard", want=8080)], leases, live(), TODAY)
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    decisions = decide([decl("bravo", "dashboard", want=8080)], leases, live(), TODAY)
 
     updated = apply_decisions(leases, decisions, TODAY)
 
     assert len(updated) == 2
-    incumbent = next(lease for lease in updated if lease.project == "gte")
-    newcomer = next(lease for lease in updated if lease.project == "imageharbor")
+    incumbent = next(lease for lease in updated if lease.project == "acme")
+    newcomer = next(lease for lease in updated if lease.project == "bravo")
     assert incumbent.granted == date(2026, 7, 5)
     assert newcomer.granted == TODAY
     assert newcomer.port == BAND_START
 
 
 def test_a_stale_assignment_against_a_held_port_is_reassigned():
-    """The declaration claims 8080, but gte holds it and this project has no lease."""
-    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
+    """The declaration claims 8080, but acme holds it and this project has no lease."""
+    leases = [Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))]
 
     [decision] = decide(
-        [decl("imageharbor", "dashboard", want=8080, assigned=8080)], leases, live(), TODAY
+        [decl("bravo", "dashboard", want=8080, assigned=8080)], leases, live(), TODAY
     )
 
     assert decision.action == "reassign"
     assert decision.port == BAND_START
-    assert decision.incumbent.project == "gte"
+    assert decision.incumbent.project == "acme"
 
 
 def test_apply_decisions_moves_a_project_off_its_previous_port():
     leases = [
-        Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
+        Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
         Lease("p", "web", "hpz440", "0.0.0.0", 8200, date(2026, 8, 1)),
     ]
     decisions = [
@@ -206,7 +206,7 @@ def test_apply_decisions_moves_a_project_off_its_previous_port():
     ports = {(lease.project, lease.port) for lease in updated}
     assert ("p", 8200) not in ports
     assert ("p", 8300) in ports
-    assert ("gte", 8080) in ports
+    assert ("acme", 8080) in ports
 
 
 def contending_pairs(leases):
@@ -222,11 +222,11 @@ def contending_pairs(leases):
 def test_widening_an_addr_onto_a_held_port_moves_this_project_not_the_incumbent():
     """A held lease is short-circuited only while its *new* key contends with nobody.
 
-    Granting 0.0.0.0:8080 here would sit on top of arm's 100.69.239.123:8080 and
+    Granting 0.0.0.0:8080 here would sit on top of delta's 100.69.239.123:8080 and
     produce a ledger that `ledger.load_leases` refuses to read.
     """
     leases = [
-        Lease("arm", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1)),
+        Lease("delta", "web", "hpz440", "100.69.239.123", 8080, date(2026, 1, 1)),
         Lease("p", "web", "hpz440", "127.0.0.1", 8080, date(2026, 2, 1)),
     ]
     declaration = decl("p", "web", want=8080, addr="0.0.0.0")
@@ -235,7 +235,7 @@ def test_widening_an_addr_onto_a_held_port_moves_this_project_not_the_incumbent(
 
     assert decision.port == BAND_START
     assert decision.incumbent is not None
-    assert decision.incumbent.project == "arm"
+    assert decision.incumbent.project == "delta"
     assert contending_pairs(apply_decisions(leases, [decision], TODAY)) == []
 
 
@@ -296,17 +296,17 @@ def test_live_state_for_another_host_does_not_block_a_port():
 def test_the_earlier_granted_lease_is_the_incumbent():
     """The headline rule: seniority decides who stays, and the dates are what decide it."""
 
-    def incumbent_of(gte_granted, river_granted):
+    def incumbent_of(acme_granted, river_granted):
         leases = [
-            Lease("gte", "console", "hpz440", "100.69.239.123", 8080, gte_granted),
+            Lease("acme", "console", "hpz440", "100.69.239.123", 8080, acme_granted),
             Lease("river", "web", "hpz440", "127.0.0.1", 8080, river_granted),
         ]
-        declaration = decl("imageharbor", "dashboard", want=8080, assigned=8080)
+        declaration = decl("bravo", "dashboard", want=8080, assigned=8080)
         [decision] = decide([declaration], leases, live(), TODAY)
         assert decision.incumbent is not None
         return decision.incumbent.project
 
-    assert incumbent_of(date(2026, 1, 1), date(2026, 6, 1)) == "gte"
+    assert incumbent_of(date(2026, 1, 1), date(2026, 6, 1)) == "acme"
     assert incumbent_of(date(2026, 6, 1), date(2026, 1, 1)) == "river"
 
 
@@ -326,20 +326,20 @@ def test_apply_decisions_records_an_addr_change_on_an_unchanged_port():
 def test_widening_onto_a_port_held_under_this_projects_other_name_does_not_double_claim():
     """One project's two named ports contend with each other like anybody else's.
 
-    gte holds 8100 twice over, on two addresses that do not overlap. Widening
+    acme holds 8100 twice over, on two addresses that do not overlap. Widening
     either one to 0.0.0.0 would sit on top of the other, and `load_leases` reads
     that as "port 8100 claimed twice" and refuses the whole ledger.
     """
     leases = [
-        Lease("gte", "web", "hpz440", "127.0.0.1", 8100, date(2026, 1, 1)),
-        Lease("gte", "api", "hpz440", "10.0.0.5", 8100, date(2026, 2, 1)),
+        Lease("acme", "web", "hpz440", "127.0.0.1", 8100, date(2026, 1, 1)),
+        Lease("acme", "api", "hpz440", "10.0.0.5", 8100, date(2026, 2, 1)),
     ]
-    declaration = decl("gte", "api", want=8100, assigned=8100, addr="0.0.0.0")
+    declaration = decl("acme", "api", want=8100, assigned=8100, addr="0.0.0.0")
 
     [decision] = decide([declaration], leases, live(), TODAY)
 
     assert decision.action == "reassign"
-    # 8100 is BAND_START itself, and gte/web still holds it, so the band starts
+    # 8100 is BAND_START itself, and acme/web still holds it, so the band starts
     # handing out at the port after it.
     assert decision.port == BAND_START + 1
     assert decision.incumbent is not None
@@ -350,14 +350,14 @@ def test_widening_onto_a_port_held_under_this_projects_other_name_does_not_doubl
 def test_grandfathering_does_not_override_a_lease_held_by_the_same_project():
     """Grandfathering answers liveness, not ownership.
 
-    arm's own container listens on 49152, but arm's *api* lease already claims
+    delta's own container listens on 49152, but delta's *api* lease already claims
     every address on that port. The running container is evidence about the
     socket, and says nothing about who holds the key.
     """
-    leases = [Lease("arm", "api", "hpz440", "0.0.0.0", 49152, date(2026, 1, 1))]
-    state = live(("100.69.239.123", 49152, "arm-dev"))
+    leases = [Lease("delta", "api", "hpz440", "0.0.0.0", 49152, date(2026, 1, 1))]
+    state = live(("100.69.239.123", 49152, "delta-dev"))
     declaration = decl(
-        "arm", "web", want=49152, container="arm-dev", addr="100.69.239.123"
+        "delta", "web", want=49152, container="delta-dev", addr="100.69.239.123"
     )
 
     [decision] = decide([declaration], leases, state, TODAY)
@@ -371,10 +371,10 @@ def test_grandfathering_does_not_override_a_lease_held_by_the_same_project():
 
 def test_two_ports_of_one_project_are_not_both_grandfathered_onto_one_key():
     """A promise binds a project against itself, not only against strangers."""
-    state = live(("100.69.239.123", 49152, "arm-dev"))
+    state = live(("100.69.239.123", 49152, "delta-dev"))
     declarations = [
-        decl("arm", "web", want=49152, container="arm-dev", addr="100.69.239.123"),
-        decl("arm", "api", want=49152, container="arm-dev", addr="100.69.239.123"),
+        decl("delta", "web", want=49152, container="delta-dev", addr="100.69.239.123"),
+        decl("delta", "api", want=49152, container="delta-dev", addr="100.69.239.123"),
     ]
 
     first, second = decide(declarations, [], state, TODAY)
@@ -382,23 +382,23 @@ def test_two_ports_of_one_project_are_not_both_grandfathered_onto_one_key():
     assert first.port == 49152
     assert "grandfathered" in first.reason
     assert second.port == BAND_START
-    assert "arm/web" in second.reason
+    assert "delta/web" in second.reason
     assert contending_pairs(apply_decisions([], [first, second], TODAY)) == []
 
 
 def test_grandfathering_does_not_grant_on_top_of_a_strangers_listener():
     """Ownership has to match the address as well as the port.
 
-    arm-dev's own listener sits on 10.0.0.5, not on the requested 127.0.0.1 --
+    delta-dev's own listener sits on 10.0.0.5, not on the requested 127.0.0.1 --
     that address is a stranger's socket. Waving the request through as
-    "already running" would grant arm's declaration straight on top of it. The
+    "already running" would grant delta's declaration straight on top of it. The
     outcome must not depend on which listener happens to be probed first.
     """
-    declaration = decl("arm", "web", want=49152, container="arm-dev", addr="127.0.0.1")
+    declaration = decl("delta", "web", want=49152, container="delta-dev", addr="127.0.0.1")
 
     for pairs in (
-        [("10.0.0.5", 49152, "arm-dev"), ("127.0.0.1", 49152, "stranger")],
-        [("127.0.0.1", 49152, "stranger"), ("10.0.0.5", 49152, "arm-dev")],
+        [("10.0.0.5", 49152, "delta-dev"), ("127.0.0.1", 49152, "stranger")],
+        [("127.0.0.1", 49152, "stranger"), ("10.0.0.5", 49152, "delta-dev")],
     ):
         state = live(*pairs)
         [decision] = decide([declaration], [], state, TODAY)
@@ -412,11 +412,11 @@ def test_grandfathering_still_grants_when_the_own_container_listens_on_the_addr(
     """The positive case: an address match still grandfathers.
 
     Same two listeners as above, but the declaration now asks for the address
-    arm-dev's own container actually listens on. The liveness override must
+    delta-dev's own container actually listens on. The liveness override must
     still fire -- the address check must not over-correct into never matching.
     """
-    state = live(("10.0.0.5", 49152, "arm-dev"), ("127.0.0.1", 49152, "stranger"))
-    declaration = decl("arm", "web", want=49152, container="arm-dev", addr="10.0.0.5")
+    state = live(("10.0.0.5", 49152, "delta-dev"), ("127.0.0.1", 49152, "stranger"))
+    declaration = decl("delta", "web", want=49152, container="delta-dev", addr="10.0.0.5")
 
     [decision] = decide([declaration], [], state, TODAY)
 

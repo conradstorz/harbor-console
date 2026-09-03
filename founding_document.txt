@@ -151,8 +151,9 @@ not a warning. This is the 8080 collision caught at edit time. The bind address
 is part of the key because an address-scoped publish is a real and distinct
 claim: 0.0.0.0 is the wildcard and contends with every address on its host, two
 different specific addresses on one host do not contend with each other, and
-two different hosts never contend at all. That is how ARM keeps
-100.69.239.123:49152 without claiming 49152 from everyone else. See ADR 10.
+two different hosts never contend at all. That is how a container published
+to one specific address keeps 100.69.239.123:49152 without claiming 49152
+from everyone else. See ADR 10.
 
 Every service is declared, including harbor-console-web itself. It takes its
 port from the same file it serves.
@@ -491,11 +492,7 @@ UPS monitoring
 
 Atlas integration
 
-GTE integration
-
 Harbor Window integration
-
-ARM integration
 
 Notifications and alerting
 
