@@ -1006,7 +1006,7 @@ def test_the_ports_url_follows_the_web_lease():
     # The server binds the port its lease grants it, so the client must read
     # the same lease. A URL that did not move with it would strand the
     # allocator on a dead port the first time the page was regranted.
-    other = Lease("gte", "console", "hpz440", "0.0.0.0", 8080, TODAY)
+    other = Lease("acme", "console", "hpz440", "0.0.0.0", 8080, TODAY)
 
     assert cli.ports_url([other, web_lease(8090)]) == "http://hpz440:8090/ports.json"
     assert cli.ports_url([other, web_lease(8100)]) == "http://hpz440:8100/ports.json"
@@ -1018,7 +1018,7 @@ def test_no_web_lease_means_no_url_rather_than_a_guessed_one():
     # guess. The caller turns None into incomplete live state, which is what
     # `sync` already refuses to grant on.
     assert cli.ports_url([]) is None
-    assert cli.ports_url([Lease("gte", "console", "hpz440", "0.0.0.0", 8080, TODAY)]) is None
+    assert cli.ports_url([Lease("acme", "console", "hpz440", "0.0.0.0", 8080, TODAY)]) is None
 
     # Two leases for the page is the ledger harbor-console-web refuses to start
     # on, so nothing is listening for either; picking one would ask an
