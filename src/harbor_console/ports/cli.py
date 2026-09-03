@@ -95,7 +95,14 @@ from harbor_console.ports.keys import env_var_name
 from harbor_console.ports.ledger import Lease, LedgerError, dumps_leases, load_leases, save_leases
 from harbor_console.ports.live import LiveState, LiveUnavailable, fetch_live
 
-PORTS_URL_DEFAULT = "http://hpz440:8090/ports.json"
+#: The service that answers `/ports.json` is itself a leaseholder in the ledger
+#: this command loads, so where to ask for live host state is a question the
+#: ledger already answers. It is not a constant: a hardcoded URL is a second,
+#: silent copy of a lease, and the day that lease is regranted the server
+#: follows it and the client does not -- leaving the allocator permanently
+#: unable to verify host state while looking like a network fault.
+WEB_PROJECT = "harbor-console"
+WEB_PORT_NAME = "web"
 
 EXIT_OK = 0
 EXIT_PENDING = 1
@@ -119,7 +126,9 @@ _WRITE_FAILURES = (DeclarationError, EnvFenceError, OSError, UnicodeDecodeError)
 def _parser() -> argparse.ArgumentParser:
     """Build the argument parser for `harbor-console ports`."""
     parser = argparse.ArgumentParser(prog="harbor-console ports")
-    parser.add_argument("--ports-url", default=PORTS_URL_DEFAULT)
+    # No default: the URL is derived from the ledger (see `ports_url`), which
+    # this parser has not read. An explicit flag still overrides it.
+    parser.add_argument("--ports-url", default=None)
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     for name, help_text in (
@@ -772,6 +781,37 @@ def _show(leases: Sequence[Lease], out: TextIO) -> int:
     return EXIT_OK
 
 
+def ports_url(leases: Sequence[Lease]) -> str | None:
+    """Where to read live host state, according to the ledger itself.
+
+    `/ports.json` is served by `harbor-console-web`, which binds the port its
+    own lease grants it. Deriving the URL from that lease is what keeps the two
+    ends of the same wire together: a hardcoded address is a copy of a lease
+    that nothing updates, so the first reassignment silently strands the
+    allocator on a dead port -- and a `LiveUnavailable` warning reads like the
+    host being down, not like the tool pointing at the wrong place.
+
+    None when the ledger names no such page to ask, which includes the
+    ambiguous case of more than one lease for it: the service refuses to start
+    on that ledger (`webapp.own_lease`), so there is no page listening, and
+    picking one of them would ask an arbitrary host about a different host's
+    ports. There is no fallback host and no guessed port -- an invented URL
+    that answered would be worse than none. The caller treats None as live
+    state being unavailable, which the allocator already handles by refusing to
+    grant a port it cannot verify as unheld.
+    """
+    mine = [
+        lease
+        for lease in leases
+        if lease.project == WEB_PROJECT and lease.name == WEB_PORT_NAME
+    ]
+    if len(mine) != 1:
+        return None
+
+    lease = mine[0]
+    return f"http://{lease.host}:{lease.port}/ports.json"
+
+
 def main(argv: Sequence[str]) -> int:
     """Entry point for `harbor-console ports ...`."""
     try:
@@ -782,10 +822,29 @@ def main(argv: Sequence[str]) -> int:
     root = discovery.tree_root()
     ledger_path = Path(__file__).resolve().parents[3] / "services.toml"
 
-    try:
-        live = fetch_live(args.ports_url)
-    except LiveUnavailable as exc:
-        print(f"warning: {exc}", file=sys.stdout)
+    url = args.ports_url
+    if url is None:
+        # Read here only to find the page to ask; `run` loads the ledger again
+        # as the authority it acts on, and reports a bad one properly. A ledger
+        # that cannot be read names no page either, so this path stays quiet
+        # and lets that happen.
+        try:
+            url = ports_url(load_leases(ledger_path))
+        except LedgerError:
+            url = None
+
+    if url is None:
+        print(
+            f"warning: no single lease for {WEB_PROJECT}/{WEB_PORT_NAME}, so there "
+            "is no /ports.json to read; live host state is unavailable",
+            file=sys.stdout,
+        )
         live = LiveState(host="", listeners=(), complete=False)
+    else:
+        try:
+            live = fetch_live(url)
+        except LiveUnavailable as exc:
+            print(f"warning: {exc}", file=sys.stdout)
+            live = LiveState(host="", listeners=(), complete=False)
 
     return run(argv, root, ledger_path, live, date.today(), sys.stdout)

@@ -40,7 +40,7 @@ update and removal of both.
   > the unit failed. See [A unit that will not stay up](#a-unit-that-will-not-stay-up).
 
 - **`harbor-console` must be declared in `services.toml`** — exactly once, as
-  project `harbor-console`, port name `web`. It is (port 8090 on `hpz440`). The
+  project `harbor-console`, port name `web`. It is (port 8100 on `hpz440`). The
   service takes its port from its own lease and refuses to start without one;
   every service is declared, including this one.
 
@@ -118,7 +118,7 @@ journalctl -u harbor-console-web -f      # follow, e.g. while diagnosing a crash
 A healthy `harbor-console-web` logs exactly one line per start:
 
 ```
-harbor-console-web listening on http://100.69.239.123:8090/
+harbor-console-web listening on http://100.69.239.123:8100/
 ```
 
 Request logging is deliberately off — journald already timestamps what matters.
@@ -127,7 +127,7 @@ So after that line, silence is the normal state.
 Confirm what it actually bound:
 
 ```bash
-sudo ss -ltnp | grep 8090
+sudo ss -ltnp | grep 8100
 ```
 
 The local address must be the Tailscale address. **If it ever shows `0.0.0.0`,
@@ -215,7 +215,7 @@ release criteria that need a live host to verify.
 From a **different** machine on the tailnet:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8090/    # → 200
+curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8100/    # → 200
 ```
 
 MagicDNS resolves the name, which is why there is no discovery protocol. If
@@ -229,17 +229,17 @@ the page still works, it is simply visible to everyone. Verify it two ways.
 On the host, check what is actually bound:
 
 ```bash
-sudo ss -ltnp | grep 8090
+sudo ss -ltnp | grep 8100
 ```
 
-→ the local address must be the Tailscale address (`100.x.y.z:8090`), **never**
-`0.0.0.0:8090` and never `*:8090`.
+→ the local address must be the Tailscale address (`100.x.y.z:8100`), **never**
+`0.0.0.0:8100` and never `*:8100`.
 
 Then, from a machine on the same LAN that is **not** on the tailnet, using the
 host's LAN address (not its tailnet address or MagicDNS name):
 
 ```bash
-curl -sS --connect-timeout 5 http://192.0.2.10:8090/
+curl -sS --connect-timeout 5 http://192.0.2.10:8100/
 ```
 
 → must fail with `Connection refused` (or time out). Anything that returns a
@@ -261,7 +261,7 @@ systemctl show -p MainPID --value harbor-console       # unchanged
 ```bash
 systemctl show -p MainPID --value harbor-console-web   # note the PID
 sudo systemctl kill harbor-console                     # the dashboard restarts within ~2s
-curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8090/   # → 200, uninterrupted
+curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8100/   # → 200, uninterrupted
 systemctl show -p MainPID --value harbor-console-web   # unchanged
 ```
 
@@ -274,7 +274,7 @@ Probing runs in a background thread, so a hung service can never slow a
 request:
 
 ```bash
-time curl -sS -o /dev/null http://hpz440:8090/
+time curl -sS -o /dev/null http://hpz440:8100/
 ```
 
 → well under a second, even while a declared service is not answering.

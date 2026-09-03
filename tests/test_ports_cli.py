@@ -410,7 +410,8 @@ def test_ports_url_is_accepted_before_and_after_the_subcommand(tmp_path: Path):
 
     assert cli._parser().parse_args(["--ports-url", url, "scan"]).ports_url == url
     assert cli._parser().parse_args(["scan", "--ports-url", url]).ports_url == url
-    assert cli._parser().parse_args(["scan"]).ports_url == cli.PORTS_URL_DEFAULT
+    # Unset means "ask the ledger" (see `ports_url`), not a hardcoded address.
+    assert cli._parser().parse_args(["scan"]).ports_url is None
 
     make_project(tmp_path, "alpha", 8080)
     ledger_path = tmp_path / "services.toml"
@@ -994,3 +995,64 @@ def test_new_only_repairs_the_lease_of_a_project_whose_only_port_it_withheld(
     # A repair grants nothing: the ledger is untouched, addr included.
     assert ledger_path.read_text(encoding="utf-8") == before
     assert load_declaration(beta / ".harbor.toml").ports[0].assigned == 8600
+
+
+def web_lease(port: int, host: str = "hpz440") -> Lease:
+    """The lease harbor-console-web binds, and so the page `ports_url` asks."""
+    return Lease("harbor-console", "web", host, "0.0.0.0", port, TODAY)
+
+
+def test_the_ports_url_follows_the_web_lease():
+    # The server binds the port its lease grants it, so the client must read
+    # the same lease. A URL that did not move with it would strand the
+    # allocator on a dead port the first time the page was regranted.
+    other = Lease("gte", "console", "hpz440", "0.0.0.0", 8080, TODAY)
+
+    assert cli.ports_url([other, web_lease(8090)]) == "http://hpz440:8090/ports.json"
+    assert cli.ports_url([other, web_lease(8100)]) == "http://hpz440:8100/ports.json"
+    assert cli.ports_url([web_lease(8100, host="nas")]) == "http://nas:8100/ports.json"
+
+
+def test_no_web_lease_means_no_url_rather_than_a_guessed_one():
+    # Nothing serves /ports.json, so there is no host to invent and no port to
+    # guess. The caller turns None into incomplete live state, which is what
+    # `sync` already refuses to grant on.
+    assert cli.ports_url([]) is None
+    assert cli.ports_url([Lease("gte", "console", "hpz440", "0.0.0.0", 8080, TODAY)]) is None
+
+    # Two leases for the page is the ledger harbor-console-web refuses to start
+    # on, so nothing is listening for either; picking one would ask an
+    # arbitrary host about another host's ports.
+    assert cli.ports_url([web_lease(8100), web_lease(8100, host="nas")]) is None
+
+
+def test_main_reads_live_state_from_the_url_the_ledger_names(monkeypatch, capsys):
+    asked: list[str] = []
+
+    def fake_fetch(url, *args, **kwargs):
+        asked.append(url)
+        return live()
+
+    monkeypatch.setattr(cli, "load_leases", lambda path: [web_lease(8100)])
+    monkeypatch.setattr(cli, "fetch_live", fake_fetch)
+
+    assert cli.main(["show"]) == 0
+    assert asked == ["http://hpz440:8100/ports.json"]
+
+    # An explicit flag still wins: the ledger is the default, not a lock.
+    asked.clear()
+    assert cli.main(["--ports-url", "http://example.invalid:9/ports.json", "show"]) == 0
+    assert asked == ["http://example.invalid:9/ports.json"]
+
+    capsys.readouterr()
+
+
+def test_main_warns_and_grants_nothing_when_no_lease_names_the_page(monkeypatch, capsys):
+    def fake_fetch(url, *args, **kwargs):
+        raise AssertionError(f"nothing should have been asked, got {url}")
+
+    monkeypatch.setattr(cli, "load_leases", lambda path: [])
+    monkeypatch.setattr(cli, "fetch_live", fake_fetch)
+
+    assert cli.main(["show"]) == 0
+    assert "no single lease for harbor-console/web" in capsys.readouterr().out

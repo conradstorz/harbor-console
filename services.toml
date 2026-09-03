@@ -5,6 +5,14 @@
 # 8100-8999 allocation band are grandfathered where they stand; nothing running is
 # renumbered to tidy the band. ARM's 49152 sits inside the Linux ephemeral range
 # (32768-60999) and should move when convenient.
+#
+# Amended by hand 2026-09-02: `schminternet` was found holding 0.0.0.0:8090, a
+# port this ledger had leased to harbor-console/web while believing it free --
+# the container was not running when the ledger was adopted. The incumbent keeps
+# the port, which is the rule the allocator itself applies; harbor-console/web
+# moved to 8100, the lowest free port in the band. Edited by hand because
+# `ports sync` cannot verify host state without /ports.json, which is served by
+# the very service the collision was keeping down.
 
 [[lease]]
 project = "gte"
@@ -27,8 +35,8 @@ project = "harbor-console"
 name    = "web"
 host    = "hpz440"
 addr    = "0.0.0.0"
-port    = 8090
-granted = 2026-09-01
+port    = 8100
+granted = 2026-09-02
 
 [[lease]]
 project = "retirement-planning"
@@ -77,3 +85,16 @@ host    = "hpz440"
 addr    = "100.69.239.123"
 port    = 49152
 granted = 2026-09-01
+
+# The incumbent on 8090. Undeclared until this entry: an ordinary container from
+# the sibling project Internet_Schminternet, publishing 0.0.0.0:8090->8080/tcp.
+# `project` is its container name, which is what lets the port-mismatch rule
+# recognise it later; `granted` is the day it was recorded, not the day it
+# started listening, which is earlier and unknown.
+[[lease]]
+project = "schminternet"
+name    = "web"
+host    = "hpz440"
+addr    = "0.0.0.0"
+port    = 8090
+granted = 2026-09-02
