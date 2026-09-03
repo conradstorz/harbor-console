@@ -33,7 +33,7 @@ def test_load_missing_file_returns_empty_list(tmp_path: Path):
 def test_round_trip_preserves_every_field(tmp_path: Path):
     leases = [
         Lease("acme", "console", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5)),
-        Lease("arm", "web", "hpz440", "100.69.239.123", 49152, date(2026, 8, 1)),
+        Lease("delta", "web", "hpz440", "100.69.239.123", 49152, date(2026, 8, 1)),
     ]
     path = tmp_path / "services.toml"
     save_leases(path, leases)
@@ -59,7 +59,7 @@ def test_duplicate_exact_key_is_a_hard_error(tmp_path: Path):
         'project = "acme"\nname = "console"\nhost = "hpz440"\n'
         'addr = "0.0.0.0"\nport = 8080\ngranted = 2026-07-05\n'
         "\n[[lease]]\n"
-        'project = "imageharbor"\nname = "dashboard"\nhost = "hpz440"\n'
+        'project = "bravo"\nname = "dashboard"\nhost = "hpz440"\n'
         'addr = "0.0.0.0"\nport = 8080\ngranted = 2026-08-09\n',
         encoding="utf-8",
     )

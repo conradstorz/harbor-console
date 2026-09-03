@@ -42,9 +42,9 @@ def test_a_lease_with_a_listener_is_no_drift():
 
 def test_a_wildcard_listener_satisfies_a_specific_address_lease():
     drift = find_drift(
-        [lease("arm", 49152, addr="100.69.239.123")],
+        [lease("delta", 49152, addr="100.69.239.123")],
         [Listener("0.0.0.0", 49152, None)],
-        [Container("arm", (("0.0.0.0", 49152),))],
+        [Container("delta", (("0.0.0.0", 49152),))],
         host=HOST,
     )
 
@@ -111,18 +111,18 @@ def test_two_projects_on_each_others_leased_ports_are_both_a_mismatch():
     could, a straight swap would answer every lease and show a clean page.
     """
     drift = find_drift(
-        [lease("acme", 8080), lease("arm", 9090)],
+        [lease("acme", 8080), lease("delta", 9090)],
         [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9090, None)],
         [
             Container("acme", (("0.0.0.0", 9090),)),
-            Container("arm", (("0.0.0.0", 8080),)),
+            Container("delta", (("0.0.0.0", 8080),)),
         ],
         host=HOST,
     )
 
     assert kinds(drift) == [PORT_MISMATCH, PORT_MISMATCH]
     assert "acme" in drift[0].detail
-    assert "arm" in drift[1].detail
+    assert "delta" in drift[1].detail
 
 
 def test_a_three_way_rotation_names_every_project():
@@ -171,9 +171,9 @@ def test_a_mismatch_does_not_mute_the_projects_other_dead_lease():
 def test_an_unmatched_name_reports_both_halves_instead_of_a_mismatch():
     """Names are matched exactly. Prefix or substring matching must fail here."""
     drift = find_drift(
-        [lease("automatic-ripping-machine", 49152)],
+        [lease("delta-ripping-machine", 49152)],
         [Listener("0.0.0.0", 9999, None)],
-        [Container("arm-rippers-dev", (("0.0.0.0", 9999),))],
+        [Container("delta-rippers-dev", (("0.0.0.0", 9999),))],
         host=HOST,
     )
 
@@ -184,17 +184,17 @@ def test_a_named_swap_is_still_a_mismatch_when_the_other_lease_is_on_another_hos
     """A container named for a fleet project is not a sidecar just because its
     own lease lives elsewhere.
 
-    `arm` holds no lease on this host, so it generates no finding of its own
+    `delta` holds no lease on this host, so it generates no finding of its own
     here -- but its name still names a fleet project. Treating it as an
     anonymous sidecar because its lease is out of scope lets it cover `acme`'s
     lease and swallow the swap `acme` made with it.
     """
     drift = find_drift(
-        [lease("acme", 8080), lease("arm", 8080, host="other")],
+        [lease("acme", 8080), lease("delta", 8080, host="other")],
         [Listener("0.0.0.0", 8080, None), Listener("0.0.0.0", 9090, None)],
         [
             Container("acme", (("0.0.0.0", 9090),)),
-            Container("arm", (("0.0.0.0", 8080),)),
+            Container("delta", (("0.0.0.0", 8080),)),
         ],
         host=HOST,
     )

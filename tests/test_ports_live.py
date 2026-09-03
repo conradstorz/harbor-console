@@ -16,7 +16,7 @@ PAYLOAD = {
     "listening": [
         {"addr": "0.0.0.0", "port": 8080, "container": "acme"},
         {"addr": "127.0.0.1", "port": 5432, "container": "shared-postgres"},
-        {"addr": "100.69.239.123", "port": 49152, "container": "arm-rippers-dev"},
+        {"addr": "100.69.239.123", "port": 49152, "container": "delta-rippers-dev"},
         {"addr": "0.0.0.0", "port": 22, "container": None},
     ],
 }
@@ -105,13 +105,13 @@ def test_container_on_with_an_address_matches_the_overlapping_listener():
     state = LiveState(
         host="hpz440",
         listeners=(
-            Listener(addr="10.0.0.5", port=49152, container="arm-dev"),
+            Listener(addr="10.0.0.5", port=49152, container="delta-dev"),
             Listener(addr="127.0.0.1", port=49152, container="stranger"),
         ),
         complete=True,
     )
 
-    assert state.container_on(49152, "10.0.0.5") == "arm-dev"
+    assert state.container_on(49152, "10.0.0.5") == "delta-dev"
     assert state.container_on(49152, "127.0.0.1") == "stranger"
 
 

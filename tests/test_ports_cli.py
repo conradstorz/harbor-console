@@ -90,7 +90,7 @@ def test_incumbent_keeps_the_port_and_the_newcomer_is_moved(tmp_path: Path):
     make_project(tmp_path, "acme", 8080)
     ledger_path = tmp_path / "services.toml"
     save_leases(ledger_path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
-    newcomer = make_project(tmp_path, "imageharbor", 8080)
+    newcomer = make_project(tmp_path, "bravo", 8080)
 
     code, output = run(["sync"], tmp_path, ledger_path)
 
@@ -98,18 +98,18 @@ def test_incumbent_keeps_the_port_and_the_newcomer_is_moved(tmp_path: Path):
     assert "acme" in output
     assert load_declaration(newcomer / ".harbor.toml").ports[0].assigned == 8100
     held = {lease.project: lease.port for lease in load_leases(ledger_path)}
-    assert held == {"acme": 8080, "imageharbor": 8100}
+    assert held == {"acme": 8080, "bravo": 8100}
 
 
 def test_new_only_grants_new_but_withholds_a_reassignment(tmp_path: Path):
     ledger_path = tmp_path / "services.toml"
-    # Only acme holds a lease. imageharbor's declaration still claims 8080, so it
+    # Only acme holds a lease. bravo's declaration still claims 8080, so it
     # must be reassigned -- and an unattended run must refuse to do that.
     save_leases(ledger_path, [Lease("acme", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 5))])
     make_project(tmp_path, "acme", 8080)
-    moved = make_project(tmp_path, "imageharbor", 8080)
+    moved = make_project(tmp_path, "bravo", 8080)
     (moved / ".harbor.toml").write_text(
-        'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
+        'project = "bravo"\nhost = "hpz440"\n\n[[port]]\n'
         'name = "web"\nwant = 8080\nassigned = 8080\n',
         encoding="utf-8",
     )
@@ -338,18 +338,18 @@ def _widened_onto_an_incumbent(root: Path, ledger_path: Path, extra: str = "") -
 
     The incumbent is never renumbered, so a project can only be reassigned off a
     port it actually holds by widening its own address onto a senior lease:
-    imageharbor holds 192.168.1.5:8080 and now asks to bind 0.0.0.0:8080, which
+    bravo holds 192.168.1.5:8080 and now asks to bind 0.0.0.0:8080, which
     acme has held at 127.0.0.1:8080 since longer ago. Two specific addresses do
     not contend, so both leases are legal in the ledger; the widening is what
     makes them contend, and the junior is the one that moves.
 
-    Returns imageharbor's directory. `extra` is appended to its declaration.
+    Returns bravo's directory. `extra` is appended to its declaration.
     """
     save_leases(
         ledger_path,
         [
             Lease("acme", "web", "hpz440", "127.0.0.1", 8080, date(2026, 7, 5)),
-            Lease("imageharbor", "web", "hpz440", "192.168.1.5", 8080, date(2026, 8, 1)),
+            Lease("bravo", "web", "hpz440", "192.168.1.5", 8080, date(2026, 8, 1)),
         ],
     )
     incumbent = root / "acme"
@@ -359,10 +359,10 @@ def _widened_onto_an_incumbent(root: Path, ledger_path: Path, extra: str = "") -
         'name = "web"\nwant = 8080\nassigned = 8080\naddr = "127.0.0.1"\n',
         encoding="utf-8",
     )
-    moved = root / "imageharbor"
+    moved = root / "bravo"
     moved.mkdir()
     (moved / ".harbor.toml").write_text(
-        'project = "imageharbor"\nhost = "hpz440"\n\n[[port]]\n'
+        'project = "bravo"\nhost = "hpz440"\n\n[[port]]\n'
         'name = "web"\nwant = 8080\nassigned = 8080\naddr = "0.0.0.0"\n' + extra,
         encoding="utf-8",
     )
@@ -398,8 +398,8 @@ def test_new_only_keeps_the_withheld_ports_current_number_in_env(tmp_path: Path)
     }
     assert held == {
         ("acme", "web"): ("127.0.0.1", 8080),
-        ("imageharbor", "web"): ("192.168.1.5", 8080),  # the withheld lease stands
-        ("imageharbor", "api"): ("0.0.0.0", 8600),
+        ("bravo", "web"): ("192.168.1.5", 8080),  # the withheld lease stands
+        ("bravo", "api"): ("0.0.0.0", 8600),
     }
 
 
@@ -524,7 +524,7 @@ def test_a_degraded_run_reports_drift_against_the_held_port_not_the_refused_one(
     assert not (moved / ".env").exists()
     assert {
         (lease.project, lease.addr): lease.port for lease in load_leases(ledger_path)
-    } == {("acme", "127.0.0.1"): 8080, ("imageharbor", "192.168.1.5"): 8080}
+    } == {("acme", "127.0.0.1"): 8080, ("bravo", "192.168.1.5"): 8080}
 
 
 def test_a_compose_file_that_is_not_utf8_is_skipped_not_a_traceback(tmp_path: Path):

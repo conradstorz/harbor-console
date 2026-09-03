@@ -9,13 +9,13 @@ from harbor_console.ports.declaration import (
 )
 
 FULL = """\
-project = "imageharbor"
+project = "bravo"
 host    = "hpz440"
 
 [[port]]
 name          = "dashboard"   # the web UI
 want          = 8080
-container     = "imageharbor"
+container     = "bravo"
 health_path   = "/"
 hcstatus_path = "/hcstatus"
 description   = "Photo organiser dashboard"
@@ -31,7 +31,7 @@ def _write(tmp_path: Path, text: str) -> Path:
 def test_load_reads_every_field(tmp_path: Path):
     decl = load_declaration(_write(tmp_path, FULL))
 
-    assert decl.project == "imageharbor"
+    assert decl.project == "bravo"
     assert decl.host == "hpz440"
     assert len(decl.ports) == 1
     port = decl.ports[0]
@@ -39,7 +39,7 @@ def test_load_reads_every_field(tmp_path: Path):
     assert port.want == 8080
     assert port.assigned is None
     assert port.addr == "0.0.0.0"
-    assert port.container == "imageharbor"
+    assert port.container == "bravo"
     assert port.health_path == "/"
     assert port.hcstatus_path == "/hcstatus"
 

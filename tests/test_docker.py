@@ -14,13 +14,13 @@ def fake_run(stdout="", returncode=0, raises=None):
 
 
 def test_parses_names_and_published_ports():
-    out = "acme\t0.0.0.0:8080->8080/tcp\narm\t100.69.239.123:49152->8080/tcp\n"
+    out = "acme\t0.0.0.0:8080->8080/tcp\ndelta\t100.69.239.123:49152->8080/tcp\n"
 
     result = running_containers(run=fake_run(out))
 
     assert result == (
         Container("acme", (("0.0.0.0", 8080),)),
-        Container("arm", (("100.69.239.123", 49152),)),
+        Container("delta", (("100.69.239.123", 49152),)),
     )
 
 
