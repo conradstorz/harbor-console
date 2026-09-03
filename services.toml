@@ -6,13 +6,20 @@
 # renumbered to tidy the band. ARM's 49152 sits inside the Linux ephemeral range
 # (32768-60999) and should move when convenient.
 #
-# Amended by hand 2026-09-02: `schminternet` was found holding 0.0.0.0:8090, a
-# port this ledger had leased to harbor-console/web while believing it free --
-# the container was not running when the ledger was adopted. The incumbent keeps
-# the port, which is the rule the allocator itself applies; harbor-console/web
-# moved to 8100, the lowest free port in the band. Edited by hand because
-# `ports sync` cannot verify host state without /ports.json, which is served by
-# the very service the collision was keeping down.
+# Amended by hand 2026-09-02, then again the same day. `schminternet` was found
+# holding 0.0.0.0:8090 -- a port this ledger had leased to harbor-console/web
+# while believing it free, because that container was not running when the ledger
+# was adopted. harbor-console/web was moved aside to 8100 on the incumbent-keeps-
+# the-port rule the allocator itself applies.
+#
+# schminternet then moved itself to 8099, so the collision resolved on its own and
+# the move was undone: harbor-console/web holds 8090 again, its original grant, and
+# it is what is running on the host. schminternet is recorded on 8099 so the ledger
+# stops believing that port is free. Its `granted` date is the day it was noticed,
+# not the day it started listening, which is earlier and unknown.
+#
+# Both amendments were by hand because `ports sync` cannot verify host state
+# without /ports.json, which is served by the very service a collision keeps down.
 
 [[lease]]
 project = "gte"
@@ -35,8 +42,8 @@ project = "harbor-console"
 name    = "web"
 host    = "hpz440"
 addr    = "0.0.0.0"
-port    = 8100
-granted = 2026-09-02
+port    = 8090
+granted = 2026-09-01
 
 [[lease]]
 project = "retirement-planning"
@@ -96,5 +103,5 @@ project = "schminternet"
 name    = "web"
 host    = "hpz440"
 addr    = "0.0.0.0"
-port    = 8090
+port    = 8099
 granted = 2026-09-02
