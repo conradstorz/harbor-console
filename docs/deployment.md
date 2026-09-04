@@ -40,7 +40,7 @@ update and removal of both.
   > the unit failed. See [A unit that will not stay up](#a-unit-that-will-not-stay-up).
 
 - **`harbor-console` must be declared in `services.toml`** — exactly once, as
-  project `harbor-console`, port name `web`. It is (port 8090 on `hpz440`). The
+  project `harbor-console`, port name `web`. It is (port 80 on `hpz440`). The
   service takes its port from its own lease and refuses to start without one;
   every service is declared, including this one.
 
@@ -70,6 +70,28 @@ The installer is idempotent — re-run it any time to update.
 The ledger the web service reads is `/opt/harbor-console/services.toml` — the
 copy `rsync` just made, not the one in your checkout. Granting a lease on the
 dev box therefore does not reach the server until you re-run the installer.
+
+### Why an unprivileged service can hold port 80
+
+The page's lease is port 80, which is what makes its address just
+`http://hpz440/` with no port to remember. Ports below 1024 are privileged, and
+`harbor-console-web` runs as the unprivileged `harbor` user — so the unit grants
+the one capability that gap needs, and no more:
+
+```ini
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+```
+
+`AmbientCapabilities` hands the process exactly one privilege at exec, *may bind
+a low port*; `CapabilityBoundingSet` makes that the only privilege it could ever
+hold. The service is not root and does not become root. Nor does this weaken
+`NoNewPrivileges=yes` above it: that directive forbids a process from *gaining*
+privilege after exec — the setuid path — while ambient capabilities are handed
+to it by systemd at exec, so the two work together.
+
+Both lines are load-bearing. Delete either and the unit crash-loops on a
+permission-denied bind; see the table below.
 
 ## Admin access (important)
 
@@ -118,7 +140,7 @@ journalctl -u harbor-console-web -f      # follow, e.g. while diagnosing a crash
 A healthy `harbor-console-web` logs exactly one line per start:
 
 ```
-harbor-console-web listening on http://100.69.239.123:8090/
+harbor-console-web listening on http://100.69.239.123:80/
 ```
 
 Request logging is deliberately off — journald already timestamps what matters.
@@ -127,7 +149,7 @@ So after that line, silence is the normal state.
 Confirm what it actually bound:
 
 ```bash
-sudo ss -ltnp | grep 8090
+sudo ss -ltnp | grep ':80 '
 ```
 
 The local address must be the Tailscale address. **If it ever shows `0.0.0.0`,
@@ -173,9 +195,10 @@ journalctl -u harbor-console-web -b | grep '^.*error:'
 | `error: tailscale ip -4 did not answer within 5.0s` | The binary hung. The timeout is deliberate: a hang with no timeout would leave the unit "starting" forever with nothing in the journal. | Investigate `tailscaled`; restarting it usually clears it. |
 | `error: /opt/harbor-console/services.toml: ...` | **Unreadable ledger** — the file exists but is not valid TOML, a lease is missing a field, a lease has a bad `port` or `granted` date, or the same `(host, addr, port)` is claimed twice. The message names the file and the fault. A *missing* `services.toml` does **not** land here — `load_leases` treats a missing file as an empty ledger, which surfaces below as "not declared" instead. | Fix `services.toml` in your checkout, re-run `sudo deploy/install.sh`. Do not hand-edit the deployed copy; the next install overwrites it. |
 | `error: no lease for harbor-console/web; this service must be declared` | **Not declared** — the ledger carries no lease for this service. This is also what a completely missing `services.toml` produces, since a missing file loads as an empty ledger rather than an error. A page bound to a port no lease reserves is exactly the collision the ledger exists to prevent, so there is no default port. | Declare it in `.harbor.toml`, run `harbor-console ports sync` on the dev box, re-run the installer. |
-| `error: 2 leases for harbor-console/web, on hpz440 (0.0.0.0:8090), other (0.0.0.0:8090); running on more than one host needs an explicit choice of identity, which this service does not have` | **Declared more than once.** The ledger is fleet-wide, so two machines may each legitimately declare it; picking the first would bind a port this host may not hold and label the page a machine it is not. There is no hostname tiebreak on purpose. | Leave exactly one `harbor-console`/`web` lease in `services.toml` until multi-host operation is designed. |
-| `error: could not bind 100.69.239.123:8090: [Errno 98] Address already in use` | Something else holds the leased port — often a previous instance that has not exited, or an undeclared container. | `sudo ss -ltnp \| grep 8090` to find the holder. |
-| `error: could not bind 100.69.239.123:8090: [Errno 99] Cannot assign requested address` | The Tailscale address answered but is not on this machine's interfaces yet — usually a race just after boot. Systemd's retry normally resolves it. | If it persists, check `ip -4 addr show tailscale0`. |
+| `error: 2 leases for harbor-console/web, on hpz440 (0.0.0.0:80), other (0.0.0.0:80); running on more than one host needs an explicit choice of identity, which this service does not have` | **Declared more than once.** The ledger is fleet-wide, so two machines may each legitimately declare it; picking the first would bind a port this host may not hold and label the page a machine it is not. There is no hostname tiebreak on purpose. | Leave exactly one `harbor-console`/`web` lease in `services.toml` until multi-host operation is designed. |
+| `error: could not bind 100.69.239.123:80: [Errno 13] Permission denied` | **The capability grant is missing.** Port 80 is privileged and the service runs as `harbor`; the unit's `AmbientCapabilities=CAP_NET_BIND_SERVICE` is what lets it bind at all. Usually means an edited or stale unit on the host. | Check `systemctl cat harbor-console-web` for both capability lines, restore them from the checkout, `sudo deploy/install.sh`. |
+| `error: could not bind 100.69.239.123:80: [Errno 98] Address already in use` | Something else holds the leased port — often a previous instance that has not exited, or an undeclared container. | `sudo ss -ltnp \| grep ':80 '` to find the holder. |
+| `error: could not bind 100.69.239.123:80: [Errno 99] Cannot assign requested address` | The Tailscale address answered but is not on this machine's interfaces yet — usually a race just after boot. Systemd's retry normally resolves it. | If it persists, check `ip -4 addr show tailscale0`. |
 
 ### The page is up but says something is wrong
 
@@ -215,7 +238,7 @@ release criteria that need a live host to verify.
 From a **different** machine on the tailnet:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8090/    # → 200
+curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440/    # → 200
 ```
 
 MagicDNS resolves the name, which is why there is no discovery protocol. If
@@ -229,17 +252,17 @@ the page still works, it is simply visible to everyone. Verify it two ways.
 On the host, check what is actually bound:
 
 ```bash
-sudo ss -ltnp | grep 8090
+sudo ss -ltnp | grep ':80 '
 ```
 
-→ the local address must be the Tailscale address (`100.x.y.z:8090`), **never**
-`0.0.0.0:8090` and never `*:8090`.
+→ the local address must be the Tailscale address (`100.x.y.z:80`), **never**
+`0.0.0.0:80` and never `*:80`.
 
 Then, from a machine on the same LAN that is **not** on the tailnet, using the
 host's LAN address (not its tailnet address or MagicDNS name):
 
 ```bash
-curl -sS --connect-timeout 5 http://192.0.2.10:8090/
+curl -sS --connect-timeout 5 http://192.0.2.10/
 ```
 
 → must fail with `Connection refused` (or time out). Anything that returns a
@@ -261,7 +284,7 @@ systemctl show -p MainPID --value harbor-console       # unchanged
 ```bash
 systemctl show -p MainPID --value harbor-console-web   # note the PID
 sudo systemctl kill harbor-console                     # the dashboard restarts within ~2s
-curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440:8090/   # → 200, uninterrupted
+curl -sS -o /dev/null -w '%{http_code}\n' http://hpz440/   # → 200, uninterrupted
 systemctl show -p MainPID --value harbor-console-web   # unchanged
 ```
 
@@ -274,7 +297,7 @@ Probing runs in a background thread, so a hung service can never slow a
 request:
 
 ```bash
-time curl -sS -o /dev/null http://hpz440:8090/
+time curl -sS -o /dev/null http://hpz440/
 ```
 
 → well under a second, even while a declared service is not answering.

@@ -4,8 +4,8 @@ host    = "hpz440"
 
 [[port]]
 name          = "web"
-want          = 8090
-assigned      = 8090
+want          = 80
+assigned      = 80
 container     = "harbor-console-web"
 health_path   = "/"
 hcstatus_path = "/hcstatus"

@@ -13,6 +13,15 @@ User=harbor
 Group=harbor
 SupplementaryGroups=docker
 NoNewPrivileges=yes
+# The page's lease is port 80, which only a privileged process may bind -- and
+# this service runs as `harbor`. These two lines are that grant, and are not
+# noise: the first hands the process exactly one capability, "may bind a low
+# port"; the second caps what it could ever hold at that same one. Ambient
+# capabilities are granted by systemd at exec rather than gained afterwards, so
+# they are not the setuid-style escalation NoNewPrivileges=yes above forbids.
+# Remove either line and the unit crash-loops on a permission-denied bind.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ProtectHome=yes
 PrivateTmp=yes
 StandardOutput=journal
