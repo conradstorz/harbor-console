@@ -144,7 +144,10 @@ def own_port(leases: Iterable[Lease]) -> int:
 
 
 def starting_snapshot(
-    host: str, leases: tuple[Lease, ...], now: datetime
+    host: str,
+    leases: tuple[Lease, ...],
+    now: datetime,
+    tailnet_address: str | None = None,
 ) -> Snapshot:
     """The page's first answer, standing only until the prober's first cycle.
 
@@ -165,6 +168,7 @@ def starting_snapshot(
             "current_datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         },
         leases=leases,
+        tailnet_address=tailnet_address,
     )
 
 
@@ -194,6 +198,7 @@ def collect_snapshot(
     containers: Callable[[], tuple[Container, ...]] = running_containers,
     prober: Callable[[str, int], Health] = probe,
     ledger_mtime: Callable[[], datetime | None] = read_ledger_mtime,
+    tailnet_address: str | None = None,
 ) -> Snapshot:
     """Gather every source once and fold it into one snapshot.
 
@@ -243,6 +248,7 @@ def collect_snapshot(
         drift=find_drift(held, found, running, host),
         collection_error=None,
         probed=True,
+        tailnet_address=tailnet_address,
     )
 
 
@@ -296,7 +302,7 @@ def _reason(exc: Exception) -> str:
 def main(
     argv: list[str] | None = None,
     server_factory: Callable[..., object] = ThreadingHTTPServer,
-    start_prober: Callable[[SnapshotHolder, str], None] | None = None,
+    start_prober: Callable[[SnapshotHolder, str, str], None] | None = None,
 ) -> int:
     """Entry point. Refuses to start rather than binding anything broader.
 
@@ -326,7 +332,9 @@ def main(
     # The one place the served host is decided, and the only place it can be:
     # the lease this process holds. Everything downstream is handed this value.
     host = lease.host
-    holder = SnapshotHolder(starting_snapshot(host, leases, datetime.now()))
+    holder = SnapshotHolder(
+        starting_snapshot(host, leases, datetime.now(), tailnet_address=address)
+    )
 
     try:
         server = server_factory((address, lease.port), make_handler(holder.get))
@@ -345,7 +353,7 @@ def main(
     # promises comes first.
     if start_prober is None:
         start_prober = _default_prober
-    start_prober(holder, host)
+    start_prober(holder, host, address)
 
     print(f"harbor-console-web listening on http://{address}:{lease.port}/")
     try:
@@ -357,7 +365,7 @@ def main(
     return EXIT_OK
 
 
-def _default_prober(holder: SnapshotHolder, host: str) -> None:
+def _default_prober(holder: SnapshotHolder, host: str, tailnet_address: str) -> None:
     """Start the real prober thread against the real collectors.
 
     The ledger is re-read every cycle, so `ports sync` granting a lease shows
@@ -369,7 +377,12 @@ def _default_prober(holder: SnapshotHolder, host: str) -> None:
     """
 
     def collect() -> Snapshot:
-        return collect_snapshot(load_leases(LEDGER_PATH), host, datetime.now())
+        return collect_snapshot(
+            load_leases(LEDGER_PATH),
+            host,
+            datetime.now(),
+            tailnet_address=tailnet_address,
+        )
 
     thread = threading.Thread(
         target=probe_loop, args=(holder, collect), name="harbor-prober", daemon=True

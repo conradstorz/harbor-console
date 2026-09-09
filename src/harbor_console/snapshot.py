@@ -65,3 +65,11 @@ class Snapshot:
     #: which collects nothing, leaves it False so the page can say "not yet"
     #: rather than assert a state it has never looked at.
     probed: bool = False
+    #: The tailnet address this process bound, which is the address on which
+    #: every service on the served host is actually reachable. Decided once at
+    #: startup and passed down, never re-resolved per cycle, for the same
+    #: reason `metrics["hostname"]` is: a page that bound one address must not
+    #: begin advertising another without a restart. None means it is not
+    #: known -- a snapshot built outside `webapp.main`, as in a test -- and the
+    #: renderer then falls back to what the ledger says.
+    tailnet_address: str | None = None

@@ -203,7 +203,7 @@ def test_main_binds_the_tailnet_address_and_the_leased_port(monkeypatch):
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
     monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
 
-    result = webapp.main(server_factory=FakeServer, start_prober=lambda _holder, _host: None)
+    result = webapp.main(server_factory=FakeServer, start_prober=lambda _holder, _host, _addr: None)
 
     assert result == 0
     assert bound["address"] == ("100.69.239.123", 8090)
@@ -237,7 +237,7 @@ def test_main_starts_the_prober_after_the_bind_and_before_it_serves(monkeypatch)
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
     monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
 
-    def start(_holder, host):
+    def start(_holder, host, _addr):
         order.append("probing")
         given["host"] = host
 
@@ -256,7 +256,7 @@ def test_main_reports_a_bind_that_fails(monkeypatch):
     def factory(_address, _handler):
         raise OSError("address already in use")
 
-    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host: None)
+    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
 
     assert result != 0
 
@@ -280,7 +280,7 @@ def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch):
     def factory(_address, _handler):
         called["served"] = True
 
-    result = webapp.main(server_factory=factory, start_prober=lambda _holder, _host: None)
+    result = webapp.main(server_factory=factory, start_prober=lambda _holder, _host, _addr: None)
 
     assert result != 0
     assert called["served"] is False
@@ -294,7 +294,7 @@ def test_main_refuses_to_start_when_the_ledger_is_unreadable(monkeypatch):
 
     monkeypatch.setattr(webapp, "load_leases", boom)
 
-    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host: None)
+    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host, _addr: None)
 
     assert result != 0
 
@@ -303,7 +303,7 @@ def test_main_refuses_to_start_when_its_own_lease_is_missing(monkeypatch):
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
     monkeypatch.setattr(webapp, "load_leases", lambda _path: [GTE_LEASE])
 
-    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host: None)
+    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host, _addr: None)
 
     assert result != 0
 
@@ -387,7 +387,7 @@ def test_main_refuses_to_start_when_its_own_lease_is_ambiguous(monkeypatch):
     def factory(_address, _handler):
         called["served"] = True
 
-    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host: None)
+    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
 
     assert result != 0
     assert called["served"] is False
@@ -472,7 +472,7 @@ def test_a_failed_bind_starts_no_prober(monkeypatch):
     def factory(_address, _handler):
         raise OSError("address already in use")
 
-    def start(_holder, _host):
+    def start(_holder, _host, _addr):
         started["probing"] = True
 
     assert webapp.main(server_factory=factory, start_prober=start) != 0
@@ -622,9 +622,95 @@ def test_every_refusal_says_why_on_stderr(monkeypatch, capsys):
         monkeypatch.setattr(webapp, "load_leases", leases)
         capsys.readouterr()
 
-        result = webapp.main(server_factory=factory, start_prober=lambda _h, _host: None)
+        result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
 
         captured = capsys.readouterr()
         assert result != 0
         assert expected in captured.err, f"{expected!r} missing from {captured.err!r}"
         assert captured.err.startswith("error:")
+
+
+def test_the_starting_snapshot_carries_the_tailnet_address():
+    """The address is known before the first page is served -- `main` resolves
+    it to bind -- so the page can name it from the very first request rather
+    than waiting a cycle for something it already has.
+    """
+    snapshot = webapp.starting_snapshot(
+        "hpz440",
+        (WEB_LEASE,),
+        datetime(2026, 9, 2, 14, 2, 11),
+        tailnet_address="100.69.239.123",
+    )
+
+    assert snapshot.tailnet_address == "100.69.239.123"
+
+
+def test_collect_snapshot_carries_the_tailnet_address():
+    snapshot = webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (),
+        containers=lambda: (),
+        prober=lambda host, port: Health(True, None, None, (), None),
+        tailnet_address="100.69.239.123",
+    )
+
+    assert snapshot.tailnet_address == "100.69.239.123"
+
+
+def test_main_hands_the_prober_the_address_it_bound(monkeypatch):
+    """The served address is decided once, where the host is, and passed down.
+    Re-resolving it per cycle would let a page bound to one address start
+    advertising another without a restart.
+    """
+    seen = {}
+
+    class FakeServer:
+        def __init__(self, address, handler):
+            pass
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def start(_holder, host, tailnet_address):
+        seen["host"] = host
+        seen["tailnet_address"] = tailnet_address
+
+    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
+    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
+
+    assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
+    assert seen == {"host": "hpz440", "tailnet_address": "100.69.239.123"}
+
+
+def test_the_page_names_the_tailnet_address_before_the_first_cycle(monkeypatch):
+    """End to end through the starting snapshot: the address `main` bound is
+    what the very first page shows for a wildcard lease.
+    """
+    holder = {}
+
+    class FakeServer:
+        def __init__(self, address, handler):
+            holder["handler"] = handler
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    captured = {}
+
+    def start(snapshot_holder, _host, _tailnet_address):
+        captured["snapshot"] = snapshot_holder.get()
+
+    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
+    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
+
+    assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
+    assert b"100.69.239.123:8080" in web.render_page(captured["snapshot"])

@@ -610,3 +610,95 @@ def test_handler_returns_500_when_the_snapshot_source_itself_raises():
 
     assert status == 500
     assert body == b"internal error\n"
+
+
+def test_a_wildcard_lease_is_shown_at_the_hosts_tailnet_address():
+    """`0.0.0.0` is a bind, not somewhere anyone can point a browser. When the
+    page knows the tailnet address it was bound to, that is the address a
+    reader can actually reach the service on, so it is the one to show.
+    """
+    html = render_page(snapshot(tailnet_address="100.69.239.123")).decode()
+
+    assert "100.69.239.123:8080" in html
+    assert 'href="http://100.69.239.123:8080/"' in html
+    assert "0.0.0.0:8080" not in html
+
+
+def test_a_lease_already_on_the_tailnet_address_is_linked_there():
+    """ARM holds `100.69.239.123:49152` literally. Its address is unchanged;
+    what changes is that the link points at the address rather than the
+    hostname, so the page is consistent about how a service is reached.
+    """
+    arm = Lease("arm", "web", "hpz440", "100.69.239.123", 49152, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(arm,),
+            listeners=(Listener("100.69.239.123", 49152, None),),
+            containers=(),
+            health={("arm", "web"): Health(True, None, None, (), None)},
+            tailnet_address="100.69.239.123",
+        )
+    ).decode()
+
+    assert 'href="http://100.69.239.123:49152/"' in html
+
+
+def test_a_loopback_lease_is_not_advertised_on_the_tailnet():
+    """A service bound to `127.0.0.1` is genuinely unreachable from the
+    tailnet. Substituting the tailnet address there would publish a link that
+    cannot work, and would claim reachability the bind refuses.
+    """
+    local = Lease("shared", "postgres", "hpz440", "127.0.0.1", 5432, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(local,),
+            listeners=(Listener("127.0.0.1", 5432, None),),
+            containers=(),
+            health={("shared", "postgres"): Health(False, None, None, (), None)},
+            tailnet_address="100.69.239.123",
+        )
+    ).decode()
+
+    assert "127.0.0.1:5432" in html
+    assert "100.69.239.123:5432" not in html
+
+
+def test_an_off_host_lease_does_not_borrow_this_hosts_tailnet_address():
+    """`snapshot.leases` is fleet-wide; the tailnet address is this host's
+    alone. A lease on another host shown at this host's address would send a
+    reader to the wrong machine -- the same filter `_lease_has_listener`
+    applies, at the point where the page prints an address.
+    """
+    elsewhere = Lease("elsewhere-proj", "svc", "other-host", "0.0.0.0", 9999, date(2026, 9, 1))
+    html = render_page(
+        snapshot(
+            leases=(elsewhere,),
+            listeners=(),
+            containers=(),
+            health={("elsewhere-proj", "svc"): Health(False, None, None, (), None)},
+            tailnet_address="100.69.239.123",
+        )
+    ).decode()
+
+    assert "0.0.0.0:9999" in html
+    assert "100.69.239.123:9999" not in html
+
+
+def test_the_address_falls_back_to_the_lease_when_the_tailnet_is_unknown():
+    """No address known means nothing to substitute: the page shows what the
+    ledger says and links the hostname, exactly as it did before.
+    """
+    html = render_page(snapshot()).decode()
+
+    assert "0.0.0.0:8080" in html
+    assert 'href="http://hpz440:8080/"' in html
+
+
+def test_the_host_table_names_the_tailnet_address():
+    html = render_page(snapshot(tailnet_address="100.69.239.123")).decode()
+
+    assert "Tailnet" in html
+
+
+def test_the_host_table_omits_the_tailnet_row_when_the_address_is_unknown():
+    assert "Tailnet" not in render_page(snapshot()).decode()

@@ -161,6 +161,12 @@ def _host_table(snapshot: Snapshot) -> str:
         ("Containers", snapshot.metrics["docker_container_count"]),
         ("Time", snapshot.metrics["current_datetime"]),
     ]
+    if snapshot.tailnet_address is not None:
+        # Named rather than omitted-with-a-placeholder: an unknown address is
+        # only reachable in a test or a hand-built snapshot, because `main`
+        # refuses to start without one. There is nothing on the real page for
+        # an "unknown" row to tell anybody.
+        rows.insert(5, ("Tailnet", snapshot.tailnet_address))
     cells = "".join(
         f"<tr><td>{escape(label)}</td><td>{escape(str(value))}</td></tr>"
         for label, value in rows
@@ -194,6 +200,36 @@ def _lease_has_listener(snapshot: Snapshot, lease: Lease) -> bool:
     )
 
 
+def _service_address(snapshot: Snapshot, lease: Lease) -> str:
+    """The address a reader can actually reach this lease on.
+
+    `0.0.0.0` is a bind, not a destination: nobody can point a browser at it.
+    When the page knows the tailnet address it was bound to, that is the
+    address the service answers on, so it is the one worth printing.
+
+    Two conditions guard the substitution, and both are the difference between
+    a useful link and a wrong one. The lease must belong to the host this page
+    serves -- `snapshot.leases` is fleet-wide while the tailnet address is this
+    machine's alone, so a lease on another host shown here would send a reader
+    to the wrong machine, the same filter `_lease_has_listener` applies. And
+    the lease's address must overlap the tailnet address by
+    `ports.keys.addrs_overlap`, the rule the rest of the project joins on: a
+    wildcard lease overlaps and is substituted, a lease already recorded at
+    that address matches it exactly, and a loopback lease overlaps neither, so
+    `127.0.0.1` stays `127.0.0.1`. A service bound to loopback genuinely is
+    not on the tailnet, and a link claiming otherwise would advertise
+    reachability the bind refuses.
+    """
+    tailnet = snapshot.tailnet_address
+    if tailnet is None:
+        return lease.addr
+    if lease.host != str(snapshot.metrics["hostname"]):
+        return lease.addr
+    if not addrs_overlap(lease.addr, tailnet):
+        return lease.addr
+    return tailnet
+
+
 def _services_table(snapshot: Snapshot) -> str:
     """Render the directory, saying "unknown" until something has been probed.
 
@@ -219,7 +255,16 @@ def _services_table(snapshot: Snapshot) -> str:
     for lease in snapshot.leases:
         health = snapshot.health.get((lease.project, lease.name))
         up = health is not None and health.up
-        url = f"http://{lease.host}:{lease.port}/"
+        addr = _service_address(snapshot, lease)
+        # Link the address when it is the one this page is reachable at, and
+        # the hostname otherwise. Reaching a service by the address the page
+        # prints is the point; a lease that kept its own address keeps the
+        # hostname link it always had, which is no worse than before.
+        url = (
+            f"http://{addr}:{lease.port}/"
+            if addr == snapshot.tailnet_address
+            else f"http://{lease.host}:{lease.port}/"
+        )
         if not snapshot.probed:
             status = "UNKNOWN"
         elif up:
@@ -232,7 +277,7 @@ def _services_table(snapshot: Snapshot) -> str:
         summary = escape(health.summary) if health and health.summary else ""
         rows.append(
             f"<tr><td>{escape(lease.project)}/{escape(lease.name)}</td>"
-            f"<td><a href=\"{escape(url)}\">{escape(lease.addr)}:{lease.port}</a></td>"
+            f"<td><a href=\"{escape(url)}\">{escape(addr)}:{lease.port}</a></td>"
             f"<td>{status}</td><td>{summary}</td></tr>"
         )
         if health is not None:
