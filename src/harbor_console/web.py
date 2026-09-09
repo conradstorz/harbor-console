@@ -12,13 +12,14 @@ start or stop a container.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
 from harbor_console.addressing import fronts_for, reachable_address
 from harbor_console.ports.keys import addrs_overlap
 from harbor_console.ports.ledger import Lease
+from harbor_console.serve import Proxy
 from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
@@ -35,6 +36,7 @@ h1, h2 { font-weight: 600; }
 table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
 td, th { text-align: left; padding: 0.25rem 0.75rem 0.25rem 0; vertical-align: top; }
 tr.detail td { padding-left: 2rem; opacity: 0.75; }
+.leased { opacity: 0.7; }
 .down { font-weight: 700; }
 .banner { border: 1px solid; padding: 0.5rem 0.75rem; margin-bottom: 1.5rem; }
 .stamp { opacity: 0.7; }
@@ -201,6 +203,33 @@ def _lease_has_listener(snapshot: Snapshot, lease: Lease) -> bool:
     )
 
 
+def _address_cell(
+    addr: str, lease: Lease, url: str, fronts: Sequence[Proxy]
+) -> str:
+    """Every way in to one service, the one that works first.
+
+    A `tailscale serve` front is not a footnote to the leased address; where
+    there is one it is usually the only address that works. GTE sets Secure
+    cookies, so a login over its plain leased port never completes -- and a
+    reader scanning the directory for somewhere to click was finding, in the
+    column they were reading, the address that does not sign them in.
+
+    So the front leads and the lease follows, still shown and still linked.
+    The leased address is the ledger's fact -- it is what the drift rules
+    reconcile and what `ports sync` grants -- and dropping it would leave the
+    page unable to say what it had actually leased.
+    """
+    ways = [
+        f"<a href=\"{escape(str(front.url))}\">{escape(str(front.url))}</a>"
+        for front in fronts
+    ]
+    leased = f"<a href=\"{escape(url)}\">{escape(addr)}:{lease.port}</a>"
+    if not ways:
+        return leased
+    ways.append(f"<span class=\"leased\">{leased} &mdash; leased</span>")
+    return "<br>".join(ways)
+
+
 def _services_table(snapshot: Snapshot) -> str:
     """Render the directory, saying "unknown" until something has been probed.
 
@@ -248,17 +277,12 @@ def _services_table(snapshot: Snapshot) -> str:
         else:
             status = "<span class=\"down\">DOWN</span>"
         summary = escape(health.summary) if health and health.summary else ""
+        fronts = fronts_for(lease, str(snapshot.metrics["hostname"]), snapshot.proxies)
         rows.append(
             f"<tr><td>{escape(lease.project)}/{escape(lease.name)}</td>"
-            f"<td><a href=\"{escape(url)}\">{escape(addr)}:{lease.port}</a></td>"
+            f"<td>{_address_cell(addr, lease, url, fronts)}</td>"
             f"<td>{status}</td><td>{summary}</td></tr>"
         )
-        for front in fronts_for(lease, str(snapshot.metrics["hostname"]), snapshot.proxies):
-            rows.append(
-                f"<tr class=\"detail\"><td colspan=\"4\">reachable at "
-                f"<a href=\"{escape(str(front.url))}\">{escape(str(front.url))}</a>"
-                f" &mdash; tailscale serve</td></tr>"
-            )
         if health is not None:
             for row in health.detail:
                 rows.append(

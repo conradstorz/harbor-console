@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.error
 from datetime import date, datetime
 from html import escape
@@ -721,6 +722,33 @@ def test_a_fronted_service_offers_the_url_that_works():
     assert 'href="https://hpz440.tail69149b.ts.net:8443/"' in html
     # The lease is still the ledger's fact, and still shown.
     assert "100.69.239.123:8080" in html
+
+
+def test_the_working_url_is_in_the_address_column_not_a_footnote():
+    """A reader scanning the directory for somewhere to click must find the
+    address that works in the column they are already reading. Demoting it to
+    a row underneath left the leased port as the row's answer, which is the
+    address that does not sign anybody in.
+    """
+    html = render_page(
+        snapshot(tailnet_address="100.69.239.123", proxies=(FRONT,))
+    ).decode()
+
+    row = next(r for r in re.findall(r"<tr>.*?</tr>", html) if "gte/console" in r)
+    address_cell = re.findall(r"<td>(.*?)</td>", row)[1]
+    assert "https://hpz440.tail69149b.ts.net:8443/" in address_cell
+    assert "100.69.239.123:8080" in address_cell
+
+
+def test_the_working_url_comes_first_in_the_cell():
+    """Order is the recommendation. The front is the way in; the leased
+    address is the ledger's fact about where it binds.
+    """
+    html = render_page(
+        snapshot(tailnet_address="100.69.239.123", proxies=(FRONT,))
+    ).decode()
+
+    assert html.index("hpz440.tail69149b.ts.net:8443") < html.index("100.69.239.123:8080")
 
 
 def test_an_unfronted_service_gains_no_row():
