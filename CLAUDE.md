@@ -54,7 +54,7 @@ Two behaviours of that CLI are load-bearing and easy to undo by accident ([ADR 1
 - **`sync` writes a project whose files have drifted, not only one whose decision changed.** `.env` is gitignored, so every fresh clone of a participating project starts without one while its lease stands and its decision is "keep"; writing only changes would report "up to date" over a project about to fall back to its compose default, on a port that may be leased to somebody else. A missing or mangled fence and a missing `HARBOR_PORTS.md` are repaired the same way. `scan` reports the same condition and writes nothing. A repair is reported *as* a repair, distinctly from a grant, and a tree that already matches stays a genuine no-op.
 - **`show` loads no declarations at all.** It reads the ledger and prints it, so a broken `.harbor.toml` anywhere in the tree — which does fail `scan` and `sync` — still leaves an operator able to read the lease table, which is exactly when they need it.
 
-The web surface, implemented for v0.2.0, is eight modules at the top level, and keeps the same split:
+The web surface, implemented for v0.2.0, is nine modules at the top level, and keeps the same split:
 
 - `tailnet.py` — **collects** the host's Tailscale address from `tailscale ip -4`. The one collector allowed to raise (see Graceful degradation below).
 - `listening.py` — **collects** every listening TCP socket via `psutil`, including loopback-bound and non-Docker ones. IPv6 `::` is normalised to `0.0.0.0`.
@@ -62,6 +62,7 @@ The web surface, implemented for v0.2.0, is eight modules at the top level, and 
 - `probe.py` — **collects** liveness and optional detail for one service: `/` for up, `/hcstatus` for detail, both by convention ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)). Any HTTP response means up.
 - `reconcile.py` — the drift policy. Pure, like `ports/allocate.py`: leases, listeners and containers in, findings out. Joins on `(addr, port)` by address overlap.
 - `snapshot.py` — the **contract** between prober and renderer, data only. Its own module so neither imports the other, the way `ports/keys.py` serves the allocator. `Snapshot.probed` separates "found nothing" from "not looked yet"; `Snapshot.collection_error` — not `ledger_error` — carries why a cycle failed, whatever its source.
+- `addressing.py` — the **shared rule** for where a lease is reachable: `reachable_address` for the address the page prints, `probe_target` for the one the prober connects to. Pure, and its own module for the same reason `snapshot.py` is — the prober and the renderer must agree without importing each other. They did not once: the page printed the tailnet address while the probe still asked the hostname, which resolves to the LAN address, so two tailnet-bound services read as LISTENING rather than UP.
 - `web.py` — **renders** the HTML page from a snapshot and the `/ports.json` body, and serves both over stdlib `http.server`. No collection, no probing.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
 

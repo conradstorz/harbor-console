@@ -714,3 +714,49 @@ def test_the_page_names_the_tailnet_address_before_the_first_cycle(monkeypatch):
 
     assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
     assert b"100.69.239.123:8080" in web.render_page(captured["snapshot"])
+
+
+def test_collect_snapshot_probes_the_address_the_page_advertises(monkeypatch):
+    """The prober and the renderer must agree on where a service is.
+
+    `harbor-console/web` and ARM both bind the tailnet address specifically.
+    Probing them by hostname sent the request to the LAN address, where
+    nothing was listening, and the page called two healthy services
+    LISTENING instead of UP -- while printing the tailnet address they do
+    answer on.
+    """
+    asked = []
+
+    webapp.collect_snapshot(
+        leases=(GTE_LEASE, Lease("arm", "web", "hpz440", "100.69.239.123", 49152, date(2026, 9, 1))),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (),
+        containers=lambda: (),
+        prober=lambda host, port: asked.append((host, port))
+        or Health(True, None, None, (), None),
+        tailnet_address="100.69.239.123",
+    )
+
+    assert asked == [("100.69.239.123", 8080), ("100.69.239.123", 49152)]
+
+
+def test_collect_snapshot_still_probes_by_hostname_without_a_tailnet_address():
+    """No address known means nothing to substitute, and a wildcard is not
+    somewhere to connect. The probe falls back to what it used before.
+    """
+    asked = []
+
+    webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (),
+        containers=lambda: (),
+        prober=lambda host, port: asked.append((host, port))
+        or Health(True, None, None, (), None),
+    )
+
+    assert asked == [("hpz440", 8080)]

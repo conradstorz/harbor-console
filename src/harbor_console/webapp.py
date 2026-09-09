@@ -37,6 +37,7 @@ from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from harbor_console.addressing import probe_target
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
 from harbor_console.listening import Listener, listening_sockets
 from harbor_console.ports.ledger import Lease, LedgerError, load_leases
@@ -232,8 +233,17 @@ def collect_snapshot(
     found = listeners()
     running = containers()
 
+    # Probed at the address the page advertises, not at `lease.host`. The
+    # hostname resolves to the LAN address, where a service bound to the
+    # tailnet address specifically is not listening: probing it there reported
+    # two healthy services as LISTENING while the page printed the very
+    # address they do answer on. `addressing` holds that rule so the prober
+    # and the renderer cannot drift apart again.
     health = {
-        (lease.project, lease.name): prober(lease.host, lease.port) for lease in held
+        (lease.project, lease.name): prober(
+            probe_target(lease, host, tailnet_address), lease.port
+        )
+        for lease in held
     }
 
     return Snapshot(
