@@ -14,8 +14,11 @@ renderer. No I/O, no rendering, no collection.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from harbor_console.ports.keys import ANY_ADDR, addrs_overlap
 from harbor_console.ports.ledger import Lease
+from harbor_console.serve import Proxy
 
 
 def reachable_address(
@@ -69,3 +72,38 @@ def probe_target(lease: Lease, served_host: str, tailnet_address: str | None) ->
         return lease.host
     address = reachable_address(lease, served_host, tailnet_address)
     return lease.host if address == ANY_ADDR else address
+
+
+def fronts_for(
+    lease: Lease, served_host: str, proxies: Sequence[Proxy]
+) -> tuple[Proxy, ...]:
+    """Every `tailscale serve` front that proxies to this lease.
+
+    The leased address is where a service binds, which is not always where a
+    reader can use it: GTE sets Secure cookies, so a login over the plain
+    leased port never completes and the front's HTTPS URL is the only address
+    that works. The page shows both -- the lease is the ledger's fact, the
+    front is the way in.
+
+    Matched on the backend by `ports.keys.addrs_overlap`, the rule the rest of
+    the project joins on, so serve's `127.0.0.1:8080` answers a lease recorded
+    as `0.0.0.0:8080`. A lease on another host is never matched: the front is
+    this machine's, and another machine's lease on the same port is not what
+    it proxies. A front parsed without its host is dropped, because it cannot
+    be turned into a link and a row saying "reachable at" with no address is
+    worse than silence.
+    """
+    if lease.host != served_host:
+        return ()
+    return tuple(
+        sorted(
+            (
+                proxy
+                for proxy in proxies
+                if proxy.url is not None
+                and proxy.backend_port == lease.port
+                and addrs_overlap(proxy.backend_addr, lease.addr)
+            ),
+            key=lambda proxy: (proxy.port, proxy.path),
+        )
+    )

@@ -14,6 +14,7 @@ from harbor_console.docker import Container
 from harbor_console.listening import Listener
 from harbor_console.ports.ledger import Lease
 from harbor_console.probe import Health
+from harbor_console.serve import Proxy
 
 
 @dataclass(frozen=True)
@@ -73,3 +74,11 @@ class Snapshot:
     #: known -- a snapshot built outside `webapp.main`, as in a test -- and the
     #: renderer then falls back to what the ledger says.
     tailnet_address: str | None = None
+    #: What `tailscale serve` fronts on this host. Carried so the page can
+    #: offer the URL a reader can actually use: a service behind a serve front
+    #: is reached over TLS at the MagicDNS name, and one that sets Secure
+    #: cookies -- GTE does -- cannot be logged into over the plain leased port
+    #: at all. Empty when nothing is fronted, and also when tailscale could
+    #: not be asked; the page draws no conclusion from the difference, it just
+    #: has nothing to offer.
+    proxies: tuple[Proxy, ...] = ()

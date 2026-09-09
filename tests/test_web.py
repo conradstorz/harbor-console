@@ -11,6 +11,7 @@ from harbor_console.listening import Listener
 from harbor_console.ports.ledger import Lease
 from harbor_console.ports.live import LiveUnavailable, fetch_live
 from harbor_console.probe import Detail, Health
+from harbor_console.serve import Proxy
 from harbor_console.snapshot import Drift, Snapshot
 from harbor_console.web import make_handler, ports_payload, render_page
 
@@ -702,3 +703,62 @@ def test_the_host_table_names_the_tailnet_address():
 
 def test_the_host_table_omits_the_tailnet_row_when_the_address_is_unknown():
     assert "Tailnet" not in render_page(snapshot()).decode()
+
+
+FRONT = Proxy(8443, "/", "127.0.0.1", 8080, "hpz440.tail69149b.ts.net")
+
+
+def test_a_fronted_service_offers_the_url_that_works():
+    """The row's leased address is where the service binds; it is not always
+    where a reader can use it. GTE sets Secure cookies, so a login over the
+    plain leased port never completes -- the serve front's HTTPS URL is the
+    only address that signs anybody in, and the page has to say so.
+    """
+    html = render_page(
+        snapshot(tailnet_address="100.69.239.123", proxies=(FRONT,))
+    ).decode()
+
+    assert 'href="https://hpz440.tail69149b.ts.net:8443/"' in html
+    # The lease is still the ledger's fact, and still shown.
+    assert "100.69.239.123:8080" in html
+
+
+def test_an_unfronted_service_gains_no_row():
+    html = render_page(snapshot(tailnet_address="100.69.239.123")).decode()
+
+    assert "tail69149b" not in html
+
+
+def test_a_front_to_another_service_is_not_offered_here():
+    html = render_page(
+        snapshot(
+            tailnet_address="100.69.239.123",
+            proxies=(Proxy(8443, "/", "127.0.0.1", 9999, "hpz440.tail69149b.ts.net"),),
+        )
+    ).decode()
+
+    assert "tail69149b" not in html
+
+
+def test_every_front_to_one_service_is_offered():
+    api = Proxy(8443, "/api", "127.0.0.1", 8080, "hpz440.tail69149b.ts.net")
+    html = render_page(
+        snapshot(tailnet_address="100.69.239.123", proxies=(FRONT, api))
+    ).decode()
+
+    assert 'href="https://hpz440.tail69149b.ts.net:8443/"' in html
+    assert 'href="https://hpz440.tail69149b.ts.net:8443/api"' in html
+
+
+def test_a_front_host_is_escaped():
+    """`front_host` comes out of `tailscale serve status`, which is outside
+    this project, so it is escaped like every other foreign field.
+    """
+    html = render_page(
+        snapshot(
+            tailnet_address="100.69.239.123",
+            proxies=(Proxy(8443, "/", "127.0.0.1", 8080, PAYLOAD),),
+        )
+    ).decode()
+
+    assert "<script>" not in html

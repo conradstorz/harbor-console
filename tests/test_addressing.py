@@ -70,3 +70,50 @@ def test_the_probe_target_is_never_a_wildcard():
     used before rather than connecting to a wildcard.
     """
     assert probe_target(WILDCARD, HOST, None) == HOST
+
+
+from harbor_console.addressing import fronts_for  # noqa: E402
+from harbor_console.serve import Proxy  # noqa: E402
+
+GTE_FRONT = Proxy(8443, "/", "127.0.0.1", 8080, "hpz440.tail69149b.ts.net")
+
+
+def test_a_front_is_matched_to_the_lease_it_proxies():
+    """The link that actually works. GTE sets Secure cookies, so a login over
+    the plain leased port never completes -- the serve front's HTTPS URL is
+    the only address a reader can sign in on.
+    """
+    assert fronts_for(WILDCARD, HOST, (GTE_FRONT,)) == (GTE_FRONT,)
+
+
+def test_a_front_to_another_port_is_not_matched():
+    assert fronts_for(WILDCARD, HOST, (Proxy(8443, "/", "127.0.0.1", 9999),)) == ()
+
+
+def test_a_front_to_a_specific_address_matches_a_wildcard_lease():
+    """`127.0.0.1:8080` is the backend serve names; `0.0.0.0:8080` is what the
+    lease records. The same overlap rule the rest of the project joins on.
+    """
+    assert fronts_for(WILDCARD, HOST, (GTE_FRONT,)) == (GTE_FRONT,)
+
+
+def test_a_front_does_not_match_a_lease_on_another_host():
+    """A serve front is this machine's. A lease elsewhere that happens to use
+    the same port is not what it proxies.
+    """
+    elsewhere = Lease("other", "svc", "otherhost", "0.0.0.0", 8080, date(2026, 9, 1))
+
+    assert fronts_for(elsewhere, HOST, (GTE_FRONT,)) == ()
+
+
+def test_every_front_to_one_lease_is_returned_in_path_order():
+    api = Proxy(8443, "/api", "127.0.0.1", 8080, "hpz440.tail69149b.ts.net")
+
+    assert fronts_for(WILDCARD, HOST, (api, GTE_FRONT)) == (GTE_FRONT, api)
+
+
+def test_a_front_with_no_url_is_not_offered():
+    """A front parsed without its host cannot be turned into a link, and a
+    row that says "reachable at" without an address is worse than silence.
+    """
+    assert fronts_for(WILDCARD, HOST, (Proxy(8443, "/", "127.0.0.1", 8080),)) == ()

@@ -35,14 +35,40 @@ SERVE_TIMEOUT_SECONDS = 2.0
 _LOOPBACK_NAMES = ("localhost", "localhost.localdomain")
 
 
+#: The port each scheme leaves off a URL.
+_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
 @dataclass(frozen=True)
 class Proxy:
-    """One `tailscale serve` front and the backend it forwards to."""
+    """One `tailscale serve` front and the backend it forwards to.
+
+    `front_host` and `scheme` default to a bare, HTTPS front so a `Proxy` can
+    still be built from the backend half alone, which is all the drift rule
+    needs. `url` is the half a reader needs: the address a browser can use.
+    """
 
     port: int
     path: str
     backend_addr: str
     backend_port: int
+    front_host: str = ""
+    scheme: str = "https"
+
+    @property
+    def url(self) -> str | None:
+        """The address to hand a reader, or None when the front is unnamed.
+
+        `tailscale serve` terminates TLS for the MagicDNS name, so this is not
+        merely a nicer way to write the leased port: an app that sets Secure
+        cookies will not complete a login over plain HTTP at all, and this URL
+        is then the only one that works.
+        """
+        if not self.front_host:
+            return None
+        if self.port == _DEFAULT_PORTS.get(self.scheme):
+            return f"{self.scheme}://{self.front_host}{self.path}"
+        return f"{self.scheme}://{self.front_host}:{self.port}{self.path}"
 
 
 def serve_proxies(
@@ -73,9 +99,10 @@ def serve_proxies(
     if not isinstance(status, dict):
         return ()
 
+    tcp = status.get("TCP") or {}
     proxies: list[Proxy] = []
     for front, config in (status.get("Web") or {}).items():
-        port = _front_port(front)
+        host, port = _front(front)
         if port is None:
             continue
         handlers = (config or {}).get("Handlers") or {}
@@ -84,24 +111,49 @@ def serve_proxies(
             if backend is None:
                 continue
             addr, backend_port = backend
-            proxies.append(Proxy(port, str(path), addr, backend_port))
+            proxies.append(
+                Proxy(
+                    port,
+                    str(path),
+                    addr,
+                    backend_port,
+                    front_host=host,
+                    scheme=_scheme(tcp, port),
+                )
+            )
 
     return tuple(sorted(proxies, key=lambda item: (item.port, item.path)))
 
 
-def _front_port(front: str) -> int | None:
-    """The port from a `host:port` key, or None when there is not one.
+def _front(front: str) -> tuple[str, int | None]:
+    """The `(host, port)` a `host:port` key names.
 
     Rsplit, because the host half is a DNS name here rather than an address --
     but a key with no colon at all is not something to guess a port for.
     """
-    _, sep, port = str(front).rpartition(":")
+    host, sep, port = str(front).rpartition(":")
     if not sep:
-        return None
+        return "", None
     try:
-        return int(port)
+        return host, int(port)
     except ValueError:
-        return None
+        return host, None
+
+
+def _scheme(tcp: object, port: int) -> str:
+    """Whether a front terminates TLS, from the `TCP` map serve publishes.
+
+    Defaults to HTTPS, which is what `serve` does unless told otherwise and
+    what an older daemon with no `TCP` map was doing. The default is also the
+    safer error: an `https://` URL to a plain front fails loudly, where
+    `http://` to a TLS front can be redirected or silently downgraded.
+    """
+    if not isinstance(tcp, dict):
+        return "https"
+    entry = tcp.get(str(port)) or {}
+    if isinstance(entry, dict) and entry.get("HTTPS") is not True and entry.get("HTTP") is True:
+        return "http"
+    return "https"
 
 
 def _backend(proxy: object) -> tuple[str, int] | None:

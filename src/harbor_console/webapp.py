@@ -276,6 +276,7 @@ def collect_snapshot(
         collection_error=None,
         probed=True,
         tailnet_address=tailnet_address,
+        proxies=fronted,
     )
 
 

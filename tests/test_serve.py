@@ -32,8 +32,8 @@ def test_reads_every_front_and_its_backend():
     proxies = serve_proxies(run=lambda *a, **k: FakeResult(REAL))
 
     assert proxies == (
-        Proxy(443, "/", "127.0.0.1", 9443),
-        Proxy(8443, "/", "127.0.0.1", 8080),
+        Proxy(443, "/", "127.0.0.1", 9443, "hpz440.tail69149b.ts.net", "https"),
+        Proxy(8443, "/", "127.0.0.1", 8080, "hpz440.tail69149b.ts.net", "https"),
     )
 
 
@@ -55,8 +55,8 @@ def test_a_named_path_is_kept():
     )
 
     assert serve_proxies(run=lambda *a, **k: FakeResult(body)) == (
-        Proxy(8443, "/", "127.0.0.1", 8080),
-        Proxy(8443, "/api", "127.0.0.1", 8000),
+        Proxy(8443, "/", "127.0.0.1", 8080, "host", "https"),
+        Proxy(8443, "/api", "127.0.0.1", 8000, "host", "https"),
     )
 
 
@@ -69,7 +69,7 @@ def test_localhost_is_normalised_to_the_loopback_address():
     )
 
     assert serve_proxies(run=lambda *a, **k: FakeResult(body)) == (
-        Proxy(8443, "/", "127.0.0.1", 8080),
+        Proxy(8443, "/", "127.0.0.1", 8080, "host", "https"),
     )
 
 
@@ -136,3 +136,68 @@ def test_the_collector_is_bounded():
     serve_proxies(run=run)
 
     assert seen["timeout"] > 0
+
+
+def test_the_front_host_and_scheme_are_kept():
+    """The address a browser can actually use. `tailscale serve` terminates
+    TLS for the MagicDNS name, and an app that sets Secure cookies -- GTE
+    does -- will not complete a login over the plain leased port, so the
+    front's own URL is the only one that works.
+    """
+    proxies = serve_proxies(run=lambda *a, **k: FakeResult(REAL))
+
+    assert proxies[1].front_host == "hpz440.tail69149b.ts.net"
+    assert proxies[1].scheme == "https"
+    assert proxies[1].url == "https://hpz440.tail69149b.ts.net:8443/"
+
+
+def test_the_default_https_port_is_left_off_the_url():
+    proxies = serve_proxies(run=lambda *a, **k: FakeResult(REAL))
+
+    assert proxies[0].url == "https://hpz440.tail69149b.ts.net/"
+
+
+def test_a_named_path_is_part_of_the_url():
+    body = json.dumps(
+        {
+            "TCP": {"8443": {"HTTPS": True}},
+            "Web": {
+                "host.ts.net:8443": {"Handlers": {"/api": {"Proxy": "http://127.0.0.1:8000"}}}
+            },
+        }
+    )
+
+    assert serve_proxies(run=lambda *a, **k: FakeResult(body))[0].url == (
+        "https://host.ts.net:8443/api"
+    )
+
+
+def test_a_plain_http_front_is_not_called_https():
+    """`tailscale serve --http` fronts without TLS. Handing a reader an
+    https:// URL for it produces a connection error, not a page.
+    """
+    body = json.dumps(
+        {
+            "TCP": {"8080": {"HTTP": True}},
+            "Web": {
+                "host.ts.net:8080": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9000"}}}
+            },
+        }
+    )
+
+    proxy = serve_proxies(run=lambda *a, **k: FakeResult(body))[0]
+    assert proxy.scheme == "http"
+    assert proxy.url == "http://host.ts.net:8080/"
+
+
+def test_an_unstated_front_is_assumed_https():
+    """`serve` is HTTPS unless told otherwise, and the TCP map may be absent
+    on an older daemon. The common case is the safe default here: an https://
+    URL to a plain front fails loudly, where http:// to a TLS front could be
+    redirected or silently downgraded.
+    """
+    body = json.dumps(
+        {"Web": {"host.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8080"}}}}}
+    )
+
+    assert serve_proxies(run=lambda *a, **k: FakeResult(body))[0].scheme == "https"

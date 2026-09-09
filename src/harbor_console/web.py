@@ -16,7 +16,7 @@ from collections.abc import Callable
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
-from harbor_console.addressing import reachable_address
+from harbor_console.addressing import fronts_for, reachable_address
 from harbor_console.ports.keys import addrs_overlap
 from harbor_console.ports.ledger import Lease
 from harbor_console.snapshot import Snapshot
@@ -253,6 +253,12 @@ def _services_table(snapshot: Snapshot) -> str:
             f"<td><a href=\"{escape(url)}\">{escape(addr)}:{lease.port}</a></td>"
             f"<td>{status}</td><td>{summary}</td></tr>"
         )
+        for front in fronts_for(lease, str(snapshot.metrics["hostname"]), snapshot.proxies):
+            rows.append(
+                f"<tr class=\"detail\"><td colspan=\"4\">reachable at "
+                f"<a href=\"{escape(str(front.url))}\">{escape(str(front.url))}</a>"
+                f" &mdash; tailscale serve</td></tr>"
+            )
         if health is not None:
             for row in health.detail:
                 rows.append(
