@@ -11,7 +11,12 @@ from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import Listener
 from harbor_console.ports.ledger import Lease, LedgerError
 from harbor_console.probe import Health
-from harbor_console.reconcile import DECLARED_NOT_RUNNING, RUNNING_NOT_DECLARED
+from harbor_console.reconcile import (
+    DECLARED_NOT_RUNNING,
+    RUNNING_NOT_DECLARED,
+    UNDECLARED_TAILNET_LISTENER,
+)
+from harbor_console.serve import Proxy
 from harbor_console.snapshot import Snapshot
 from harbor_console.tailnet import TailnetUnavailable
 
@@ -760,3 +765,52 @@ def test_collect_snapshot_still_probes_by_hostname_without_a_tailnet_address():
     )
 
     assert asked == [("hpz440", 8080)]
+
+
+def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
+    """End to end through the coordinator: the serve proxy on 8443 reaches
+    `find_drift` alongside the tailnet address, and the finding names the
+    lease behind it.
+    """
+    snapshot = webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (
+            Listener("100.69.239.123", 8443, None),
+            Listener("0.0.0.0", 8080, None),
+        ),
+        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
+        prober=lambda host, port: Health(True, None, None, (), None),
+        proxies=lambda: (Proxy(8443, "/", "127.0.0.1", 8080),),
+        tailnet_address="100.69.239.123",
+    )
+
+    findings = [d for d in snapshot.drift if d.kind == UNDECLARED_TAILNET_LISTENER]
+    assert len(findings) == 1
+    assert "100.69.239.123:8443" in findings[0].detail
+    assert "127.0.0.1:8080" in findings[0].detail
+    assert "gte" in findings[0].detail
+
+
+def test_a_serve_outage_does_not_take_the_cycle_down():
+    """`serve_proxies` degrades to an empty tuple rather than raising, and a
+    cycle that collected no proxies still collects everything else.
+    """
+    snapshot = webapp.collect_snapshot(
+        leases=(GTE_LEASE,),
+        host="hpz440",
+        now=datetime(2026, 9, 2, 14, 2, 11),
+        collector=lambda: METRICS,
+        listeners=lambda: (Listener("100.69.239.123", 8443, None),),
+        containers=lambda: (),
+        prober=lambda host, port: Health(True, None, None, (), None),
+        proxies=lambda: (),
+        tailnet_address="100.69.239.123",
+    )
+
+    findings = [d for d in snapshot.drift if d.kind == UNDECLARED_TAILNET_LISTENER]
+    assert len(findings) == 1
+    assert "proxy" not in findings[0].detail.lower()
+    assert snapshot.collection_error is None

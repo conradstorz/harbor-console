@@ -37,11 +37,23 @@ from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import Listener
 from harbor_console.ports.keys import addrs_overlap
 from harbor_console.ports.ledger import Lease
+from harbor_console.serve import Proxy
 from harbor_console.snapshot import Drift
 
 DECLARED_NOT_RUNNING = "declared-not-running"
 RUNNING_NOT_DECLARED = "running-not-declared"
 PORT_MISMATCH = "port-mismatch"
+UNDECLARED_TAILNET_LISTENER = "undeclared-tailnet-listener"
+
+#: Linux's default local port range: what the kernel hands out when nobody
+#: chose a port. An undeclared listener in here is not the deliberate act
+#: `undeclared-tailnet-listener` exists to catch -- tailscaled's own peerapi
+#: lands in it, on a different port after every restart -- and a standing
+#: false finding that changes shape daily teaches operators to ignore the
+#: drift section. Leases inside the range are unaffected: they are covered
+#: before this test is reached, which is how ARM's 49152 stays reconciled.
+EPHEMERAL_MIN = 32768
+EPHEMERAL_MAX = 60999
 
 
 def _covers(pairs: Iterable[tuple[str, int]], addr: str, port: int) -> bool:
@@ -91,6 +103,8 @@ def find_drift(
     listeners: Sequence[Listener],
     containers: Sequence[Container],
     host: str,
+    tailnet_address: str | None = None,
+    proxies: Sequence[Proxy] = (),
 ) -> tuple[Drift, ...]:
     """Name every disagreement between the ledger and `host`.
 
@@ -179,4 +193,122 @@ def find_drift(
                         )
                     )
 
+        findings.extend(
+            _undeclared_tailnet_listeners(
+                listeners, containers, leased, mine, tailnet_address, proxies
+            )
+        )
+
     return tuple(findings)
+
+
+def _undeclared_tailnet_listeners(
+    listeners: Sequence[Listener],
+    containers: Sequence[Container],
+    leased: AbstractSet[tuple[str, int]],
+    mine: Sequence[Lease],
+    tailnet_address: str | None,
+    proxies: Sequence[Proxy],
+) -> list[Drift]:
+    """Report a host process holding a tailnet port that nothing declares.
+
+    The gap this closes: `running-not-declared` walks containers, so a process
+    outside Docker binding a tailnet port produced no finding at all -- no
+    lease to list it in the directory, and no container to catch it in drift.
+    `tailscale serve` held 8443 that way, invisibly.
+
+    Only an *exact* bind to the tailnet address qualifies. A wildcard listener
+    is every daemon on the box -- sshd, resolved, whatever a developer left
+    running -- and flagging those would bury this finding in noise the ledger
+    was never meant to govern; loopback is not published to the tailnet at
+    all. Binding the tailnet address specifically is a deliberate act of
+    publishing to the tailnet, which is exactly what the ledger governs.
+
+    Withheld entirely without container evidence (the caller runs this only
+    when Docker could be read) or without a known tailnet address, for the
+    same reason `running-not-declared` is: neither absence can distinguish an
+    undeclared listener from one that is perfectly well accounted for.
+    """
+    if tailnet_address is None:
+        return []
+
+    published = [pair for container in containers for pair in container.published]
+    findings = []
+    for addr, port in sorted(
+        {
+            (listener.addr, listener.port)
+            for listener in listeners
+            if listener.addr == tailnet_address
+        }
+    ):
+        if _covers(leased, addr, port):
+            continue
+        # Already reported against the container that publishes it. The same
+        # port under two names reads as two problems.
+        if _covers(published, addr, port):
+            continue
+        clause = _proxy_clause(port, proxies, mine, containers)
+        # A kernel-assigned port nobody chose is not a port anybody published.
+        # A serve front is the exception: somebody configured it, and it
+        # survives a restart, so the intent is evidenced wherever it landed.
+        if not clause and EPHEMERAL_MIN <= port <= EPHEMERAL_MAX:
+            continue
+        findings.append(
+            Drift(
+                UNDECLARED_TAILNET_LISTENER,
+                f"{addr}:{port} is listening on the tailnet, and no lease "
+                "covers it" + clause,
+            )
+        )
+
+    return findings
+
+
+def _proxy_clause(
+    port: int,
+    proxies: Sequence[Proxy],
+    mine: Sequence[Lease],
+    containers: Sequence[Container],
+) -> str:
+    """Name the true port behind a `tailscale serve` front, and what runs there.
+
+    Says nothing at all when no proxy is known for the port. `serve_proxies`
+    degrades to an empty tuple when tailscale could not be asked, so "nothing
+    is proxying it" would be a false claim in exactly the case the collector
+    failed -- and an operator told a port is unexplained goes looking for a
+    process, which is the wrong hunt when a proxy is fronting a service that
+    is declared and healthy.
+    """
+    behind = [proxy for proxy in proxies if proxy.port == port]
+    if not behind:
+        return ""
+
+    parts = []
+    for proxy in behind:
+        target = f"{proxy.backend_addr}:{proxy.backend_port}"
+        parts.append(
+            f"{proxy.path} to {target}, "
+            f"{_owner_of(proxy.backend_addr, proxy.backend_port, mine, containers)}"
+        )
+    return " -- tailscale serve proxies " + "; ".join(parts)
+
+
+def _owner_of(
+    addr: str,
+    port: int,
+    mine: Sequence[Lease],
+    containers: Sequence[Container],
+) -> str:
+    """What declares or runs a backend: a lease first, then a container.
+
+    The lease is the better answer -- it names the project the ledger knows --
+    but a backend with no lease may still be running code somebody can find,
+    which is the question an operator actually has.
+    """
+    for lease in mine:
+        if lease.port == port and addrs_overlap(lease.addr, addr):
+            return f"which {lease.project} leases as {lease.name}"
+    for container in containers:
+        if _covers(container.published, addr, port):
+            return f"published by container '{container.name}'"
+    return "which nothing declares"

@@ -7,8 +7,10 @@ from harbor_console.reconcile import (
     DECLARED_NOT_RUNNING,
     PORT_MISMATCH,
     RUNNING_NOT_DECLARED,
+    UNDECLARED_TAILNET_LISTENER,
     find_drift,
 )
+from harbor_console.serve import Proxy
 
 GRANTED = date(2026, 9, 1)
 HOST = "hpz440"
@@ -297,3 +299,243 @@ def test_findings_are_ordered_deterministically():
 
     assert len(forward) == 4
     assert forward == backward
+
+
+TAILNET = "100.69.239.123"
+
+
+def test_an_undeclared_tailnet_listener_is_reported():
+    """The gap that let `tailscale serve` hold 8443 invisibly for weeks.
+
+    `running-not-declared` walks containers, so a *host process* binding a
+    tailnet port produced no finding at all: no lease to list it in the
+    directory, and no container to catch it in drift. Binding the tailnet
+    address specifically is a deliberate act of publishing to the tailnet,
+    which is exactly what the ledger governs.
+    """
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 8443, None)],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+    )
+
+    assert kinds(drift) == [UNDECLARED_TAILNET_LISTENER]
+    assert f"{TAILNET}:8443" in drift[0].detail
+
+
+def test_a_wildcard_listener_is_not_an_undeclared_tailnet_listener():
+    """`0.0.0.0` is every daemon on the box -- sshd, resolved, a dev server.
+    Flagging those would bury the finding this rule exists to make in noise
+    the ledger was never meant to govern.
+    """
+    drift = find_drift([], [Listener("0.0.0.0", 22, None)], [], host=HOST, tailnet_address=TAILNET)
+
+    assert kinds(drift) == []
+
+
+def test_a_loopback_listener_is_not_an_undeclared_tailnet_listener():
+    drift = find_drift(
+        [], [Listener("127.0.0.1", 9443, None)], [], host=HOST, tailnet_address=TAILNET
+    )
+
+    assert kinds(drift) == []
+
+
+def test_a_leased_tailnet_listener_is_not_undeclared():
+    drift = find_drift(
+        [lease("arm", 49152, addr=TAILNET)],
+        [Listener(TAILNET, 49152, None)],
+        [Container("arm", ((TAILNET, 49152),))],
+        host=HOST,
+        tailnet_address=TAILNET,
+    )
+
+    assert kinds(drift) == []
+
+
+def test_a_container_on_a_tailnet_port_is_reported_once_as_a_container():
+    """`imageharbor` publishes 100.69.239.123:8087 and holds no lease. It is
+    already `running-not-declared`; reporting it again as an undeclared
+    listener would print the same port twice under two names.
+    """
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 8087, None)],
+        [Container("imageharbor-imageharbor-1", ((TAILNET, 8087),))],
+        host=HOST,
+        tailnet_address=TAILNET,
+    )
+
+    assert kinds(drift) == [RUNNING_NOT_DECLARED]
+
+
+def test_nothing_is_called_undeclared_when_docker_could_not_be_read():
+    """Without container evidence there is no way to know the listener is not
+    a container, which is the same reason `running-not-declared` is withheld.
+    """
+    drift = find_drift(
+        [], [Listener(TAILNET, 8443, None)], DOCKER_UNAVAILABLE, host=HOST, tailnet_address=TAILNET
+    )
+
+    assert kinds(drift) == []
+
+
+def test_nothing_is_called_undeclared_without_a_tailnet_address():
+    """With no address known there is no way to tell a tailnet bind from any
+    other specific address, so the rule does not run.
+    """
+    drift = find_drift([], [Listener(TAILNET, 8443, None)], [], host=HOST)
+
+    assert kinds(drift) == []
+
+
+def test_an_undeclared_listener_names_the_proxy_and_the_lease_behind_it():
+    """The finding that makes 8443 actionable: it fronts the gte console."""
+    drift = find_drift(
+        [lease("gte", 8080, name="console")],
+        [Listener(TAILNET, 8443, None), Listener("0.0.0.0", 8080, None)],
+        [Container("gte", (("0.0.0.0", 8080),))],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(Proxy(8443, "/", "127.0.0.1", 8080),),
+    )
+
+    assert kinds(drift) == [UNDECLARED_TAILNET_LISTENER]
+    detail = drift[0].detail
+    assert "tailscale serve" in detail
+    assert "127.0.0.1:8080" in detail
+    assert "gte" in detail
+    assert "console" in detail
+
+
+def test_an_undeclared_listener_names_the_container_behind_the_proxy():
+    """No lease covers portainer's 9443, but a container does -- which is
+    still the answer to "what code is running there".
+    """
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 443, None), Listener("127.0.0.1", 9443, None)],
+        [Container("portainer", (("127.0.0.1", 9443),))],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(Proxy(443, "/", "127.0.0.1", 9443),),
+    )
+
+    undeclared = [item for item in drift if item.kind == UNDECLARED_TAILNET_LISTENER]
+    assert len(undeclared) == 1
+    assert "127.0.0.1:9443" in undeclared[0].detail
+    assert "portainer" in undeclared[0].detail
+
+
+def test_an_undeclared_listener_says_when_nothing_declares_the_backend():
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 8443, None)],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(Proxy(8443, "/", "127.0.0.1", 5000),),
+    )
+
+    assert "127.0.0.1:5000" in drift[0].detail
+    assert "nothing declares" in drift[0].detail
+
+
+def test_an_undeclared_listener_claims_no_proxy_it_did_not_see():
+    """`serve_proxies` degrades to an empty tuple when tailscale could not be
+    asked. Saying "nothing is proxying it" on that evidence would be a false
+    claim in exactly the case the collector failed, so the finding says
+    nothing about proxying at all.
+    """
+    drift = find_drift(
+        [], [Listener(TAILNET, 8443, None)], [], host=HOST, tailnet_address=TAILNET
+    )
+
+    assert "proxy" not in drift[0].detail.lower()
+
+
+def test_a_named_proxy_path_is_reported():
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 8443, None)],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(Proxy(8443, "/api", "127.0.0.1", 8000),),
+    )
+
+    assert "/api" in drift[0].detail
+
+
+def test_every_backend_behind_one_front_is_named():
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 8443, None)],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(
+            Proxy(8443, "/", "127.0.0.1", 8080),
+            Proxy(8443, "/api", "127.0.0.1", 8000),
+            Proxy(443, "/", "127.0.0.1", 9443),
+        ),
+    )
+
+    assert "127.0.0.1:8080" in drift[0].detail
+    assert "127.0.0.1:8000" in drift[0].detail
+    assert "9443" not in drift[0].detail
+
+
+def test_a_kernel_assigned_ephemeral_port_is_not_reported():
+    """Real noise, found the first time this rule ran against hpz440:
+    tailscaled's peerapi binds a random high port on the tailnet address, and
+    it is a different port after every restart.
+
+    A port nobody chose is not a port anybody published -- nothing can be
+    pointed at an address that moves on reboot -- so it is not the deliberate
+    act this rule exists to catch. A standing false finding that changes shape
+    daily teaches operators to ignore the drift section, which costs more than
+    the rule is worth.
+
+    Leases inside the range are unaffected: ARM holds 49152, and a covered
+    listener never reaches this test.
+    """
+    drift = find_drift(
+        [], [Listener(TAILNET, 53678, None)], [], host=HOST, tailnet_address=TAILNET
+    )
+
+    assert kinds(drift) == []
+
+
+def test_a_lease_inside_the_ephemeral_range_is_still_reconciled():
+    """The range is not a blind spot, only a silence about *undeclared*
+    listeners. ARM's 49152 lease still reports when nothing holds it.
+    """
+    drift = find_drift(
+        [lease("automatic-ripping-machine", 49152, addr=TAILNET)],
+        [],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+    )
+
+    assert kinds(drift) == [DECLARED_NOT_RUNNING]
+
+
+def test_a_proxied_ephemeral_port_is_still_reported():
+    """A `tailscale serve` front is deliberate wherever it lands: somebody
+    configured it, and it survives a restart. The evidence of intent
+    outweighs the port's range.
+    """
+    drift = find_drift(
+        [],
+        [Listener(TAILNET, 41000, None)],
+        [],
+        host=HOST,
+        tailnet_address=TAILNET,
+        proxies=(Proxy(41000, "/", "127.0.0.1", 8080),),
+    )
+
+    assert kinds(drift) == [UNDECLARED_TAILNET_LISTENER]

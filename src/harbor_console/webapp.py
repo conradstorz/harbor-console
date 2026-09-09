@@ -43,6 +43,7 @@ from harbor_console.listening import Listener, listening_sockets
 from harbor_console.ports.ledger import Lease, LedgerError, load_leases
 from harbor_console.probe import Health, probe
 from harbor_console.reconcile import find_drift
+from harbor_console.serve import Proxy, serve_proxies
 from harbor_console.snapshot import Snapshot
 from harbor_console.system import collect_system_metrics
 from harbor_console.tailnet import TailnetUnavailable, tailscale_address
@@ -199,6 +200,7 @@ def collect_snapshot(
     containers: Callable[[], tuple[Container, ...]] = running_containers,
     prober: Callable[[str, int], Health] = probe,
     ledger_mtime: Callable[[], datetime | None] = read_ledger_mtime,
+    proxies: Callable[[], tuple[Proxy, ...]] = serve_proxies,
     tailnet_address: str | None = None,
 ) -> Snapshot:
     """Gather every source once and fold it into one snapshot.
@@ -209,6 +211,13 @@ def collect_snapshot(
     Whether Docker could be read is the identity of `DOCKER_UNAVAILABLE`, so
     the sentinel is passed on to `find_drift` intact and only flattened into
     the snapshot, where the renderer wants a plain tuple and a flag.
+
+    `proxies` is collected for one rule and does not reach the snapshot: it is
+    evidence `find_drift` folds into a finding's wording, not state the page
+    renders on its own. A `tailscale serve` front is the one thing on this
+    host that holds a tailnet port while being neither a container nor
+    anybody's lease, and naming the true port behind it is what turns that
+    finding from an alarm into an answer.
 
     `host` is decided once at startup from the lease this process holds and
     passed in; it is never re-derived from the OS. The ledger's `host` is a
@@ -232,6 +241,7 @@ def collect_snapshot(
     metrics["hostname"] = host
     found = listeners()
     running = containers()
+    fronted = proxies()
 
     # Probed at the address the page advertises, not at `lease.host`. The
     # hostname resolves to the LAN address, where a service bound to the
@@ -255,7 +265,14 @@ def collect_snapshot(
         containers=tuple(running),
         docker_available=running is not DOCKER_UNAVAILABLE,
         health=health,
-        drift=find_drift(held, found, running, host),
+        drift=find_drift(
+            held,
+            found,
+            running,
+            host,
+            tailnet_address=tailnet_address,
+            proxies=fronted,
+        ),
         collection_error=None,
         probed=True,
         tailnet_address=tailnet_address,
