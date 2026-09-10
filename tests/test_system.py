@@ -1,3 +1,4 @@
+import subprocess
 from types import SimpleNamespace
 
 import harbor_console.system as system
@@ -7,13 +8,11 @@ def test_format_uptime():
     assert system.format_uptime(90061) == "1d 01:01:01"
 
 
-def test_get_docker_container_count_returns_zero_on_missing_docker(monkeypatch):
+def test_get_docker_container_count_returns_zero_on_missing_docker():
     def fake_run(*_args, **_kwargs):
         raise FileNotFoundError
 
-    monkeypatch.setattr(system.subprocess, "run", fake_run)
-
-    assert system.get_docker_container_count() == 0
+    assert system.get_docker_container_count(run=fake_run) == 0
 
 
 def test_collect_system_metrics(monkeypatch):
@@ -43,3 +42,22 @@ def test_collect_system_metrics(monkeypatch):
         "docker_container_count": 3,
         "current_datetime": "2026-08-01 00:00:00",
     }
+
+
+def test_docker_count_gives_the_subprocess_a_timeout():
+    seen = {}
+
+    def run(*_args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="", returncode=0)
+
+    system.get_docker_container_count(run=run)
+
+    assert seen["timeout"] == 2.0
+
+
+def test_docker_count_treats_a_hung_daemon_as_zero():
+    def run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["docker", "ps", "-q"], timeout=2.0)
+
+    assert system.get_docker_container_count(run=run) == 0

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import socket
 import subprocess
+from collections.abc import Callable
 from datetime import datetime
 
 import psutil
+
+from harbor_console.docker import DOCKER_TIMEOUT_SECONDS
 
 
 def format_uptime(total_seconds: int) -> str:
@@ -29,22 +32,33 @@ def get_ipv4_address() -> str:
         sock.close()
 
 
-def get_docker_container_count() -> int:
-    """Return the number of running Docker containers."""
+def get_docker_container_count(
+    run: Callable[..., object] = subprocess.run,
+    timeout: float = DOCKER_TIMEOUT_SECONDS,
+) -> int:
+    """Return the number of running Docker containers.
+
+    Bounded for the same reason `docker.running_containers` is: this runs in
+    the web prober thread every cycle, and a wedged daemon with no bound
+    blocks that thread forever while the last snapshot is served as current.
+    """
     try:
-        result = subprocess.run(
+        result = run(
             ["docker", "ps", "-q"],
             check=False,
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        return 0
     except (FileNotFoundError, OSError):
         return 0
 
-    if result.returncode != 0:
+    if result.returncode != 0:  # type: ignore[attr-defined]
         return 0
 
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    lines = [line for line in result.stdout.splitlines() if line.strip()]  # type: ignore[attr-defined]
     return len(lines)
 
 
