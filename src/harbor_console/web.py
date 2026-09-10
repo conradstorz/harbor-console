@@ -16,8 +16,8 @@ from collections.abc import Callable, Sequence
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
-from harbor_console.addressing import fronts_for, reachable_address
-from harbor_console.ports.keys import addrs_overlap
+from harbor_console.addressing import fronts_for, reachable_address, url_host
+from harbor_console.ports.keys import ANY_ADDR, addrs_overlap
 from harbor_console.ports.ledger import Lease
 from harbor_console.serve import Proxy
 from harbor_console.snapshot import Snapshot
@@ -264,13 +264,15 @@ def _services_table(snapshot: Snapshot) -> str:
         addr = reachable_address(
             lease, str(snapshot.metrics["hostname"]), snapshot.tailnet_address
         )
-        # Link the address when it is the one this page is reachable at, and
-        # the hostname otherwise. Reaching a service by the address the page
-        # prints is the point; a lease that kept its own address keeps the
-        # hostname link it always had, which is no worse than before.
+        # Link what the row prints. A specific address -- tailnet or loopback
+        # -- is where the service actually answers, so the link agrees with
+        # the text beside it; a loopback link only works from the host, but a
+        # hostname link for a loopback bind works from nowhere and lies about
+        # it. Only a wildcard, which nobody can point a browser at, falls
+        # back to the hostname.
         url = (
-            f"http://{addr}:{lease.port}/"
-            if addr == snapshot.tailnet_address
+            f"http://{url_host(addr)}:{lease.port}/"
+            if addr != ANY_ADDR
             else f"http://{lease.host}:{lease.port}/"
         )
         if not snapshot.probed:

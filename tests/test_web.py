@@ -646,6 +646,33 @@ def test_a_lease_already_on_the_tailnet_address_is_linked_there():
     assert 'href="http://100.69.239.123:49152/"' in html
 
 
+def test_a_loopback_lease_links_the_loopback_address_it_prints():
+    """A loopback bind is where the service actually answers -- a hostname
+    link for it points at the LAN address, where nothing is listening, and
+    contradicts the loopback address the row prints beside it.
+    """
+    snap = snapshot(
+        leases=(Lease("portainer", "web", "hpz440", "127.0.0.1", 9443, date(2026, 9, 9)),),
+        listeners=(Listener("127.0.0.1", 9443, None),),
+        containers=(Container("portainer", (("127.0.0.1", 9443),)),),
+        health={("portainer", "web", "hpz440"): Health(False, None, None, (), None)},
+        tailnet_address="100.69.239.123",
+    )
+
+    page = render_page(snap).decode("utf-8")
+
+    assert 'href="http://127.0.0.1:9443/"' in page
+    assert 'href="http://hpz440:9443/"' not in page
+
+
+def test_a_wildcard_lease_with_no_tailnet_address_still_links_the_hostname():
+    snap = snapshot(tailnet_address=None)
+
+    page = render_page(snap).decode("utf-8")
+
+    assert 'href="http://hpz440:8080/"' in page
+
+
 def test_a_loopback_lease_is_not_advertised_on_the_tailnet():
     """A service bound to `127.0.0.1` is genuinely unreachable from the
     tailnet. Substituting the tailnet address there would publish a link that
