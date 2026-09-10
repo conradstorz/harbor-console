@@ -65,3 +65,36 @@ def tailscale_address(
         raise TailnetUnavailable(f"'{candidate}' is not an IPv4 address") from exc
 
     return candidate
+
+
+#: A bound on `tailscale ip -4 <peer>`. Shorter than `TAILSCALE_TIMEOUT_SECONDS`
+#: because this lookup degrades rather than blocking a startup path -- see
+#: `peer_address`.
+PEER_TIMEOUT_SECONDS = 2.0
+
+
+def peer_address(
+    host: str,
+    run: Callable[..., object] = subprocess.run,
+    timeout: float = PEER_TIMEOUT_SECONDS,
+) -> str | None:
+    """The tailnet IPv4 of a peer, or None when tailscale cannot say.
+
+    Degrades rather than raising, unlike `tailscale_address`: the caller is
+    the allocator CLI, which already treats unreachable live state as a
+    refusal to grant, so an unanswerable lookup is a fallback, not a fault.
+    """
+    try:
+        result = run(
+            ["tailscale", "ip", "-4", host],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:  # type: ignore[attr-defined]
+        return None
+    lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]  # type: ignore[attr-defined]
+    return lines[0] if lines else None

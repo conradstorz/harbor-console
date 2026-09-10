@@ -76,11 +76,12 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 from typing import TextIO
 
+from harbor_console import tailnet
 from harbor_console.ports import compose, discovery, envfile, explainer
 from harbor_console.ports.allocate import BandExhausted, Decision, apply_decisions, decide
 from harbor_console.ports.declaration import (
@@ -91,7 +92,7 @@ from harbor_console.ports.declaration import (
     write_assigned,
 )
 from harbor_console.ports.envfile import EnvFenceError
-from harbor_console.ports.keys import env_var_name
+from harbor_console.ports.keys import ANY_ADDR, env_var_name
 from harbor_console.ports.ledger import Lease, LedgerError, dumps_leases, load_leases, save_leases
 from harbor_console.ports.live import LiveState, LiveUnavailable, fetch_live
 
@@ -781,7 +782,10 @@ def _show(leases: Sequence[Lease], out: TextIO) -> int:
     return EXIT_OK
 
 
-def ports_url(leases: Sequence[Lease]) -> str | None:
+def ports_url(
+    leases: Sequence[Lease],
+    resolve: Callable[[str], str | None] = tailnet.peer_address,
+) -> str | None:
     """Where to read live host state, according to the ledger itself.
 
     `/ports.json` is served by `harbor-console-web`, which binds the port its
@@ -809,7 +813,16 @@ def ports_url(leases: Sequence[Lease]) -> str | None:
         return None
 
     lease = mine[0]
-    return f"http://{lease.host}:{lease.port}/ports.json"
+    # The page binds the Tailscale address only (ADR 7), so the ledger's
+    # hand-authored hostname -- which LAN DNS may resolve elsewhere -- is the
+    # last resort, not the first. A specific leased addr is already the
+    # answer; a wildcard lease is resolved through tailscale from this end of
+    # the wire, the same rule c208fd6 gave the prober on the other end.
+    if lease.addr != ANY_ADDR:
+        host = lease.addr
+    else:
+        host = resolve(lease.host) or lease.host
+    return f"http://{host}:{lease.port}/ports.json"
 
 
 def main(argv: Sequence[str]) -> int:
@@ -829,7 +842,7 @@ def main(argv: Sequence[str]) -> int:
         # that cannot be read names no page either, so this path stays quiet
         # and lets that happen.
         try:
-            url = ports_url(load_leases(ledger_path))
+            url = ports_url(load_leases(ledger_path), resolve=tailnet.peer_address)
         except LedgerError:
             url = None
 

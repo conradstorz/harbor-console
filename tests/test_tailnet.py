@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from harbor_console import tailnet
 from harbor_console.tailnet import TailnetUnavailable, tailscale_address
 
 
@@ -67,3 +68,16 @@ def test_unparseable_output_raises():
 def test_an_ipv6_only_answer_raises():
     with pytest.raises(TailnetUnavailable, match="not an IPv4"):
         tailscale_address(run=fake_run(stdout="fd7a:115c:a1e0::1\n"))
+
+
+def test_peer_address_returns_the_peers_tailnet_ipv4():
+    assert (
+        tailnet.peer_address("hpz440", run=fake_run("100.69.239.123\n"))
+        == "100.69.239.123"
+    )
+
+
+def test_peer_address_degrades_to_none_when_tailscale_cannot_say():
+    assert tailnet.peer_address("hpz440", run=fake_run(raises=FileNotFoundError())) is None
+
+    assert tailnet.peer_address("hpz440", run=fake_run(stdout="", returncode=1)) is None

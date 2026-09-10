@@ -1007,10 +1007,14 @@ def test_the_ports_url_follows_the_web_lease():
     # the same lease. A URL that did not move with it would strand the
     # allocator on a dead port the first time the page was regranted.
     other = Lease("gte", "console", "hpz440", "0.0.0.0", 8080, TODAY)
+    unresolved = lambda host: None  # noqa: E731 -- isolates this from the real tailnet
 
-    assert cli.ports_url([other, web_lease(8090)]) == "http://hpz440:8090/ports.json"
-    assert cli.ports_url([other, web_lease(8100)]) == "http://hpz440:8100/ports.json"
-    assert cli.ports_url([web_lease(8100, host="nas")]) == "http://nas:8100/ports.json"
+    assert cli.ports_url([other, web_lease(8090)], resolve=unresolved) == "http://hpz440:8090/ports.json"
+    assert cli.ports_url([other, web_lease(8100)], resolve=unresolved) == "http://hpz440:8100/ports.json"
+    assert (
+        cli.ports_url([web_lease(8100, host="nas")], resolve=unresolved)
+        == "http://nas:8100/ports.json"
+    )
 
 
 def test_no_web_lease_means_no_url_rather_than_a_guessed_one():
@@ -1026,6 +1030,31 @@ def test_no_web_lease_means_no_url_rather_than_a_guessed_one():
     assert cli.ports_url([web_lease(8100), web_lease(8100, host="nas")]) is None
 
 
+def test_ports_url_resolves_a_wildcard_lease_through_tailscale():
+    leases = [Lease("harbor-console", "web", "hpz440", "0.0.0.0", 80, TODAY)]
+
+    url = cli.ports_url(leases, resolve=lambda host: "100.69.239.123")
+
+    assert url == "http://100.69.239.123:80/ports.json"
+
+
+def test_ports_url_falls_back_to_the_hostname_when_tailscale_cannot_say():
+    leases = [Lease("harbor-console", "web", "hpz440", "0.0.0.0", 80, TODAY)]
+
+    url = cli.ports_url(leases, resolve=lambda host: None)
+
+    assert url == "http://hpz440:80/ports.json"
+
+
+def test_ports_url_uses_a_specific_leased_addr_without_asking_tailscale():
+    leases = [Lease("harbor-console", "web", "hpz440", "100.69.239.123", 8090, TODAY)]
+
+    def explode(_host):
+        raise AssertionError("a specific addr needs no resolution")
+
+    assert cli.ports_url(leases, resolve=explode) == "http://100.69.239.123:8090/ports.json"
+
+
 def test_main_reads_live_state_from_the_url_the_ledger_names(monkeypatch, capsys):
     asked: list[str] = []
 
@@ -1035,6 +1064,9 @@ def test_main_reads_live_state_from_the_url_the_ledger_names(monkeypatch, capsys
 
     monkeypatch.setattr(cli, "load_leases", lambda path: [web_lease(8100)])
     monkeypatch.setattr(cli, "fetch_live", fake_fetch)
+    # Isolated from the real tailnet: a resolvable "hpz440" on the machine
+    # running this suite must not change what URL main() asks.
+    monkeypatch.setattr(cli.tailnet, "peer_address", lambda host: None)
 
     assert cli.main(["show"]) == 0
     assert asked == ["http://hpz440:8100/ports.json"]
