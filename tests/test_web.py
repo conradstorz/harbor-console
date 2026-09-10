@@ -242,7 +242,7 @@ def test_page_escapes_every_field_that_originates_outside_this_project():
     metrics["current_datetime"] = PAYLOAD
 
     health = {
-        (PAYLOAD, PAYLOAD): Health(
+        (PAYLOAD, PAYLOAD, PAYLOAD): Health(
             up=True,
             state="ok",
             summary=PAYLOAD,
