@@ -454,3 +454,13 @@ def test_when_two_contending_leaseholders_both_widen_only_the_junior_moves():
         updated = apply_decisions(leases, list(decisions.values()), TODAY)
         assert contending_pairs(updated) == []
         assert senior in updated
+
+
+def test_an_uncontended_addr_change_is_reported_not_swallowed():
+    leases = [Lease("p", "web", "hpz440", "127.0.0.1", 8080, date(2026, 8, 1))]
+
+    [decision] = decide([decl("p", "web", assigned=8080, addr="0.0.0.0")], leases, live(), TODAY)
+
+    assert decision.addr == "0.0.0.0"
+    assert decision.port == 8080
+    assert "addr updated" in decision.reason

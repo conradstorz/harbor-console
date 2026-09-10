@@ -160,7 +160,14 @@ def _decide_one(
         promise = _promised_by(taken, host, addr, own.port, exclude=identity)
         blocker: Lease | _Promise | None = holder if holder is not None else promise
         if blocker is None:
-            if own.port == request.assigned:
+            action = "keep" if own.port == request.assigned else "grant"
+            if own.addr != addr:
+                # The key is changing even though the port is not. The reason
+                # says so, and the CLI forwards any keep whose key differs
+                # from its lease to `apply_decisions`, whose contract has
+                # always been that an addr-only change reaches the ledger.
+                return make(action, own.port, f"addr updated from {own.addr} to {addr}")
+            if action == "keep":
                 return make("keep", own.port, "already leased")
             return make("grant", own.port, "ledger holds")
 

@@ -1088,3 +1088,21 @@ def test_main_warns_and_grants_nothing_when_no_lease_names_the_page(monkeypatch,
 
     assert cli.main(["show"]) == 0
     assert "no single lease for harbor-console/web" in capsys.readouterr().out
+
+
+def test_sync_records_a_widened_addr_in_the_ledger(tmp_path: Path):
+    project = tmp_path / "alpha"
+    project.mkdir()
+    (project / ".harbor.toml").write_text(
+        'project = "alpha"\nhost = "hpz440"\n\n[[port]]\nname = "web"\n'
+        "want = 8080\nassigned = 8080\n",
+        encoding="utf-8",
+    )
+    ledger_path = tmp_path / "services.toml"
+    save_leases(ledger_path, [Lease("alpha", "web", "hpz440", "127.0.0.1", 8080, TODAY)])
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    [lease] = load_leases(ledger_path)
+    assert lease.addr == "0.0.0.0"
+    assert "alpha/web" in output

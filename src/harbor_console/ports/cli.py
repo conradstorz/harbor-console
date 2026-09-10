@@ -188,7 +188,7 @@ def run(
         print(f"error: {exc}", file=out)
         return EXIT_ERROR
 
-    changes = [decision for decision in decisions if decision.action != "keep"]
+    changes = _ledger_changes(decisions, leases)
 
     new_only = getattr(args, "new_only", False)
     withheld = [
@@ -307,6 +307,32 @@ def run(
     if broken or failures:
         return EXIT_ERROR
     return EXIT_PENDING if withheld or warnings else EXIT_OK
+
+
+def _ledger_changes(
+    decisions: Sequence[Decision], leases: Sequence[Lease]
+) -> list[Decision]:
+    """Every decision that would change the ledger, addr-only keeps included.
+
+    A keep is not always a no-op: a declaration that widened its addr while
+    staying uncontended keeps its port, and `apply_decisions`' contract is
+    that the new key still reaches the ledger. Filtering on the action alone
+    dropped exactly those -- `sync` printed "up to date" over a ledger still
+    claiming the narrow addr, which a later declaration on a non-overlapping
+    addr could then be granted against, reintroducing the founding collision.
+    """
+    by_identity = {
+        (lease.project, lease.name, lease.host): lease for lease in leases
+    }
+    changes = []
+    for decision in decisions:
+        if decision.action != "keep":
+            changes.append(decision)
+            continue
+        lease = by_identity.get((decision.project, decision.port_name, decision.host))
+        if lease is None or (lease.addr, lease.port) != (decision.addr, decision.port):
+            changes.append(decision)
+    return changes
 
 
 def _effective_env(
