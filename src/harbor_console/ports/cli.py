@@ -855,6 +855,27 @@ def ports_url(
     return f"http://{url_host(host)}:{lease.port}/ports.json"
 
 
+def _live_state_warning(ledger_error: str | None) -> str:
+    """The warning for an unusable /ports.json URL, naming the actual fault.
+
+    Both faults leave `main` with no page to ask, but they point an operator
+    in different directions: a ledger that will not load needs `services.toml`
+    fixed, while a ledger that loads fine but names no single lease for
+    harbor-console/web needs a lease. Folding them into one message sent an
+    operator hunting for a missing lease when the real fault was a file that
+    would not parse.
+    """
+    if ledger_error is not None:
+        return (
+            f"the ledger could not be read ({ledger_error}), so there "
+            "is no /ports.json to ask for; live host state is unavailable"
+        )
+    return (
+        f"no single lease for {WEB_PROJECT}/{WEB_PORT_NAME}, so there "
+        "is no /ports.json to read; live host state is unavailable"
+    )
+
+
 def main(argv: Sequence[str]) -> int:
     """Entry point for `harbor-console ports ...`."""
     try:
@@ -866,22 +887,20 @@ def main(argv: Sequence[str]) -> int:
     ledger_path = Path(__file__).resolve().parents[3] / "services.toml"
 
     url = args.ports_url
+    ledger_error: str | None = None
     if url is None:
         # Read here only to find the page to ask; `run` loads the ledger again
-        # as the authority it acts on, and reports a bad one properly. A ledger
-        # that cannot be read names no page either, so this path stays quiet
-        # and lets that happen.
+        # as the authority it acts on, and reports a bad one properly -- this
+        # path only remembers the reason so the warning below does not blame a
+        # missing lease for a file that would not load.
         try:
             url = ports_url(load_leases(ledger_path), resolve=tailnet.peer_address)
-        except LedgerError:
+        except LedgerError as exc:
+            ledger_error = str(exc)
             url = None
 
     if url is None:
-        print(
-            f"warning: no single lease for {WEB_PROJECT}/{WEB_PORT_NAME}, so there "
-            "is no /ports.json to read; live host state is unavailable",
-            file=sys.stdout,
-        )
+        print(f"warning: {_live_state_warning(ledger_error)}", file=sys.stdout)
         live = LiveState(host="", listeners=(), complete=False)
     else:
         try:

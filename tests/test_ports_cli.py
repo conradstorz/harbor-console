@@ -10,7 +10,7 @@ from harbor_console.ports import cli
 from harbor_console.ports.declaration import load_declaration
 from harbor_console.ports.envfile import FENCE_END, FENCE_START
 from harbor_console.ports.explainer import TEMPLATE_VERSION
-from harbor_console.ports.ledger import Lease, load_leases, save_leases
+from harbor_console.ports.ledger import Lease, LedgerError, load_leases, save_leases
 from harbor_console.ports.live import Listener, LiveState
 
 TODAY = date(2026, 9, 1)
@@ -1097,6 +1097,43 @@ def test_main_warns_and_grants_nothing_when_no_lease_names_the_page(monkeypatch,
 
     assert cli.main(["show"]) == 0
     assert "no single lease for harbor-console/web" in capsys.readouterr().out
+
+
+def test_the_live_state_warning_names_an_unreadable_ledger():
+    message = cli._live_state_warning("services.toml: bad TOML")
+
+    assert "could not be read" in message
+    assert "bad TOML" in message
+    assert "no single lease" not in message
+
+
+def test_the_live_state_warning_names_a_missing_lease_when_the_ledger_read_fine():
+    message = cli._live_state_warning(None)
+
+    assert "no single lease" in message
+
+
+def test_main_warns_about_an_unreadable_ledger_rather_than_a_missing_lease(monkeypatch, capsys):
+    """An unreadable services.toml names no page to ask, same as no single
+    lease -- but the two faults send an operator in different directions,
+    and the warning must say which one actually happened.
+    """
+
+    def raise_ledger_error(path):
+        raise LedgerError("services.toml: bad TOML")
+
+    def fake_fetch(url, *args, **kwargs):
+        raise AssertionError(f"nothing should have been asked, got {url}")
+
+    monkeypatch.setattr(cli, "load_leases", raise_ledger_error)
+    monkeypatch.setattr(cli, "fetch_live", fake_fetch)
+
+    cli.main(["show"])
+
+    out = capsys.readouterr().out
+    assert "could not be read" in out
+    assert "bad TOML" in out
+    assert "no single lease" not in out
 
 
 def test_sync_moves_a_project_whose_want_changed(tmp_path: Path):
