@@ -1141,6 +1141,32 @@ def test_sync_warns_when_an_edited_want_is_unavailable(tmp_path: Path):
     assert [lease.port for lease in sorted(load_leases(ledger_path), key=lambda l: l.project)] == [8080, 8081]
 
 
+def test_sync_reports_a_blocked_want_note_when_live_state_is_incomplete(tmp_path: Path):
+    # Exercises the "notes +" wiring on the second `_report` call, in the
+    # `changes and not live.complete` refusal path: beta's want is blocked
+    # (its note carries no ledger change and so never lands in `changes`) and
+    # gamma is a genuine pending grant, so `changes` is non-empty and the
+    # refusal branch fires. beta's warning must still reach the operator, and
+    # nothing may be written for gamma while live state cannot be verified.
+    alpha = make_project(tmp_path, "alpha", 8080)
+    beta = make_project(tmp_path, "beta", 8081)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+
+    beta_toml = beta / ".harbor.toml"
+    body = beta_toml.read_text(encoding="utf-8")
+    beta_toml.write_text(body.replace("want = 8081", "want = 8080"), encoding="utf-8")
+
+    gamma = make_project(tmp_path, "gamma", 8500)
+
+    code, output = run(["sync"], tmp_path, ledger_path, state=live(complete=False))
+
+    assert code == 1
+    assert "warning" in output
+    assert "8080" in output
+    assert not (gamma / ".env").exists()
+
+
 def test_sync_records_a_widened_addr_in_the_ledger(tmp_path: Path):
     project = tmp_path / "alpha"
     project.mkdir()

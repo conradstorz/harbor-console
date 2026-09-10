@@ -498,6 +498,53 @@ def test_when_two_contending_leaseholders_both_widen_only_the_junior_moves():
         assert senior in updated
 
 
+def test_a_want_blocked_by_a_same_run_promise_on_an_existing_lease_says_so():
+    """The same-run-promise branch of the `own is not None` want check.
+
+    `newproj` has no lease and wants a free port, so it is granted -- and that
+    grant is only a promise until this run's ledger write. `p` already holds a
+    lease elsewhere and wants the very key just promised to `newproj`: neither
+    a lease nor a listener blocks it, only the promise, so the blocker must be
+    named as a promise, not a lease or "something is listening".
+    """
+    leases = [Lease("p", "web", "hpz440", "0.0.0.0", 8090, date(2026, 8, 1))]
+    declarations = [
+        decl("newproj", "web", want=8080),
+        decl("p", "web", want=8080, assigned=8090),
+    ]
+
+    first, second = decide(declarations, leases, live(), TODAY)
+
+    assert first.action == "grant"
+    assert first.port == 8080
+    assert second.action == "keep"
+    assert second.port == 8090
+    assert second.note is not None
+    assert "promised it this run" in second.note
+    assert "newproj/web" in second.note
+
+
+def test_an_addr_widen_and_a_blocked_want_are_both_reported():
+    """A held lease can carry two independent edits at once: a widened `addr`
+    and a `want` that is unavailable. The addr change is uncontended and takes
+    effect (the reason says so); the want is blocked by another lease and is
+    only noted, not honoured -- both must survive in the one decision returned.
+    """
+    leases = [
+        Lease("p", "web", "hpz440", "127.0.0.1", 8090, date(2026, 8, 1)),
+        Lease("q", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 1)),
+    ]
+    declaration = decl("p", "web", want=8080, assigned=8090, addr="0.0.0.0")
+
+    [decision] = decide([declaration], leases, live(), TODAY)
+
+    assert decision.action == "keep"
+    assert decision.port == 8090
+    assert "addr updated" in decision.reason
+    assert decision.note is not None
+    assert "8080" in decision.note
+
+
 def test_an_uncontended_addr_change_is_reported_not_swallowed():
     leases = [Lease("p", "web", "hpz440", "127.0.0.1", 8080, date(2026, 8, 1))]
 

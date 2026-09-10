@@ -58,3 +58,12 @@ before, on any tree where a committed `.harbor.toml`'s `want` already
 disagrees with its held port and cannot be honoured. That is the intended
 behaviour: the note exists precisely to surface a state that was previously
 silent.
+
+Concretely: a project whose `want` was band-bumped long ago -- edited once to
+chase a port that someone else has since taken, and never edited back -- now
+emits this warning and exits non-zero on every `scan` and every scheduled
+`sync --new-only`, permanently, until either its `.harbor.toml`'s `want` is
+edited to match reality or the port it names frees up and a manual `sync`
+moves it. Nothing about that state heals itself or times out. A persistently
+red scheduled-sync timer after this change is therefore a signal to check for
+a stale `want`, not evidence of a fault in the tool.
