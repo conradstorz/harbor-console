@@ -239,6 +239,17 @@ def write_assigned(path: Path, port_name: str, assigned: int) -> None:
     raise DeclarationError(f"{path}: no [[port]] named '{port_name}'")
 
 
+def _table_text(line: str) -> str:
+    """A line with any trailing TOML comment removed, stripped.
+
+    `tomllib` accepts `[[port]]  # comment`; the writer must see the same
+    file the reader saw, or a grant is made and then cannot be written back.
+    A `#` cannot appear inside a table header or an identifier this tool
+    accepts, so splitting on it is safe here.
+    """
+    return line.split("#", 1)[0].strip()
+
+
 def _port_block_bounds(lines: list[str]) -> list[tuple[int, int]]:
     """Return (start, end) line indices for each [[port]] block.
 
@@ -247,7 +258,7 @@ def _port_block_bounds(lines: list[str]) -> list[tuple[int, int]]:
     past it - so a table that follows a `[[port]]` block is never mistaken
     for part of that block.
     """
-    starts = [i for i, line in enumerate(lines) if line.strip() == "[[port]]"]
+    starts = [i for i, line in enumerate(lines) if _table_text(line) == "[[port]]"]
     bounds = []
     for start in starts:
         end = len(lines)
@@ -261,7 +272,7 @@ def _port_block_bounds(lines: list[str]) -> list[tuple[int, int]]:
 
 def _is_table_header(line: str) -> bool:
     """True if `line` opens a top-level TOML table, e.g. `[foo]` or `[[foo]]`."""
-    stripped = line.strip()
+    stripped = _table_text(line)
     return len(stripped) > 2 and stripped.startswith("[") and stripped.endswith("]")
 
 
@@ -269,7 +280,10 @@ def _block_name(block: list[str]) -> str | None:
     for line in block:
         key, _, value = line.partition("=")
         if key.strip() == "name":
-            return value.split("#")[0].strip().strip('"')
+            text = value.split("#")[0].strip()
+            if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+                text = text[1:-1]
+            return text
     return None
 
 

@@ -279,3 +279,27 @@ def test_the_boundaries_of_the_port_range_are_accepted(tmp_path: Path):
 
     assert port.want == 1
     assert port.assigned == 65535
+
+
+def test_write_assigned_accepts_a_single_quoted_name(tmp_path: Path):
+    path = tmp_path / ".harbor.toml"
+    path.write_text(
+        "project = \"p\"\nhost = \"h\"\n\n[[port]]\nname = 'web'\nwant = 8080\n",
+        encoding="utf-8",
+    )
+
+    write_assigned(path, "web", 8100)
+
+    assert load_declaration(path).ports[0].assigned == 8100
+
+
+def test_write_assigned_sees_a_port_header_with_a_trailing_comment(tmp_path: Path):
+    path = tmp_path / ".harbor.toml"
+    path.write_text(
+        'project = "p"\nhost = "h"\n\n[[port]]  # the web port\nname = "web"\n',
+        encoding="utf-8",
+    )
+
+    write_assigned(path, "web", 8100)
+
+    assert load_declaration(path).ports[0].assigned == 8100
