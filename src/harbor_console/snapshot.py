@@ -56,7 +56,11 @@ class Snapshot:
     listeners: tuple[Listener, ...] = ()
     containers: tuple[Container, ...] = ()
     docker_available: bool = True
-    health: dict[tuple[str, str], Health] = field(default_factory=dict)
+    #: Keyed on `(project, name, host)` -- the whole lease identity, matching
+    #: everywhere else in this codebase. `(project, name)` alone let two
+    #: hosts' leases for the same project/name collide, so one probe result
+    #: silently overwrote the other.
+    health: dict[tuple[str, str, str], Health] = field(default_factory=dict)
     drift: tuple[Drift, ...] = ()
     #: Why the last collection cycle failed, whatever its source -- the
     #: ledger, a collector, the prober or the reconciler. Naming it for the

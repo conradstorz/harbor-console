@@ -250,7 +250,7 @@ def collect_snapshot(
     # address they do answer on. `addressing` holds that rule so the prober
     # and the renderer cannot drift apart again.
     health = {
-        (lease.project, lease.name): prober(
+        (lease.project, lease.name, lease.host): prober(
             probe_target(lease, host, tailnet_address), lease.port
         )
         for lease in held

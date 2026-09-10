@@ -57,7 +57,7 @@ def test_collect_snapshot_gathers_every_source():
 
     assert snapshot.metrics == METRICS
     assert snapshot.docker_available is True
-    assert snapshot.health[("gte", "console")].up is True
+    assert snapshot.health[("gte", "console", "hpz440")].up is True
     assert snapshot.drift == ()
     assert snapshot.collection_error is None
 
@@ -813,4 +813,34 @@ def test_a_serve_outage_does_not_take_the_cycle_down():
     findings = [d for d in snapshot.drift if d.kind == UNDECLARED_TAILNET_LISTENER]
     assert len(findings) == 1
     assert "proxy" not in findings[0].detail.lower()
+
+
+def test_probe_results_do_not_collide_across_hosts():
+    """Lease identity everywhere else in this codebase is `(project, name,
+    host)`. A `health` dict keyed on `(project, name)` alone lets a
+    fleet-wide ledger's two hosts for the same project/name overwrite each
+    other's probe result.
+    """
+    leases = (
+        Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1)),
+        Lease("gte", "web", "elsewhere", "0.0.0.0", 8080, date(2026, 9, 1)),
+    )
+
+    def prober(target, _port):
+        # The local lease probes at an address; the remote one at its hostname.
+        up = target == "elsewhere"
+        return Health(up=up, state=None, summary=None, detail=(), warning=None)
+
+    snapshot = webapp.collect_snapshot(
+        leases=leases,
+        host="hpz440",
+        now=datetime(2026, 9, 9, 12, 0, 0),
+        collector=lambda: dict(METRICS),
+        listeners=lambda: (),
+        containers=lambda: (),
+        prober=prober,
+    )
+
+    assert snapshot.health[("gte", "web", "hpz440")].up is False
+    assert snapshot.health[("gte", "web", "elsewhere")].up is True
     assert snapshot.collection_error is None

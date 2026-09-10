@@ -41,7 +41,7 @@ def snapshot(**overrides):
         listeners=(Listener("0.0.0.0", 8080, None),),
         containers=(Container("gte", (("0.0.0.0", 8080),)),),
         docker_available=True,
-        health={("gte", "console"): Health(True, "ok", "3 queued", (Detail("queue", "3"),), None)},
+        health={("gte", "console", "hpz440"): Health(True, "ok", "3 queued", (Detail("queue", "3"),), None)},
         drift=(),
         collection_error=None,
         # These render tests describe a page that has been collected; the
@@ -130,7 +130,7 @@ def test_page_shows_host_metrics_and_the_service():
 
 
 def test_page_shows_a_down_service():
-    health = {("gte", "console"): Health(False, None, None, (), None)}
+    health = {("gte", "console", "hpz440"): Health(False, None, None, (), None)}
     html = render_page(snapshot(health=health, listeners=())).decode()
 
     assert "DOWN" in html
@@ -206,7 +206,7 @@ def test_page_shows_a_collection_failure_banner():
 
 
 def test_page_shows_an_hcstatus_warning_without_calling_the_service_down():
-    health = {("gte", "console"): Health(True, None, None, (), "/hcstatus unreadable")}
+    health = {("gte", "console", "hpz440"): Health(True, None, None, (), "/hcstatus unreadable")}
     html = render_page(snapshot(health=health)).decode()
 
     assert "UP" in html
@@ -214,7 +214,7 @@ def test_page_shows_an_hcstatus_warning_without_calling_the_service_down():
 
 
 def test_page_escapes_values_from_services():
-    health = {("gte", "console"): Health(True, "ok", "<script>x</script>", (), None)}
+    health = {("gte", "console", "hpz440"): Health(True, "ok", "<script>x</script>", (), None)}
     html = render_page(snapshot(health=health)).decode()
 
     assert "<script>" not in html
@@ -493,7 +493,7 @@ def test_a_listening_non_http_lease_is_not_reported_down():
             leases=(mqtt,),
             listeners=(Listener("0.0.0.0", 1883, None),),
             containers=(),
-            health={("ice-colder", "mqtt"): Health(False, None, None, (), None)},
+            health={("ice-colder", "mqtt", "hpz440"): Health(False, None, None, (), None)},
             drift=(),
         )
     ).decode()
@@ -511,7 +511,7 @@ def test_a_lease_with_no_listener_is_still_down():
         snapshot(
             listeners=(),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("gte", "console", "hpz440"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -530,7 +530,7 @@ def test_a_listener_on_another_address_does_not_excuse_a_dead_lease():
             leases=(lease,),
             listeners=(Listener("192.168.1.5", 8080, None),),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("gte", "console", "hpz440"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -546,7 +546,7 @@ def test_a_wildcard_listener_covers_a_specific_lease():
             leases=(lease,),
             listeners=(Listener("0.0.0.0", 8080, None),),
             containers=(),
-            health={("gte", "console"): Health(False, None, None, (), None)},
+            health={("gte", "console", "hpz440"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -568,7 +568,7 @@ def test_an_off_host_lease_whose_port_coincides_locally_is_not_listening():
             leases=(elsewhere,),
             listeners=(Listener("0.0.0.0", 9999, None),),
             containers=(),
-            health={("elsewhere-proj", "svc"): Health(False, None, None, (), None)},
+            health={("elsewhere-proj", "svc", "other-host"): Health(False, None, None, (), None)},
         )
     ).decode()
 
@@ -638,7 +638,7 @@ def test_a_lease_already_on_the_tailnet_address_is_linked_there():
             leases=(arm,),
             listeners=(Listener("100.69.239.123", 49152, None),),
             containers=(),
-            health={("arm", "web"): Health(True, None, None, (), None)},
+            health={("arm", "web", "hpz440"): Health(True, None, None, (), None)},
             tailnet_address="100.69.239.123",
         )
     ).decode()
@@ -657,7 +657,7 @@ def test_a_loopback_lease_is_not_advertised_on_the_tailnet():
             leases=(local,),
             listeners=(Listener("127.0.0.1", 5432, None),),
             containers=(),
-            health={("shared", "postgres"): Health(False, None, None, (), None)},
+            health={("shared", "postgres", "hpz440"): Health(False, None, None, (), None)},
             tailnet_address="100.69.239.123",
         )
     ).decode()
@@ -678,7 +678,7 @@ def test_an_off_host_lease_does_not_borrow_this_hosts_tailnet_address():
             leases=(elsewhere,),
             listeners=(),
             containers=(),
-            health={("elsewhere-proj", "svc"): Health(False, None, None, (), None)},
+            health={("elsewhere-proj", "svc", "other-host"): Health(False, None, None, (), None)},
             tailnet_address="100.69.239.123",
         )
     ).decode()

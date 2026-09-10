@@ -259,7 +259,7 @@ def _services_table(snapshot: Snapshot) -> str:
     rows = []
     listening_shown = False
     for lease in snapshot.leases:
-        health = snapshot.health.get((lease.project, lease.name))
+        health = snapshot.health.get((lease.project, lease.name, lease.host))
         up = health is not None and health.up
         addr = reachable_address(
             lease, str(snapshot.metrics["hostname"]), snapshot.tailnet_address
