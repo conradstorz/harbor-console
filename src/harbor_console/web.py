@@ -376,13 +376,15 @@ def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHa
                 snapshot = get_snapshot()
                 reasons = _ports_refusals(snapshot)
                 if reasons:
-                    # Two windows, one refusal. An unprobed snapshot has no
+                    # Three windows, one refusal. An unprobed snapshot has no
                     # listeners in it -- not because none are found, but
                     # because none were looked for. A snapshot collected
                     # while Docker was unreachable has listeners but cannot
                     # attribute them, and `container` reads as null for every
                     # one: the allocator then sees a project's own container
                     # nowhere on the port it already runs on, and moves it.
+                    # And a snapshot whose latest cycle failed is the last
+                    # good one, however old, standing in for the present.
                     # Serving either as 200 reads to the allocator as a
                     # verified answer, and `ports/allocate.py` grants on it.
                     # 503 makes `urllib` raise `HTTPError`, which
