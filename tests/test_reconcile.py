@@ -392,14 +392,22 @@ def test_nothing_is_called_undeclared_without_a_tailnet_address():
 
 
 def test_an_undeclared_listener_names_the_proxy_and_the_lease_behind_it():
-    """The finding that makes 8443 actionable: it fronts the gte console."""
+    """The finding that makes 8443 actionable: it fronts the gte console.
+
+    A second backend on the same front that no lease covers keeps the port
+    from being fully accounted for, so the finding still stands and the
+    leased backend's clause is still exercised.
+    """
     drift = find_drift(
         [lease("gte", 8080, name="console")],
         [Listener(TAILNET, 8443, None), Listener("0.0.0.0", 8080, None)],
         [Container("gte", (("0.0.0.0", 8080),))],
         host=HOST,
         tailnet_address=TAILNET,
-        proxies=(Proxy(8443, "/", "127.0.0.1", 8080),),
+        proxies=(
+            Proxy(8443, "/", "127.0.0.1", 8080),
+            Proxy(8443, "/other", "127.0.0.1", 9999),
+        ),
     )
 
     assert kinds(drift) == [UNDECLARED_TAILNET_LISTENER]
@@ -539,3 +547,35 @@ def test_a_proxied_ephemeral_port_is_still_reported():
     )
 
     assert kinds(drift) == [UNDECLARED_TAILNET_LISTENER]
+
+
+def test_a_serve_front_whose_backend_is_leased_is_not_drift():
+    tailnet = "100.69.239.123"
+    leases = [Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1))]
+    listeners = [
+        Listener("0.0.0.0", 8080, None),
+        Listener(tailnet, 8443, None),  # tailscaled's front
+    ]
+    containers = (Container("gte", (("0.0.0.0", 8080),)),)
+    proxies = (Proxy(8443, "/", "127.0.0.1", 8080),)
+
+    findings = find_drift(
+        leases, listeners, containers, "hpz440",
+        tailnet_address=tailnet, proxies=proxies,
+    )
+
+    assert findings == ()
+
+
+def test_a_serve_front_to_an_unleased_backend_is_still_reported():
+    tailnet = "100.69.239.123"
+    listeners = [Listener(tailnet, 8443, None)]
+    proxies = (Proxy(8443, "/", "127.0.0.1", 9999),)
+
+    findings = find_drift(
+        [], listeners, (), "hpz440", tailnet_address=tailnet, proxies=proxies,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].kind == "undeclared-tailnet-listener"
+    assert "nothing declares" in findings[0].detail

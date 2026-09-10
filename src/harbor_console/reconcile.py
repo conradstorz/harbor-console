@@ -228,6 +228,11 @@ def _undeclared_tailnet_listeners(
     when Docker could be read) or without a known tailnet address, for the
     same reason `running-not-declared` is: neither absence can distinguish an
     undeclared listener from one that is perfectly well accounted for.
+
+    Also withheld when every `tailscale serve` proxy on the port forwards to
+    a backend some local lease covers -- the front is then fully accounted
+    for by that lease's directory row -- unless no proxy is known at all, in
+    which case absence of serve knowledge must not read as "accounted for".
     """
     if tailnet_address is None:
         return []
@@ -246,6 +251,24 @@ def _undeclared_tailnet_listeners(
         # Already reported against the container that publishes it. The same
         # port under two names reads as two problems.
         if _covers(published, addr, port):
+            continue
+        # A front every one of whose backends is leased is fully accounted
+        # for: somebody configured serve to publish a declared service, and
+        # the directory row for that lease already leads with the front's
+        # URL. A standing finding here would never clear on a healthy,
+        # fully-adopted host, which teaches operators to skip the one
+        # section that exists to be read. A front to an *unleased* backend
+        # still reports, and absent serve knowledge nothing is suppressed --
+        # absence of knowledge must not read as "accounted for".
+        behind = [proxy for proxy in proxies if proxy.port == port]
+        if behind and all(
+            any(
+                lease.port == proxy.backend_port
+                and addrs_overlap(lease.addr, proxy.backend_addr)
+                for lease in mine
+            )
+            for proxy in behind
+        ):
             continue
         clause = _proxy_clause(port, proxies, mine, containers)
         # A kernel-assigned port nobody chose is not a port anybody published.

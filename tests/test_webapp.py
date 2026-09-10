@@ -771,6 +771,9 @@ def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
     """End to end through the coordinator: the serve proxy on 8443 reaches
     `find_drift` alongside the tailnet address, and the finding names the
     lease behind it.
+
+    A second backend on the same front that no lease covers keeps the port
+    from being fully accounted for, so the finding still stands.
     """
     snapshot = webapp.collect_snapshot(
         leases=(GTE_LEASE,),
@@ -783,7 +786,10 @@ def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
         ),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
         prober=lambda host, port: Health(True, None, None, (), None),
-        proxies=lambda: (Proxy(8443, "/", "127.0.0.1", 8080),),
+        proxies=lambda: (
+            Proxy(8443, "/", "127.0.0.1", 8080),
+            Proxy(8443, "/other", "127.0.0.1", 9999),
+        ),
         tailnet_address="100.69.239.123",
     )
 
