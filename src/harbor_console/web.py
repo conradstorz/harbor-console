@@ -24,11 +24,14 @@ from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
 
-#: Why `/ports.json` may refuse. Both windows are "we looked at less than the
+#: Why `/ports.json` may refuse. All three windows are "we looked at less than the
 #: whole host", and the allocator writes other repositories' `.env` files from
-#: what this endpoint says, so both are refusals rather than a thin 200.
+#: what this endpoint says, so all are refusals rather than a thin 200.
 UNPROBED_REASON = "not yet probed: no collection cycle has completed"
 DOCKER_REASON = "docker could not be read: container attribution is incomplete"
+STALE_REASON = (
+    "the last collection cycle failed, so this listener data is stale: "
+)
 
 _STYLE = """
 body { font-family: ui-monospace, monospace; margin: 2rem; max-width: 60rem; }
@@ -80,19 +83,22 @@ def ports_payload(snapshot: Snapshot) -> dict:
 def _ports_refusals(snapshot: Snapshot) -> tuple[str, ...]:
     """Every reason `/ports.json` must refuse for this snapshot.
 
-    Empty means the payload is answerable. Two conditions, not one: a snapshot
-    nothing has been collected into yet, and one collected while Docker could
-    not be read. The second is the half-blind window beside the first -- the
-    sockets are real, but nothing can be attributed to a container, so a
-    project already running on its wanted port looks unowned and the allocator
-    reassigns it. The HTML page keeps serving in both windows; it reports the
-    Docker outage in its own banner.
+    Empty means the payload is answerable. Three conditions: a snapshot
+    nothing has been collected into yet, one collected while Docker could
+    not be read, and one whose *latest* cycle failed. The third closes the
+    window the first two miss: after one good cycle, a permanently failing
+    prober would otherwise keep serving that cycle's listeners as a 200
+    forever, and the allocator would grant against sockets bound since.
+    The HTML page keeps serving in all three windows; it reports the
+    failure in its own banner.
     """
     reasons = []
     if not snapshot.probed:
         reasons.append(UNPROBED_REASON)
     if not snapshot.docker_available:
         reasons.append(DOCKER_REASON)
+    if snapshot.collection_error is not None:
+        reasons.append(STALE_REASON + snapshot.collection_error)
     return tuple(reasons)
 
 

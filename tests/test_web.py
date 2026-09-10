@@ -7,6 +7,7 @@ from io import BytesIO
 
 import pytest
 
+import harbor_console.web as web
 from harbor_console.docker import Container
 from harbor_console.listening import Listener
 from harbor_console.ports.ledger import Lease
@@ -790,3 +791,45 @@ def test_a_front_host_is_escaped():
     ).decode()
 
     assert "<script>" not in html
+
+
+def test_ports_json_refuses_while_collection_is_failing():
+    snap = snapshot(collection_error="psutil raised")
+
+    reasons = web._ports_refusals(snap)
+
+    assert any("stale" in reason for reason in reasons)
+
+
+def test_ports_json_answers_again_once_a_cycle_succeeds():
+    assert web._ports_refusals(snapshot(collection_error=None)) == ()
+
+
+def test_handler_refuses_ports_json_when_collection_is_failing():
+    """The window beside the two earlier refusal windows: after one good cycle,
+    a permanently failing prober would otherwise keep serving that cycle's
+    listeners as a 200 forever, and the allocator would grant against sockets
+    bound since.
+    """
+    handler_cls = make_handler(
+        lambda: snapshot(collection_error="services.toml: boom")
+    )
+
+    status, headers, body = _get(handler_cls, "/ports.json")
+
+    assert status == 503
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert b"stale" in body
+
+
+def test_the_page_still_serves_while_collection_is_failing():
+    """The 503 is /ports.json-only. An operator looking at the page during
+    a collection failure must still get it, with its existing failure banner
+    -- not a failure of its own.
+    """
+    handler_cls = make_handler(lambda: snapshot(collection_error="services.toml: boom"))
+
+    status, _headers, body = _get(handler_cls, "/")
+
+    assert status == 200
+    assert b"<html" in body.lower()
