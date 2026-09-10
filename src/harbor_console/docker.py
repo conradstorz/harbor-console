@@ -38,8 +38,9 @@ DOCKER_TIMEOUT_SECONDS = 2.0
 IPV6_ANY = "::"
 IPV4_ANY = "0.0.0.0"
 
-#: Matches the published half of `0.0.0.0:8080->8080/tcp` and `:::8080->8080/tcp`.
-_PUBLISHED = re.compile(r"^(?P<addr>.*):(?P<port>\d+)->")
+#: Matches the published half of `0.0.0.0:8080->8080/tcp`, `:::8080->8080/tcp`
+#: and the range form `0.0.0.0:8000-8005->8000-8005/tcp`.
+_PUBLISHED = re.compile(r"^(?P<addr>.*):(?P<lo>\d+)(?:-(?P<hi>\d+))?->")
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,9 @@ def _publish_pairs(ports: str) -> tuple[tuple[str, int], ...]:
         if addr.startswith("[") and addr.endswith("]"):
             addr = addr[1:-1]
         addr = IPV4_ANY if addr in ("", IPV6_ANY) else addr
-        pairs.append((addr, int(match.group("port"))))
+        lo = int(match.group("lo"))
+        hi = int(match.group("hi") or lo)
+        for port in range(lo, hi + 1) if hi >= lo else (lo,):
+            pairs.append((addr, port))
 
     return tuple(sorted(set(pairs)))

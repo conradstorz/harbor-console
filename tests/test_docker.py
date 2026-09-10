@@ -115,3 +115,21 @@ def test_bracketed_ipv6_wildcard_publish_is_normalised():
     result = running_containers(run=fake_run("web\t[::]:8080->8080/tcp\n"))
 
     assert result[0].published == (("0.0.0.0", 8080),)
+
+
+def test_a_port_range_publish_expands_to_every_port_in_the_range():
+    out = "app\t0.0.0.0:8000-8002->8000-8002/tcp\n"
+
+    result = running_containers(run=fake_run(out))
+
+    assert result[0].published == (
+        ("0.0.0.0", 8000),
+        ("0.0.0.0", 8001),
+        ("0.0.0.0", 8002),
+    )
+
+
+def test_a_backwards_range_yields_only_its_first_port():
+    result = running_containers(run=fake_run("app\t0.0.0.0:9000-8000->9000/tcp\n"))
+
+    assert result[0].published == (("0.0.0.0", 9000),)
