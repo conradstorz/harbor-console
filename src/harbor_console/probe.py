@@ -18,6 +18,8 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from harbor_console.addressing import url_host
+
 HCSTATUS_PATH = "/hcstatus"
 VALID_STATES = ("ok", "warn", "error")
 
@@ -48,7 +50,7 @@ def probe(
     timeout: float = 2.0,
 ) -> Health:
     """Probe one service for liveness, then for optional detail."""
-    base = f"http://{host}:{port}"
+    base = f"http://{url_host(host)}:{port}"
 
     if not _answers(f"{base}/", opener, timeout):
         return Health(up=False, state=None, summary=None, detail=(), warning=None)

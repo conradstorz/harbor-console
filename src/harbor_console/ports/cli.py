@@ -82,6 +82,7 @@ from pathlib import Path
 from typing import TextIO
 
 from harbor_console import tailnet
+from harbor_console.addressing import url_host
 from harbor_console.ports import compose, discovery, envfile, explainer
 from harbor_console.ports.allocate import BandExhausted, Decision, apply_decisions, decide
 from harbor_console.ports.declaration import (
@@ -851,7 +852,7 @@ def ports_url(
         host = lease.addr
     else:
         host = resolve(lease.host) or lease.host
-    return f"http://{host}:{lease.port}/ports.json"
+    return f"http://{url_host(host)}:{lease.port}/ports.json"
 
 
 def main(argv: Sequence[str]) -> int:

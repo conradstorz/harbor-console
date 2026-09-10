@@ -74,6 +74,19 @@ def probe_target(lease: Lease, served_host: str, tailnet_address: str | None) ->
     return lease.host if address == ANY_ADDR else address
 
 
+def url_host(addr: str) -> str:
+    """`addr` as a URL host: IPv6 literals need brackets, nothing else does.
+
+    Every URL this project builds interpolates `http://{host}:{port}`, and an
+    IPv6 literal spliced in bare turns its own colons into a port separator.
+    Hostnames and IPv4 pass through untouched, as does an already-bracketed
+    literal.
+    """
+    if ":" in addr and not addr.startswith("["):
+        return f"[{addr}]"
+    return addr
+
+
 def fronts_for(
     lease: Lease, served_host: str, proxies: Sequence[Proxy]
 ) -> tuple[Proxy, ...]:

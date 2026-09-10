@@ -1055,6 +1055,15 @@ def test_ports_url_uses_a_specific_leased_addr_without_asking_tailscale():
     assert cli.ports_url(leases, resolve=explode) == "http://100.69.239.123:8090/ports.json"
 
 
+def test_ports_url_brackets_an_ipv6_leased_addr():
+    leases = [Lease("harbor-console", "web", "hpz440", "fd7a::1234", 80, TODAY)]
+
+    def explode(_host):
+        raise AssertionError("a specific addr needs no resolution")
+
+    assert cli.ports_url(leases, resolve=explode) == "http://[fd7a::1234]:80/ports.json"
+
+
 def test_main_reads_live_state_from_the_url_the_ledger_names(monkeypatch, capsys):
     asked: list[str] = []
 

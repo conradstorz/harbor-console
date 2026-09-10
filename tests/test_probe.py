@@ -76,6 +76,18 @@ def test_a_timeout_means_down():
     assert probe("h", 1, opener=opener_for(routes)).up is False
 
 
+def test_probe_brackets_an_ipv6_host_in_the_url():
+    seen = []
+
+    def opener(url, timeout):
+        seen.append(url)
+        raise OSError("down")
+
+    probe("fd7a::1234", 8080, opener=opener)
+
+    assert seen[0].startswith("http://[fd7a::1234]:8080/")
+
+
 def test_hcstatus_detail_is_parsed():
     routes = {"/hcstatus": json.dumps(HCSTATUS).encode(), "/": b""}
 

@@ -117,3 +117,16 @@ def test_a_front_with_no_url_is_not_offered():
     row that says "reachable at" without an address is worse than silence.
     """
     assert fronts_for(WILDCARD, HOST, (Proxy(8443, "/", "127.0.0.1", 8080),)) == ()
+
+
+from harbor_console.addressing import url_host  # noqa: E402
+
+
+def test_url_host_brackets_an_ipv6_literal():
+    assert url_host("fd7a::1234") == "[fd7a::1234]"
+
+
+def test_url_host_leaves_ipv4_hostnames_and_bracketed_literals_alone():
+    assert url_host("100.69.239.123") == "100.69.239.123"
+    assert url_host("hpz440") == "hpz440"
+    assert url_host("[fd7a::1234]") == "[fd7a::1234]"
