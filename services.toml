@@ -119,3 +119,32 @@ host    = "hpz440"
 addr    = "0.0.0.0"
 port    = 8099
 granted = 2026-09-02
+
+# Amended by hand 2026-09-09. Two incumbents adopted: both were serving working
+# pages while the ledger believed their ports free, which is the same class of
+# gap `schminternet` was. Neither is a participating project, so `ports sync`
+# would never have found them; the page's drift section did, as
+# `running-not-declared`.
+#
+# imageharbor binds the tailnet address specifically, so it holds 8087 there
+# and nowhere else -- 8087 on any other address remains free to grant.
+[[lease]]
+project = "imageharbor"
+name    = "web"
+host    = "hpz440"
+addr    = "100.69.239.123"
+port    = 8087
+granted = 2026-09-09
+
+# Portainer publishes 127.0.0.1:9443 and is reached over the tailnet only
+# through `tailscale serve` on 443, which is why the directory row leads with
+# https://hpz440.tail69149b.ts.net/ and the lease follows it. A loopback lease
+# claims 9443 on the loopback address alone; the same port on 0.0.0.0 or the
+# tailnet address is still the ledger's to grant.
+[[lease]]
+project = "portainer"
+name    = "web"
+host    = "hpz440"
+addr    = "127.0.0.1"
+port    = 9443
+granted = 2026-09-09
