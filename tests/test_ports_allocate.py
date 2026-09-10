@@ -59,13 +59,55 @@ def test_free_want_is_granted():
     assert decision.port == 8080
 
 
-def test_existing_assignment_held_by_this_project_is_kept():
+def test_an_unchanged_want_keeps_the_lease():
+    leases = [Lease("p", "web", "hpz440", "0.0.0.0", 8090, date(2026, 8, 1))]
+
+    [decision] = decide([decl("p", "web", want=8090, assigned=8090)], leases, live(), TODAY)
+
+    assert decision.action == "keep"
+    assert decision.port == 8090
+
+
+def test_editing_want_moves_an_uncontended_lease_to_a_free_port():
     leases = [Lease("p", "web", "hpz440", "0.0.0.0", 8090, date(2026, 8, 1))]
 
     [decision] = decide([decl("p", "web", want=8080, assigned=8090)], leases, live(), TODAY)
 
+    assert decision.action == "reassign"
+    assert decision.port == 8080
+    assert "preferred" in decision.reason
+
+
+def test_a_wanted_port_someone_holds_keeps_the_lease_and_says_so():
+    leases = [
+        Lease("p", "web", "hpz440", "0.0.0.0", 8090, date(2026, 8, 1)),
+        Lease("q", "web", "hpz440", "0.0.0.0", 8080, date(2026, 7, 1)),
+    ]
+    declarations = [
+        decl("p", "web", want=8080, assigned=8090),
+        decl("q", "web", want=8080, assigned=8080),
+    ]
+
+    first, second = decide(declarations, leases, live(), TODAY)
+
+    assert first.action == "keep"
+    assert first.port == 8090
+    assert first.note is not None
+    assert "8080" in first.note
+    assert "q/web" in first.note
+    assert second.action == "keep"
+    assert second.note is None
+
+
+def test_a_wanted_port_with_a_listener_keeps_the_lease_and_says_so():
+    leases = [Lease("p", "web", "hpz440", "0.0.0.0", 8090, date(2026, 8, 1))]
+    state = live(("0.0.0.0", 8080, "somebody"))
+
+    [decision] = decide([decl("p", "web", want=8080, assigned=8090)], leases, state, TODAY)
+
     assert decision.action == "keep"
     assert decision.port == 8090
+    assert decision.note is not None
 
 
 def test_want_held_by_another_project_moves_the_newcomer_into_the_band():

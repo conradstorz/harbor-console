@@ -55,6 +55,11 @@ class Decision:
     port: int
     reason: str
     incumbent: Lease | None = None
+    #: A refusal worth saying out loud even though the decision is a no-op:
+    #: an edited `want` that could not be honoured. The CLI prints it as a
+    #: warning, because HARBOR_PORTS.md promises the operator is "moved and
+    #: told so" -- and a silent keep tells nobody anything.
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,7 @@ def _decide_one(
         reason: str,
         incumbent: Lease | None = None,
         bind: str | None = None,
+        note: str | None = None,
     ) -> Decision:
         """Build the decision. ``bind`` overrides the *requested* addr.
 
@@ -144,6 +150,7 @@ def _decide_one(
             port=port,
             reason=reason,
             incumbent=incumbent,
+            note=note,
         )
 
     identity: _Identity = (declaration.project, request.name, host)
@@ -161,6 +168,32 @@ def _decide_one(
         blocker: Lease | _Promise | None = holder if holder is not None else promise
         if blocker is None:
             action = "keep" if own.port == request.assigned else "grant"
+            if request.want is not None and request.want != own.port:
+                # HARBOR_PORTS.md's contract: edit `want`, run sync, and you
+                # are either moved or told why not. The move is a "reassign"
+                # so `sync --new-only` -- the timer -- withholds it; only a
+                # manual sync renumbers a project.
+                w_holder = _holder(leases, host, addr, request.want, exclude=identity)
+                w_promise = _promised_by(taken, host, addr, request.want, exclude=identity)
+                if (
+                    w_holder is None
+                    and w_promise is None
+                    and _is_free(request.want, host, addr, leases, taken, live)
+                ):
+                    return make("reassign", request.want, f"moved to preferred {request.want}")
+                if w_holder is not None:
+                    blocked_by = f"{w_holder.project}/{w_holder.name} holds it"
+                elif w_promise is not None:
+                    blocked_by = f"{w_promise.project}/{w_promise.port_name} was promised it this run"
+                else:
+                    blocked_by = "something is listening on it"
+                note = (
+                    f"{declaration.project}/{request.name}: want {request.want} "
+                    f"is unavailable ({blocked_by}); keeping {own.port}"
+                )
+                if own.addr != addr:
+                    return make(action, own.port, f"addr updated from {own.addr} to {addr}", note=note)
+                return make(action, own.port, "already leased" if action == "keep" else "ledger holds", note=note)
             if own.addr != addr:
                 # The key is changing even though the port is not. The reason
                 # says so, and the CLI forwards any keep whose key differs

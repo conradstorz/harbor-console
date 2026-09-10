@@ -202,6 +202,9 @@ def run(
     env_values = _effective_env(decisions, withheld_keys, leases)
     warnings = _compose_warnings(declarations, env_values)
 
+    notes = [decision.note for decision in decisions if decision.note is not None]
+    warnings = notes + warnings
+
     if args.command == "scan":
         repairs = _outstanding_repairs(declarations, env_values, changes)
         _report(
@@ -231,7 +234,7 @@ def run(
         held_values = _effective_env(decisions, ungranted, leases)
         _report(
             [],
-            _compose_warnings(declarations, held_values),
+            notes + _compose_warnings(declarations, held_values),
             out,
             applied=False,
             outstanding=True,

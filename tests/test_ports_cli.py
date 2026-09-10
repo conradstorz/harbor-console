@@ -1090,6 +1090,57 @@ def test_main_warns_and_grants_nothing_when_no_lease_names_the_page(monkeypatch,
     assert "no single lease for harbor-console/web" in capsys.readouterr().out
 
 
+def test_sync_moves_a_project_whose_want_changed(tmp_path: Path):
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+
+    # The operator edits want, as HARBOR_PORTS.md tells them to.
+    body = (project / ".harbor.toml").read_text(encoding="utf-8")
+    (project / ".harbor.toml").write_text(
+        body.replace("want = 8080", "want = 8200"), encoding="utf-8"
+    )
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert [lease.port for lease in load_leases(ledger_path)] == [8200]
+    assert "HARBOR_PORT_WEB=8200" in (project / ".env").read_text(encoding="utf-8")
+    assert "8200" in output
+
+
+def test_new_only_withholds_a_want_move(tmp_path: Path):
+    project = make_project(tmp_path, "alpha", 8080)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+    body = (project / ".harbor.toml").read_text(encoding="utf-8")
+    (project / ".harbor.toml").write_text(
+        body.replace("want = 8080", "want = 8200"), encoding="utf-8"
+    )
+
+    code, output = run(["sync", "--new-only"], tmp_path, ledger_path)
+
+    assert [lease.port for lease in load_leases(ledger_path)] == [8080]
+    assert "withheld" in output
+
+
+def test_sync_warns_when_an_edited_want_is_unavailable(tmp_path: Path):
+    make_project(tmp_path, "alpha", 8080)
+    make_project(tmp_path, "beta", 8081)
+    ledger_path = tmp_path / "services.toml"
+    run(["sync"], tmp_path, ledger_path)
+
+    beta = tmp_path / "beta" / ".harbor.toml"
+    body = beta.read_text(encoding="utf-8")
+    beta.write_text(body.replace("want = 8081", "want = 8080"), encoding="utf-8")
+
+    code, output = run(["sync"], tmp_path, ledger_path)
+
+    assert code == 1
+    assert "warning" in output
+    assert "8080" in output
+    assert [lease.port for lease in sorted(load_leases(ledger_path), key=lambda l: l.project)] == [8080, 8081]
+
+
 def test_sync_records_a_widened_addr_in_the_ledger(tmp_path: Path):
     project = tmp_path / "alpha"
     project.mkdir()
