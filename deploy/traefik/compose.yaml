@@ -22,15 +22,15 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].sans=*.hpz440.ohr3023.org
       - --entrypoints.traefik.address=:8081
       - --api.insecure=true
-      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL:?set ACME_EMAIL in /etc/traefik/env}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.cloudflare.acme.dnschallenge=true
       - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
       - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53
       - --log.level=INFO
     ports:
-      - "${TAILNET_ADDRESS}:80:80"
-      - "${TAILNET_ADDRESS}:443:443"
+      - "${TAILNET_ADDRESS:?the edge binds the tailnet address only}:80:80"
+      - "${TAILNET_ADDRESS:?the edge binds the tailnet address only}:443:443"
       - "127.0.0.1:8081:8081"
     env_file:
       - /etc/traefik/env

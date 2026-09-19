@@ -35,6 +35,28 @@ if ! getent group docker >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "==> Checking edge prerequisites"
+require_cmd docker "Install Docker first."
+require_cmd tailscale "Install Tailscale first."
+if [[ ! -f /etc/traefik/env ]]; then
+  echo "Error: /etc/traefik/env is missing. Create it (mode 0600) with:" >&2
+  echo "  CF_DNS_API_TOKEN=<cloudflare token with Zone.DNS edit on ohr3023.org>" >&2
+  echo "  ACME_EMAIL=<address for Let's Encrypt notices>" >&2
+  echo "  (plain KEY=value lines: no export, no quotes -- the file is read by both bash and compose)" >&2
+  exit 1
+fi
+TAILNET_ADDRESS=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+if [[ -z "${TAILNET_ADDRESS}" ]]; then
+  echo "Error: tailscale ip -4 returned nothing; the edge binds the tailnet address only." >&2
+  exit 1
+fi
+# shellcheck disable=SC1091
+ACME_EMAIL=$(. /etc/traefik/env; echo "${ACME_EMAIL:-}")
+if [[ -z "${ACME_EMAIL}" ]]; then
+  echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
+  exit 1
+fi
+
 echo "==> Syncing repository to ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"
 rsync -a --delete \
@@ -81,30 +103,12 @@ fi
 usermod -aG docker harbor
 
 echo "==> Preparing the edge (Traefik)"
-require_cmd docker "Install Docker first."
-require_cmd tailscale "Install Tailscale first."
-if [[ ! -f /etc/traefik/env ]]; then
-  echo "Error: /etc/traefik/env is missing. Create it (mode 0600) with:" >&2
-  echo "  CF_DNS_API_TOKEN=<cloudflare token with Zone.DNS edit on ohr3023.org>" >&2
-  echo "  ACME_EMAIL=<address for Let's Encrypt notices>" >&2
-  exit 1
-fi
 chmod 0600 /etc/traefik/env
-TAILNET_ADDRESS=$(tailscale ip -4 | head -n1)
-if [[ -z "${TAILNET_ADDRESS}" ]]; then
-  echo "Error: tailscale ip -4 returned nothing; the edge binds the tailnet address only." >&2
-  exit 1
-fi
-# shellcheck disable=SC1091
-ACME_EMAIL=$(. /etc/traefik/env; echo "${ACME_EMAIL:-}")
-if [[ -z "${ACME_EMAIL}" ]]; then
-  echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
-  exit 1
-fi
 docker network inspect harbor >/dev/null 2>&1 || docker network create harbor
 TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
 printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
-sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/harbor.yml"
+sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp"
+mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
 ( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
 
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"

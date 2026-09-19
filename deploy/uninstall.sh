@@ -17,9 +17,9 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -f /opt/harbor-console/deploy/traefik/compose.yaml ]]; then
+if [[ -f "${INSTALL_DIR}/deploy/traefik/compose.yaml" ]]; then
   echo "==> Stopping the edge (Traefik)"
-  ( cd /opt/harbor-console/deploy/traefik && docker compose down ) || true
+  ( cd "${INSTALL_DIR}/deploy/traefik" && docker compose down ) || true
 fi
 
 for unit in "${UNIT_NAMES[@]}"; do

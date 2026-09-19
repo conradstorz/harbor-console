@@ -12,6 +12,9 @@ RestartSec=2
 User=harbor
 Group=harbor
 SupplementaryGroups=docker
+# The page needs no capability at all now that it binds 8100 (the edge is
+# what binds 80/443 and holds CAP_NET_BIND_SERVICE).
+CapabilityBoundingSet=
 NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
