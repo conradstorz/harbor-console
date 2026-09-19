@@ -27,6 +27,7 @@ the reasoning, including reasoning we later moved away from.
 | 0014 | [An edited want moves an uncontended lease](0014-want-edits-move-an-uncontended-lease.md) | Superseded by 0015 |
 | 0015 | [A reverse proxy fronts every HTTP service; labels are the only declaration](0015-reverse-proxy-and-label-declared-services.md) | Accepted |
 | 0016 | [Close the `harbor` network's attack surface: gate Traefik's API, isolate Portainer, scope the ufw rule by address](0016-close-the-harbor-network-attack-surface.md) | Accepted |
+| 0017 | [Pin Traefik's default route after multi-homing it](0017-pin-traefiks-default-route-after-multi-homing-it.md) | Accepted |
 
 ## Adding a new ADR
 
