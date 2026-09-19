@@ -71,7 +71,12 @@ fi
 # would execute its contents as this script's own shell, as root. A file
 # that is supposed to hold two KEY=value lines has no business being able
 # to run a command; grep only ever reads it as text.
-ACME_EMAIL=$(grep -E '^ACME_EMAIL=' /etc/traefik/env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')
+# `|| true`: under pipefail, a grep that matches nothing makes this whole
+# pipeline exit non-zero even though the empty result it passes along is
+# exactly correct -- an ACME_EMAIL genuinely missing from the file would
+# otherwise kill this script silently here, under set -e, before the
+# intended "is it empty" check below ever ran to explain why.
+ACME_EMAIL=$(grep -E '^ACME_EMAIL=' /etc/traefik/env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r' || true)
 if [[ -z "${ACME_EMAIL}" ]]; then
   echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
   exit 1
@@ -171,7 +176,8 @@ if ! grep -qE '^TRAEFIK_DASHBOARD_PASSWORD=' /etc/traefik/env 2>/dev/null; then
   echo "==> Generated a new Traefik dashboard/API password -- it will not be shown again:"
   echo "    ${new_password}"
 fi
-TRAEFIK_DASHBOARD_PASSWORD=$(grep -E '^TRAEFIK_DASHBOARD_PASSWORD=' /etc/traefik/env | tail -n1 | cut -d= -f2- | tr -d '\r')
+# `|| true`: same reason as the ACME_EMAIL extraction above.
+TRAEFIK_DASHBOARD_PASSWORD=$(grep -E '^TRAEFIK_DASHBOARD_PASSWORD=' /etc/traefik/env | tail -n1 | cut -d= -f2- | tr -d '\r' || true)
 if [[ -z "${TRAEFIK_DASHBOARD_PASSWORD}" ]]; then
   echo "Error: TRAEFIK_DASHBOARD_PASSWORD in /etc/traefik/env is empty." >&2
   exit 1
@@ -209,7 +215,15 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
   # likely a network recreation), so a stale allow for an address nothing
   # uses any more is never left standing alongside a fresh one.
   while true; do
-    rule_num=$(ufw status numbered 2>/dev/null | grep -F "${ufw_tag}" | head -n1 | grep -oE '^\[ *[0-9]+\]' | tr -dc '0-9')
+    # `|| true`: under pipefail, this pipeline exits non-zero whenever no
+    # rule matches -- the ordinary, expected "nothing left to delete" case
+    # -- because the two greps in the middle report no-match as failure
+    # even though the empty output they pass along is exactly correct. That
+    # silently killed this script, under set -e, on the very first
+    # iteration: with the loop never reaching the `[[ -z ]]` check that was
+    # supposed to break it out cleanly. Confirmed by reproducing it locally
+    # before this fix went anywhere near hpz440 again.
+    rule_num=$(ufw status numbered 2>/dev/null | grep -F "${ufw_tag}" | head -n1 | grep -oE '^\[ *[0-9]+\]' | tr -dc '0-9' || true)
     if [[ -z "${rule_num}" ]]; then
       break
     fi
