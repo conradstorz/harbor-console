@@ -18,8 +18,6 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from harbor_console.addressing import url_host
-
 HCSTATUS_PATH = "/hcstatus"
 VALID_STATES = ("ok", "warn", "error")
 
@@ -44,13 +42,16 @@ class Health:
 
 
 def probe(
-    host: str,
-    port: int,
+    base_url: str,
     opener: Callable[..., object] = urllib.request.urlopen,
     timeout: float = 2.0,
 ) -> Health:
-    """Probe one service for liveness, then for optional detail."""
-    base = f"http://{url_host(host)}:{port}"
+    """Probe one service for liveness, then for optional detail.
+
+    `base_url` is the route the page prints, so a green row proves the whole
+    path through the proxy, TLS included.
+    """
+    base = base_url.rstrip("/")
 
     if not _answers(f"{base}/", opener, timeout):
         return Health(up=False, state=None, summary=None, detail=(), warning=None)

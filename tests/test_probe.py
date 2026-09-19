@@ -47,7 +47,9 @@ def http_error(code):
 
 
 def test_any_response_means_up():
-    health = probe("h", 1, opener=opener_for({"/": b"", "/hcstatus": http_error(404)}))
+    routes = {"/": b"", "/hcstatus": http_error(404)}
+
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
 
@@ -55,7 +57,7 @@ def test_any_response_means_up():
 def test_a_404_on_the_root_still_means_up():
     routes = {"/hcstatus": http_error(404), "/": http_error(404)}
 
-    assert probe("h", 1, opener=opener_for(routes)).up is True
+    assert probe("http://h:1", opener=opener_for(routes)).up is True
 
 
 def test_connection_refused_means_down():
@@ -64,7 +66,7 @@ def test_connection_refused_means_down():
         "/hcstatus": urllib.error.URLError("x"),
     }
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is False
     assert health.detail == ()
@@ -73,25 +75,28 @@ def test_connection_refused_means_down():
 def test_a_timeout_means_down():
     routes = {"/": TimeoutError(), "/hcstatus": TimeoutError()}
 
-    assert probe("h", 1, opener=opener_for(routes)).up is False
+    assert probe("http://h:1", opener=opener_for(routes)).up is False
 
 
-def test_probe_brackets_an_ipv6_host_in_the_url():
+def test_probe_builds_urls_from_the_base_url():
     seen = []
 
-    def opener(url, timeout):
+    def opener(url, timeout=None):
         seen.append(url)
-        raise OSError("down")
+        return FakeResponse(b"{}")
 
-    probe("fd7a::1234", 8080, opener=opener)
+    probe("https://parksmart.hpz440.ohr3023.org", opener=opener)
 
-    assert seen[0].startswith("http://[fd7a::1234]:8080/")
+    assert seen == [
+        "https://parksmart.hpz440.ohr3023.org/",
+        "https://parksmart.hpz440.ohr3023.org/hcstatus",
+    ]
 
 
 def test_hcstatus_detail_is_parsed():
     routes = {"/hcstatus": json.dumps(HCSTATUS).encode(), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.state == "ok"
     assert health.summary == "3 queued"
@@ -102,7 +107,7 @@ def test_hcstatus_detail_is_parsed():
 def test_a_missing_hcstatus_is_not_a_warning():
     routes = {"/hcstatus": http_error(404), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is None
@@ -112,7 +117,7 @@ def test_a_missing_hcstatus_is_not_a_warning():
 def test_malformed_hcstatus_json_warns_but_stays_up():
     routes = {"/hcstatus": b"not json", "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is not None
@@ -122,7 +127,7 @@ def test_malformed_hcstatus_json_warns_but_stays_up():
 def test_wrong_shaped_hcstatus_warns_but_stays_up():
     routes = {"/hcstatus": json.dumps({"state": 5}).encode(), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is not None
@@ -131,7 +136,7 @@ def test_wrong_shaped_hcstatus_warns_but_stays_up():
 def test_a_hung_hcstatus_warns_but_stays_up():
     routes = {"/hcstatus": TimeoutError(), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is not None
@@ -143,7 +148,7 @@ def test_detail_rows_that_are_not_label_value_are_dropped():
     )
     routes = {"/hcstatus": body.encode(), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.detail == ()
     assert health.warning is not None
@@ -156,7 +161,7 @@ def test_a_malformed_status_line_on_root_means_down():
         "/hcstatus": http_error(404),
     }
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is False
     assert health.detail == ()
@@ -184,7 +189,7 @@ def test_an_incomplete_hcstatus_body_warns_but_stays_up():
             return ReadRaisesResponse()
         return FakeResponse(b"")
 
-    health = probe("h", 1, opener=opener)
+    health = probe("http://h:1", opener=opener)
 
     assert health.up is True
     assert health.warning is not None
@@ -193,7 +198,7 @@ def test_an_incomplete_hcstatus_body_warns_but_stays_up():
 def test_hcstatus_500_warns_but_stays_up():
     routes = {"/hcstatus": http_error(500), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is not None
@@ -202,7 +207,7 @@ def test_hcstatus_500_warns_but_stays_up():
 def test_hcstatus_404_still_produces_no_warning():
     routes = {"/hcstatus": http_error(404), "/": b""}
 
-    health = probe("h", 1, opener=opener_for(routes))
+    health = probe("http://h:1", opener=opener_for(routes))
 
     assert health.up is True
     assert health.warning is None
@@ -220,4 +225,4 @@ def test_a_bug_in_hcstatus_parsing_is_not_swallowed(monkeypatch):
     routes = {"/hcstatus": b"{}", "/": b""}
 
     with pytest.raises(RuntimeError):
-        probe("h", 1, opener=opener_for(routes))
+        probe("http://h:1", opener=opener_for(routes))

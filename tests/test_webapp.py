@@ -52,7 +52,7 @@ def test_collect_snapshot_gathers_every_source():
         collector=lambda: METRICS,
         listeners=lambda: (Listener("0.0.0.0", 8080, None),),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, "ok", "fine", (), None),
+        prober=lambda url: Health(True, "ok", "fine", (), None),
     )
 
     assert snapshot.metrics == METRICS
@@ -70,7 +70,7 @@ def test_collect_snapshot_marks_docker_unavailable():
         collector=lambda: METRICS,
         listeners=lambda: (Listener("0.0.0.0", 8080, None),),
         containers=lambda: DOCKER_UNAVAILABLE,
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
     )
 
     assert snapshot.docker_available is False
@@ -88,7 +88,7 @@ def test_collect_snapshot_reconciles_against_the_host_it_serves():
         collector=lambda: METRICS,
         listeners=lambda: (),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(False, None, None, (), None),
+        prober=lambda url: Health(False, None, None, (), None),
     )
 
     assert [item.kind for item in snapshot.drift] == [RUNNING_NOT_DECLARED]
@@ -103,7 +103,7 @@ def test_collect_snapshot_hands_reconcile_a_concrete_sequence():
         collector=lambda: METRICS,
         listeners=lambda: (Listener("0.0.0.0", 8080, None),),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
     )
 
     assert snapshot.leases == (GTE_LEASE,)
@@ -337,7 +337,7 @@ def test_collect_snapshot_uses_the_host_it_was_given_not_the_os_hostname():
         collector=lambda: metrics,
         listeners=lambda: (),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(False, None, None, (), None),
+        prober=lambda url: Health(False, None, None, (), None),
     )
 
     assert [item.kind for item in snapshot.drift] == [DECLARED_NOT_RUNNING]
@@ -502,7 +502,7 @@ def test_collect_snapshot_publishes_the_listeners_it_found():
         collector=lambda: METRICS,
         listeners=lambda: found,
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
     )
 
     assert snapshot.listeners == found
@@ -526,7 +526,7 @@ def test_collect_snapshot_records_when_the_ledger_was_last_written():
         collector=lambda: METRICS,
         listeners=lambda: (),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
         ledger_mtime=lambda: written,
     )
 
@@ -658,7 +658,7 @@ def test_collect_snapshot_carries_the_tailnet_address():
         collector=lambda: METRICS,
         listeners=lambda: (),
         containers=lambda: (),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
         tailnet_address="100.69.239.123",
     )
 
@@ -739,12 +739,14 @@ def test_collect_snapshot_probes_the_address_the_page_advertises(monkeypatch):
         collector=lambda: METRICS,
         listeners=lambda: (),
         containers=lambda: (),
-        prober=lambda host, port: asked.append((host, port))
-        or Health(True, None, None, (), None),
+        prober=lambda url: asked.append(url) or Health(True, None, None, (), None),
         tailnet_address="100.69.239.123",
     )
 
-    assert asked == [("100.69.239.123", 8080), ("100.69.239.123", 49152)]
+    assert asked == [
+        "http://100.69.239.123:8080",
+        "http://100.69.239.123:49152",
+    ]
 
 
 def test_collect_snapshot_still_probes_by_hostname_without_a_tailnet_address():
@@ -760,11 +762,10 @@ def test_collect_snapshot_still_probes_by_hostname_without_a_tailnet_address():
         collector=lambda: METRICS,
         listeners=lambda: (),
         containers=lambda: (),
-        prober=lambda host, port: asked.append((host, port))
-        or Health(True, None, None, (), None),
+        prober=lambda url: asked.append(url) or Health(True, None, None, (), None),
     )
 
-    assert asked == [("hpz440", 8080)]
+    assert asked == ["http://hpz440:8080"]
 
 
 def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
@@ -785,7 +786,7 @@ def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
             Listener("0.0.0.0", 8080, None),
         ),
         containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
         proxies=lambda: (
             Proxy(8443, "/", "127.0.0.1", 8080),
             Proxy(8443, "/other", "127.0.0.1", 9999),
@@ -811,7 +812,7 @@ def test_a_serve_outage_does_not_take_the_cycle_down():
         collector=lambda: METRICS,
         listeners=lambda: (Listener("100.69.239.123", 8443, None),),
         containers=lambda: (),
-        prober=lambda host, port: Health(True, None, None, (), None),
+        prober=lambda url: Health(True, None, None, (), None),
         proxies=lambda: (),
         tailnet_address="100.69.239.123",
     )
@@ -832,9 +833,9 @@ def test_probe_results_do_not_collide_across_hosts():
         Lease("gte", "web", "elsewhere", "0.0.0.0", 8080, date(2026, 9, 1)),
     )
 
-    def prober(target, _port):
+    def prober(url):
         # The local lease probes at an address; the remote one at its hostname.
-        up = target == "elsewhere"
+        up = url == "http://elsewhere:8080"
         return Health(up=up, state=None, summary=None, detail=(), warning=None)
 
     snapshot = webapp.collect_snapshot(
