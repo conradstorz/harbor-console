@@ -213,7 +213,16 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
     if [[ -z "${rule_num}" ]]; then
       break
     fi
-    yes | ufw delete "${rule_num}" >/dev/null
+    # `--force` skips ufw's interactive "Proceed with operation (y|n)?"
+    # prompt. `yes | ufw delete` looked equivalent and is not: under
+    # `pipefail`, `yes` is killed by SIGPIPE the instant `ufw` stops
+    # reading, and that non-zero exit status propagates as the pipeline's
+    # own -- even though `ufw delete` itself succeeded -- which trips `set
+    # -e` and kills this script silently, right here, with no error text.
+    # That happened live: it deleted the pre-ADR-16 rule this loop was
+    # meant to replace and then exited before the replacement was added,
+    # leaving no rule in place at all until the next install.sh run.
+    ufw --force delete "${rule_num}" >/dev/null
   done
   traefik_harbor_ip=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").IPAddress}}' 2>/dev/null || true)
   if [[ -n "${traefik_harbor_ip}" ]]; then
