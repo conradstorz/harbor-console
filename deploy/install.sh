@@ -120,21 +120,6 @@ fi
 
 usermod -aG docker harbor
 
-echo "==> Preparing the edge (Traefik)"
-chmod 0600 /etc/traefik/env
-# The bridge name is fixed so the ufw rule below can name the interface; the
-# prerequisite check above refuses an existing network that lacks it.
-docker network inspect harbor >/dev/null 2>&1 || docker network create -o com.docker.network.bridge.name=br-harbor harbor
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-  # ufw's default-deny INPUT drops container->host traffic; the edge must reach the page.
-  ufw allow in on br-harbor to "${TAILNET_ADDRESS}" port 8100 proto tcp comment 'harbor-console: traefik -> page' >/dev/null
-fi
-TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
-printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
-sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp"
-mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
-( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
-
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"
 
@@ -154,6 +139,24 @@ for unit in "${UNIT_NAMES[@]}"; do
   systemctl enable "${unit}"
   systemctl restart "${unit}"
 done
+
+# The edge starts only after the units have moved: until harbor-console-web is
+# restarted on the new code it still holds the tailnet address on :80, which is
+# the port Traefik is about to publish.
+echo "==> Preparing the edge (Traefik)"
+chmod 0600 /etc/traefik/env
+# The bridge name is fixed so the ufw rule below can name the interface; the
+# prerequisite check above refuses an existing network that lacks it.
+docker network inspect harbor >/dev/null 2>&1 || docker network create -o com.docker.network.bridge.name=br-harbor harbor
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  # ufw's default-deny INPUT drops container->host traffic; the edge must reach the page.
+  ufw allow in on br-harbor to "${TAILNET_ADDRESS}" port 8100 proto tcp comment 'harbor-console: traefik -> page' >/dev/null
+fi
+TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
+printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
+sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp"
+mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
+( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
 
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
