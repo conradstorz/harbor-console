@@ -5,25 +5,28 @@ A linux server attached monitor showing system health and projects status on eve
 ## Status page
 
 `harbor-console-web` serves a read-only page to the tailnet answering the other
-question: what is running on this host, on which port, and is it up. It shows the
-same health metrics as the attached monitor, the service directory from
-`services.toml` with live or down state, and the ways the ledger and Docker
-disagree — declared but not running, running but not declared, and running on a
-port that does not match its lease.
+question: what is running on this host, where it is reachable, and is it up. It
+shows the same health metrics as the attached monitor, a directory of every
+container that declares itself with compose labels, and the findings where those
+declarations and the host disagree — a container with no labels at all, one that
+still publishes a raw host port instead of going through the proxy, a route
+Traefik rejects, and a host process holding a tailnet port that no container
+publishes.
 
-It binds the host's Tailscale address and nothing else. If that address cannot be
-determined it refuses to start rather than falling back to a broader one, because
-the page is an inventory of every service on the host and binding *is* the access
-control — which is why there is no login page
-([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)). Probing runs in a
-background thread, so one hung service cannot make the page slow to load, and the
-page is strictly read-only: nothing on it can start or stop anything.
+Traefik is the only truth for which routes are live: the page reads Traefik's
+API on loopback and Docker's labels, and probes each HTTP row at its own
+`https://<name>.hpz440.ohr3023.org/`, so a green row proves the whole path
+through the proxy rather than just a socket being open.
 
-It also serves `/ports.json`, which is how `harbor-console ports` learns what is
-actually listening — including loopback-bound and non-Docker sockets that Docker
-cannot report. Until its first probe cycle completes, that endpoint returns 503
-rather than an empty list, so the allocator refuses to grant instead of trusting
-state nobody has looked at yet.
+It binds the host's Tailscale address on port 8100 and nothing else. If that
+address cannot be determined it refuses to start rather than falling back to a
+broader one, because the page is an inventory of every service on the host and
+binding *is* the access control — which is why there is no login page
+([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)). That is its only
+startup refusal: Traefik or Docker being unreadable is a banner on the page and
+a set of findings withheld, never a reason to stop serving. Probing runs in a
+background thread, so one hung service cannot make the page slow to load, and
+the page is strictly read-only: nothing on it can start or stop anything.
 
 Health probing is deliberately dumb: any HTTP response means up, including a
 redirect to a login page. A project can offer `/hcstatus` returning a little JSON
@@ -31,32 +34,44 @@ to add detail to its row; a missing or broken one never makes it show as down.
 
 Run it with `uv run harbor-console-web`. `deploy/install.sh` installs it as a
 second systemd unit alongside the tty1 dashboard; the two have independent
-lifetimes, so restarting one does not disturb the other.
+lifetimes, so restarting one does not disturb the other. Read it at
+`https://harbor.hpz440.ohr3023.org/` from anywhere on the tailnet.
 
-## Port assignment
+## The edge
 
-`harbor-console ports` hands out the published host ports for every project in
-the tree, so two of them cannot claim the same one. A project opts in by adding a
-`.harbor.toml` saying what it wants; harbor-console records a lease in
-`services.toml`, writes the number it got into that project's own `.env` behind a
-managed fence, and drops a `HARBOR_PORTS.md` next to it explaining the rules. The
-incumbent always keeps its port — nothing running is renumbered — and new ports
-come from 8100–8999.
+Traefik fronts every HTTP service on the host, from `deploy/traefik/compose.yaml`
+in this repository. It publishes the host's Tailscale address on `:80` and `:443`
+and nothing else — the same bind-is-the-access-control rule as the page — and
+holds one wildcard certificate for `*.hpz440.ohr3023.org`, issued by Let's
+Encrypt over a Cloudflare DNS-01 challenge. Its API and dashboard are bound to
+`127.0.0.1:8081`, where only the status page reads them.
 
-| Command | Does |
-| --- | --- |
-| `uv run harbor-console ports scan` | Reports what would change. Writes nothing. |
-| `uv run harbor-console ports sync` | Applies it: leases, `.env`, `.harbor.toml`, `HARBOR_PORTS.md`. Also repairs a project already holding its lease whose `.env` fence or `HARBOR_PORTS.md` has drifted — a fresh clone has no `.env`, and without the repair its compose file falls back to a default that may collide. |
-| `uv run harbor-console ports sync --new-only` | Grants new requests only, withholding anything that would move a port a project already holds. This is what a scheduled run should use. |
-| `uv run harbor-console ports show` | Prints the current lease table. Reads the ledger alone, so a broken `.harbor.toml` in some other project does not stop it. |
+Because the proxy terminates real TLS, a service that sets Secure cookies simply
+works, and no HTTP service needs to publish a host port at all
+([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 
-`scan` and `sync` exit non-zero when something is pending or wrong, so they are
-usable from a script. A project moved off the port it asked for keeps reporting
-drift — and keeps exiting non-zero — until its compose default is updated to the
-number it was assigned; harbor-console does not edit compose files.
+## Declaring a service
 
-Ports are leased per `(host, addr, port)`: `0.0.0.0` claims a number across a
-whole host, while two different bind addresses on one host can each hold the
-same number. See [ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)
-for why the registry allocates rather than merely validates, and
-[ADR 10](docs/adr/0010-address-scoped-port-key.md) for the key.
+A service declares itself in its own compose file, with labels and a network,
+and nowhere else. There is no registry in this repository to update, no sync
+step, and nothing that generates the labels for you.
+
+| Kind | Labels | `ports:` |
+|---|---|---|
+| HTTP | `traefik.enable=true`, ``traefik.http.routers.<name>.rule=Host(`<name>.hpz440.ohr3023.org`)``, and `traefik.http.services.<name>.loadbalancer.server.port=<port>` when the image exposes more than one port | none |
+| TCP | `harbor.kind=tcp`, `harbor.port=<host port>` | keeps its entry |
+| Internal | `harbor.kind=internal` | none |
+| Edge | `harbor.kind=edge` (Traefik only) | 80 and 443 |
+
+Any container may add `harbor.description=<one line>`, which the directory shows
+next to its row.
+
+Every routed container also needs `networks: [harbor]` and the top-level
+`networks: { harbor: { external: true } }`. A container that is not on that
+network is not routed, and Traefik says why — which the page reports as
+`route-error`.
+
+A container with none of these labels is reported as `undeclared-container`, and
+one that publishes a host port no `harbor.kind=tcp` label accounts for is
+reported as `bypasses-proxy`. Those two findings are the migration checklist: a
+service either has a route or it is on the list.

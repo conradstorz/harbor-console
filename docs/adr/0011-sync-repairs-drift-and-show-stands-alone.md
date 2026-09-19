@@ -4,8 +4,7 @@ Date: 2026-09-01
 
 ## Status
 
-Accepted — amends [ADR 8](0008-allocate-ports-rather-than-validate.md), which
-described `sync` as applying decisions, and adds two obligations to it.
+Superseded by [ADR-0015](0015-reverse-proxy-and-label-declared-services.md)
 
 ## Context
 
