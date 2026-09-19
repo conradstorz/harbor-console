@@ -154,6 +154,36 @@ def test_tcp_row_whose_container_does_not_publish_the_port_is_route_error():
     assert rows[0].target == ""
 
 
+def test_tcp_row_is_listening_when_any_of_its_several_published_addresses_is_held():
+    # A container may publish the same declared port on more than one
+    # address (a specific address plus loopback, say). The row must not
+    # judge liveness from only the first address Docker happened to list.
+    mqtt = Container(
+        "mqtt",
+        (("127.0.0.1", 1883), ("100.69.239.123", 1883)),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    rows = build_rows(
+        (mqtt,), (), (Listener("100.69.239.123", 1883, None),), {}, probed=True
+    )
+
+    assert rows[0].state == "LISTENING"
+    assert rows[0].target == "127.0.0.1:1883, 100.69.239.123:1883"
+
+
+def test_tcp_row_is_down_when_none_of_its_several_published_addresses_is_held():
+    mqtt = Container(
+        "mqtt",
+        (("127.0.0.1", 1883), ("100.69.239.123", 1883)),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    rows = build_rows((mqtt,), (), (), {}, probed=True)
+
+    assert rows[0].state == "DOWN"
+
+
 def test_traefik_enable_wins_over_a_harbor_kind_label():
     both = Container("x", (), {"traefik.enable": "true", "harbor.kind": "internal"})
 

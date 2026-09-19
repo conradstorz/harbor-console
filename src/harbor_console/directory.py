@@ -161,14 +161,21 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
         # declaration error, not a live port: there is no address to check
         # a listener against, so guessing "0.0.0.0" would match everything.
         return Row(container.name, KIND_TCP, "", container.name, description, STATE_ROUTE_ERROR)
-    addr = published[0][0]
+    # A container may publish the same declared port on more than one
+    # address (a specific address plus loopback, say). The service is
+    # reachable if a listener overlaps *any* of them, not just the first
+    # Docker happened to list -- checking only that one could report DOWN
+    # for a service that is, in fact, up on a different published address.
     held = any(
-        listener.port == port and addrs_overlap(listener.addr, addr) for listener in listeners
+        listener.port == port and addrs_overlap(listener.addr, addr)
+        for addr, _ in published
+        for listener in listeners
     )
+    target = ", ".join(f"{addr}:{port}" for addr, _ in published)
     return Row(
         container.name,
         KIND_TCP,
-        f"{addr}:{port}",
+        target,
         container.name,
         description,
         STATE_LISTENING if held else STATE_DOWN,

@@ -489,7 +489,8 @@ scattered across the file:
    `tailscale` are on PATH; if the `harbor` Docker network already exists, it
    must carry the fixed bridge name `br-harbor` (see "The ufw problem"
    below) or the script refuses and explains how to recreate it; `/etc/traefik/env`
-   exists and can be sourced; `ACME_EMAIL` is set within it; `tailscale ip -4`
+   exists; `ACME_EMAIL` is set within it (parsed with `grep`, never sourced
+   — see "Secrets" below for why); `tailscale ip -4`
    returns a real address. Any failure here exits before `rsync`, before
    `uv sync`, before touching systemd — the host is left exactly as it was.
 2. Sync the repository to `/opt/harbor-console`, build the venv, ensure the
@@ -720,6 +721,18 @@ project stays in git as a template. Anything that's specific to *this*
 host (an IP address) or secret (an API token, a private key) is generated or
 placed on the host directly and kept out of version control entirely.
 
+**`/etc/traefik/env` is read, never sourced.** Early versions of
+`install.sh` extracted `ACME_EMAIL` with `. /etc/traefik/env` (bash's
+`source`) inside the root-run installer. That runs the file's contents as
+shell code, not just reads it — a config file that is supposed to hold two
+`KEY=value` lines had, in that version, the same power as a script, as
+root, simply by existing on disk in that shape. `install.sh` now extracts
+the value with `grep -E '^ACME_EMAIL=' /etc/traefik/env | cut -d= -f2-`,
+which can only ever read text out of the file, never execute any of it.
+Compose's own `env_file:` mechanism (used to hand `CF_DNS_API_TOKEN` to the
+Traefik container) was never affected by this — it parses `KEY=value` pairs
+directly and has no equivalent execution step.
+
 ## Troubleshooting
 
 **The page is unreachable at `https://harbor.hpz440.ohr3023.org/` but works
@@ -756,8 +769,10 @@ Check the Cloudflare token is actually valid and scoped correctly *before*
 suspecting anything else, since a bad token fails silently in ways that look
 like a Traefik or DNS problem:
 ```bash
-ssh gte@hpz440 'sudo sh -c ". /etc/traefik/env; curl -s -H \"Authorization: Bearer \$CF_DNS_API_TOKEN\" https://api.cloudflare.com/client/v4/user/tokens/verify"'
+ssh gte@hpz440 'sudo sh -c "TOKEN=\$(grep -E \"^CF_DNS_API_TOKEN=\" /etc/traefik/env | cut -d= -f2-); curl -s -H \"Authorization: Bearer \$TOKEN\" https://api.cloudflare.com/client/v4/user/tokens/verify"'
 ```
+(`grep` here, not `. /etc/traefik/env` — the file is root-owned config, not
+trusted code; see "Secrets" below.)
 Expect `"status":"active"`. Then watch the actual issuance attempt:
 ```bash
 ssh gte@hpz440 'docker logs traefik --since 5m | grep -iE "acme|certificate|error"'

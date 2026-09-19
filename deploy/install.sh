@@ -65,11 +65,12 @@ if [[ -z "${TAILNET_ADDRESS}" ]]; then
   echo "Error: tailscale ip -4 returned nothing; the edge binds the tailnet address only." >&2
   exit 1
 fi
-# shellcheck disable=SC1091
-if ! ACME_EMAIL=$(. /etc/traefik/env 2>/dev/null && echo "${ACME_EMAIL:-}"); then
-  echo "Error: /etc/traefik/env could not be sourced; it must be plain KEY=value lines." >&2
-  exit 1
-fi
+# Parsed, never sourced: `/etc/traefik/env` is root-owned but not root-
+# authored -- it is edited by hand on the host -- and `. /etc/traefik/env`
+# would execute its contents as this script's own shell, as root. A file
+# that is supposed to hold two KEY=value lines has no business being able
+# to run a command; grep only ever reads it as text.
+ACME_EMAIL=$(grep -E '^ACME_EMAIL=' /etc/traefik/env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')
 if [[ -z "${ACME_EMAIL}" ]]; then
   echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
   exit 1
