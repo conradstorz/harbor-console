@@ -200,6 +200,28 @@ sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml
 mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
 ( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
 
+# Compose parses the `priority` key on the traefik service's networks
+# (compose.yaml) but does not act on it for a container created with both
+# networks at once -- Docker is then free to pick either as Traefik's
+# default route, and it has reliably picked `admin` over `harbor`. That
+# breaks the ufw rule below, which is scoped to Traefik's `harbor` address:
+# every request through the edge would leave with the wrong source IP, get
+# silently dropped, and stall until Traefik's own dial timeout, which it
+# answers to clients as a gateway timeout. `docker network connect
+# --gw-priority` only takes effect on a fresh attach, not an update to an
+# existing one, so pin it explicitly here by disconnecting first --
+# skipped when already correct, so a routine re-run doesn't flap Traefik's
+# harbor endpoint for nothing. Confirmed live on hpz440 before this went
+# in: compose's own priority key left both networks at GwPriority 0 and
+# the default route on `admin`; this disconnect/reconnect is what actually
+# moves it.
+harbor_gw_priority=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").GwPriority}}' 2>/dev/null || true)
+if [[ "${harbor_gw_priority}" != "1000" ]]; then
+  echo "==> Pinning Traefik's default route to the harbor network"
+  docker network disconnect harbor traefik
+  docker network connect --gw-priority 1000 harbor traefik
+fi
+
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   # Scoped to Traefik's own address on `harbor`, not the whole bridge
   # interface: `ufw allow in on br-harbor` would admit every container on

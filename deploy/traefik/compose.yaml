@@ -47,16 +47,18 @@ services:
       # path that does not yet exist becomes a directory, so order matters.
       - /etc/traefik/dashboard-users:/etc/traefik/dashboard-users:ro
     networks:
-      # `priority` pins which of Traefik's two networks is its default
-      # route. Without it, joining a second network (below) left Docker
-      # free to pick either as the container's egress for an address on
-      # neither subnet -- the host's tailnet address, where the status page
-      # listens -- and it silently chose `admin`. Every proxied request
-      # then left with a source IP the ufw rule scoping that path to
-      # Traefik's `harbor` address never allowed, so the connection to the
-      # page hung until Traefik's own dial timeout, answered as a gateway
-      # timeout. `harbor` must outrank `admin` here so that address stays
-      # the one install.sh reads and ufw allows.
+      # `priority` declares which of Traefik's two networks should be its
+      # default route -- but Compose 2.39.1 parses this key without acting
+      # on it for a container created with both networks at once, so
+      # Docker is still free to pick either as the egress for an address on
+      # neither subnet: the host's tailnet address, where the status page
+      # listens. Left alone it silently chose `admin`. Every proxied
+      # request then left with a source IP the ufw rule scoping that path
+      # to Traefik's `harbor` address never allowed, so the connection to
+      # the page hung until Traefik's own dial timeout, answered as a
+      # gateway timeout. install.sh pins the real default route explicitly
+      # after `docker compose up`, by IP rather than trusting this key --
+      # kept here as the declared intent for whenever Compose honors it.
       harbor:
         priority: 1000
       # ADR 16: Portainer moved off `harbor` onto its own network so no
