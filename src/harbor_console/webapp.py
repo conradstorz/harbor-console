@@ -21,7 +21,14 @@ from dataclasses import replace
 from datetime import datetime
 from http.server import ThreadingHTTPServer
 
-from harbor_console.directory import KIND_HTTP, build_rows, declared_kind, find_findings, route_of
+from harbor_console.directory import (
+    KIND_HTTP,
+    build_rows,
+    declared_kind,
+    find_findings,
+    route_of,
+    route_url,
+)
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
 from harbor_console.listening import Listener, listening_sockets
 from harbor_console.probe import Health, probe
@@ -103,7 +110,7 @@ def collect_snapshot(
         route = route_of(container)
         if route is None or route[1] is None:
             continue
-        health[route[0]] = prober(f"https://{route[1]}")
+        health[route[0]] = prober(route_url(route[1]))
 
     return Snapshot(
         collected=now,

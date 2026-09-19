@@ -13,6 +13,7 @@ from harbor_console.directory import (
     declared_kind,
     find_findings,
     route_of,
+    route_url,
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import Listener
@@ -63,6 +64,10 @@ def test_route_of_without_a_rule_falls_back_to_the_container_name():
 
 def test_route_of_a_non_http_container_is_none():
     assert route_of(Container("db", (), {"harbor.kind": "internal"})) is None
+
+
+def test_route_url():
+    assert route_url("x.example") == "https://x.example/"
 
 
 def test_http_row_is_up_when_the_probe_answered():

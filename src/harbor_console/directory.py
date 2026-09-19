@@ -81,6 +81,11 @@ def route_of(container: Container) -> tuple[str, str | None] | None:
     return container.name, None
 
 
+def route_url(host: str) -> str:
+    """The URL a declared HTTP route is reachable at."""
+    return f"https://{host}/"
+
+
 def build_rows(
     containers: Sequence[Container],
     routers: Sequence[Router],
@@ -118,7 +123,7 @@ def _http_row(
 ) -> Row:
     name, host = route_of(container)  # type: ignore[misc] - kind is HTTP here
     router = routers.get(router_name(name))
-    target = f"https://{host}/" if host else ""
+    target = route_url(host) if host else ""
     if host is None or (router is not None and not router.enabled):
         state = STATE_ROUTE_ERROR
     elif not probed:

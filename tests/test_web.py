@@ -1,4 +1,5 @@
 from datetime import datetime
+from html import escape
 from io import BytesIO
 
 from harbor_console import web
@@ -98,7 +99,8 @@ def test_page_does_not_call_an_unprobed_host_clean():
     page = web.render_page(snapshot(probed=False, rows=())).decode()
 
     assert "No findings" not in page
-    assert "Nothing has been collected yet" in page
+    assert "No services are declared" not in page
+    assert page.lower().count("nothing has been collected yet") == 2
 
 
 def test_page_notes_when_docker_could_not_be_read():
@@ -135,6 +137,7 @@ def test_page_escapes_every_field_that_originates_outside_this_project():
 
     for raw in ("<b>n</b>", "<s>", "<i>c</i>", "<u>d</u>", "<k>", "<d>", "<h>"):
         assert raw not in page
+        assert escape(raw) in page
 
 
 def test_page_auto_refreshes():

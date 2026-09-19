@@ -69,7 +69,7 @@ def test_http_rows_are_probed_at_their_route():
 
     collect(prober=prober)
 
-    assert seen == [f"https://{HOST}"]
+    assert seen == [f"https://{HOST}/"]
 
 
 def test_rows_without_a_host_are_not_probed():
@@ -208,9 +208,9 @@ def test_the_default_probe_interval_is_not_a_busy_spin():
     )
 
 
-def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch):
+def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch, capsys):
     def boom():
-        raise TailnetUnavailable("tailscaled is not up")
+        raise TailnetUnavailable("no tailnet")
 
     monkeypatch.setattr(webapp, "tailscale_address", boom)
 
@@ -223,18 +223,25 @@ def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch):
 
     assert result != 0
     assert called["served"] is False
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "no tailnet" in err
 
 
-def test_main_reports_a_bind_that_fails(monkeypatch):
+def test_main_reports_a_bind_that_fails(monkeypatch, capsys):
     """A port already in use is a refusal, not a traceback."""
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
 
     def factory(_address, _handler):
-        raise OSError("address already in use")
+        raise OSError("address in use")
 
     result = webapp.main(server_factory=factory, start_prober=lambda _h, _addr: None)
 
     assert result != 0
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "100.69.239.123:8100" in err
+    assert "address in use" in err
 
 
 def test_a_failed_bind_starts_no_prober(monkeypatch):

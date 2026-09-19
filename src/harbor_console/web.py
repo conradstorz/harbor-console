@@ -99,6 +99,11 @@ def _state_cell(row: Row) -> str:
 
 
 def _directory_table(snapshot: Snapshot) -> str:
+    if not snapshot.probed:
+        return (
+            "<h2>Directory</h2><p>Nothing has been collected yet: the first cycle "
+            "has not completed, so the directory is unknown.</p>"
+        )
     if not snapshot.rows:
         return "<h2>Directory</h2><p>No services are declared.</p>"
     rows = []
@@ -119,13 +124,8 @@ def _directory_table(snapshot: Snapshot) -> str:
                 )
             if health.warning:
                 rows.append(f"<tr class=\"detail\"><td colspan=\"6\">{escape(health.warning)}</td></tr>")
-    note = (
-        ""
-        if snapshot.probed
-        else "<p>Nothing has been collected yet: the first cycle has not completed.</p>"
-    )
     return (
-        "<h2>Directory</h2>" + note + "<table>"
+        "<h2>Directory</h2><table>"
         "<tr><th>Name</th><th>Kind</th><th>Where</th><th>State</th><th>Container</th><th></th></tr>"
         + "".join(rows) + "</table>"
     )
