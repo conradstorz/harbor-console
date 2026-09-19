@@ -47,14 +47,26 @@ services:
       # path that does not yet exist becomes a directory, so order matters.
       - /etc/traefik/dashboard-users:/etc/traefik/dashboard-users:ro
     networks:
-      - harbor
+      # `priority` pins which of Traefik's two networks is its default
+      # route. Without it, joining a second network (below) left Docker
+      # free to pick either as the container's egress for an address on
+      # neither subnet -- the host's tailnet address, where the status page
+      # listens -- and it silently chose `admin`. Every proxied request
+      # then left with a source IP the ufw rule scoping that path to
+      # Traefik's `harbor` address never allowed, so the connection to the
+      # page hung until Traefik's own dial timeout, answered as a gateway
+      # timeout. `harbor` must outrank `admin` here so that address stays
+      # the one install.sh reads and ufw allows.
+      harbor:
+        priority: 1000
       # ADR 16: Portainer moved off `harbor` onto its own network so no
       # project container can reach its read-write Docker socket over the
       # bridge. Traefik joins both -- it is the trusted routing component,
       # not an untrusted workload -- and Portainer's own
       # `traefik.docker.network=admin` label tells Traefik which of its
       # networks to route that one backend over.
-      - admin
+      admin:
+        priority: 100
     labels:
       harbor.kind: edge
       harbor.description: "Reverse proxy; every HTTPS route on this host"
