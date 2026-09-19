@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-ANY_ADDR = "0.0.0.0"
+from harbor_console.listening import ANY_ADDR, addrs_overlap  # noqa: F401 - re-exported until ports/ is deleted
 
 #: What every published variable starts with. Named so that a caller can ask
 #: whether a port name derived *anything* beyond the prefix: a name made only of
@@ -37,19 +37,6 @@ def is_port_number(value: object) -> bool:
     if not isinstance(value, int) or isinstance(value, bool):
         return False
     return MIN_PORT <= value <= MAX_PORT
-
-
-def addrs_overlap(a: str, b: str) -> bool:
-    """Return True when two bind addresses contend for the same port.
-
-    ``0.0.0.0`` claims every address on the host, so it overlaps anything. Two
-    different specific addresses can each hold the same port number without
-    conflict -- which is how ARM holds 100.69.239.123:49152 without claiming
-    49152 from every other project.
-    """
-    if a == b:
-        return True
-    return ANY_ADDR in (a, b)
 
 
 def env_var_name(port_name: str) -> str:
