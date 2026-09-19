@@ -66,7 +66,7 @@ if [[ -z "${TAILNET_ADDRESS}" ]]; then
   exit 1
 fi
 # shellcheck disable=SC1091
-if ! ACME_EMAIL=$(. /etc/traefik/env 2>/dev/null; echo "${ACME_EMAIL:-}"); then
+if ! ACME_EMAIL=$(. /etc/traefik/env 2>/dev/null && echo "${ACME_EMAIL:-}"); then
   echo "Error: /etc/traefik/env could not be sourced; it must be plain KEY=value lines." >&2
   exit 1
 fi
