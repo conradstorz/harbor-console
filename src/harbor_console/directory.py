@@ -135,7 +135,12 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
     except ValueError:
         return Row(container.name, KIND_TCP, "", container.name, description, STATE_ROUTE_ERROR)
     published = [pair for pair in container.published if pair[1] == port]
-    addr = published[0][0] if published else "0.0.0.0"
+    if not published:
+        # A label naming a port the container does not publish is a
+        # declaration error, not a live port: there is no address to check
+        # a listener against, so guessing "0.0.0.0" would match everything.
+        return Row(container.name, KIND_TCP, "", container.name, description, STATE_ROUTE_ERROR)
+    addr = published[0][0]
     held = any(
         listener.port == port and addrs_overlap(listener.addr, addr) for listener in listeners
     )

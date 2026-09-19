@@ -126,6 +126,21 @@ def test_tcp_row_with_a_bad_port_label_is_route_error():
     assert build_rows((mqtt,), (), (), {}, probed=True)[0].state == "ROUTE ERROR"
 
 
+def test_tcp_row_whose_container_does_not_publish_the_port_is_route_error():
+    mqtt = Container("mqtt", (("0.0.0.0", 9001),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    rows = build_rows((mqtt,), (), (Listener("0.0.0.0", 1883, None),), {}, probed=True)
+
+    assert rows[0].state == "ROUTE ERROR"
+    assert rows[0].target == ""
+
+
+def test_traefik_enable_wins_over_a_harbor_kind_label():
+    both = Container("x", (), {"traefik.enable": "true", "harbor.kind": "internal"})
+
+    assert declared_kind(both) == KIND_HTTP
+
+
 def test_internal_row():
     db = Container("gte-db-1", (), {"harbor.kind": "internal", "harbor.description": "postgres"})
 
