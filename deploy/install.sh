@@ -158,6 +158,9 @@ sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml
 mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
 ( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
 
+echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
+( cd "${INSTALL_DIR}/deploy/hosted" && docker compose -p hosted up -d --remove-orphans )
+
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
 echo "The status page is https://harbor.hpz440.ohr3023.org/ (direct: http://${TAILNET_ADDRESS}:8100/)."

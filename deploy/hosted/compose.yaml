@@ -1,0 +1,40 @@
+# Host infrastructure that belongs to no project repo. Recreated from the
+# `docker run` configuration found on 2026-09-18; the named volume
+# `portainer_data` is reused, so Portainer keeps its state.
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - harbor
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.portainer.rule: Host(`portainer.hpz440.ohr3023.org`)
+      traefik.http.services.portainer.loadbalancer.server.port: "9000"
+      harbor.description: "Portainer"
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      harbor.kind: internal
+      harbor.description: "Watchtower, nightly image updates"
+
+volumes:
+  portainer_data:
+    external: true
+
+networks:
+  harbor:
+    external: true
