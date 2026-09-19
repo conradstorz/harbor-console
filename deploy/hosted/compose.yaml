@@ -10,11 +10,25 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
     networks:
-      - harbor
+      # ADR 16: `admin`, not `harbor`. Portainer holds a read-write Docker
+      # socket -- equivalent to root on the host -- and `harbor` is the flat
+      # network every routed project container now joins under ADR 15.
+      # `admin` is its own network so no project container can reach
+      # portainer:9000 by name at all, only Traefik (multi-homed on
+      # purpose) can route to it.
+      - admin
     labels:
       traefik.enable: "true"
+      # Explicit, not left to Traefik's default of "every declared
+      # entrypoint": without this, the router also answers on the plaintext
+      # `traefik` entrypoint (:8081), reachable from `admin` with no TLS.
+      traefik.http.routers.portainer.entrypoints: websecure
       traefik.http.routers.portainer.rule: Host(`portainer.hpz440.ohr3023.org`)
       traefik.http.services.portainer.loadbalancer.server.port: "9000"
+      # Tells Traefik's Docker provider (default network: harbor) which of
+      # this container's networks to actually connect over, since Portainer
+      # is on `admin` and nothing else here is.
+      traefik.docker.network: admin
       harbor.description: "Portainer"
 
   watchtower:
@@ -36,5 +50,5 @@ volumes:
     external: true
 
 networks:
-  harbor:
+  admin:
     external: true

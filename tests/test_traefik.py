@@ -1,3 +1,4 @@
+import base64
 import json
 import urllib.error
 
@@ -114,3 +115,41 @@ def test_empty_router_list_is_not_unavailable():
 
 def test_router_name_appends_the_docker_provider():
     assert router_name("parksmart") == "parksmart@docker"
+
+
+def test_no_credentials_sends_a_plain_url():
+    seen = []
+
+    def opener(request, timeout=None):
+        seen.append(request)
+        return FakeResponse(json.dumps([]).encode())
+
+    traefik_routers(opener=opener)
+
+    assert seen == ["http://127.0.0.1:8081/api/http/routers"]
+
+
+def test_credentials_are_sent_as_http_basic_auth():
+    # `/api` is gated by a Traefik middleware (deploy/traefik/dynamic/api.yml)
+    # so a container on the harbor network cannot read the whole edge
+    # configuration for free; this is the credential that gets it past that.
+    seen = []
+
+    def opener(request, timeout=None):
+        seen.append(request)
+        return FakeResponse(json.dumps([]).encode())
+
+    traefik_routers(opener=opener, credentials=("harbor", "s3cret"))
+
+    request = seen[0]
+    assert request.full_url == "http://127.0.0.1:8081/api/http/routers"
+    expected = base64.b64encode(b"harbor:s3cret").decode("ascii")
+    assert request.get_header("Authorization") == f"Basic {expected}"
+
+
+def test_a_401_from_the_gated_api_is_unavailable():
+    err = urllib.error.HTTPError("u", 401, "unauthorized", {}, None)
+
+    result = traefik_routers(opener=opener_for([], raises=err), credentials=("harbor", "wrong"))
+
+    assert result is TRAEFIK_UNAVAILABLE

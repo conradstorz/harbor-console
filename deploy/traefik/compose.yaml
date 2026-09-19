@@ -21,9 +21,11 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].main=hpz440.ohr3023.org
       - --entrypoints.websecure.http.tls.domains[0].sans=*.hpz440.ohr3023.org
       - --entrypoints.traefik.address=:8081
-      # Read-only API. The published bind is loopback, but the entrypoint also
-      # answers as traefik:8081 to anything on the harbor network.
-      - --api.insecure=true
+      # Read-only API, gated by HTTP Basic Auth (ADR 16) via the router in
+      # dynamic/api.yml -- not --api.insecure, which would serve it with no
+      # auth at all to anything on the harbor network, not only to the
+      # loopback-only host publish below.
+      - --api=true
       - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL:?set ACME_EMAIL in /etc/traefik/env}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.cloudflare.acme.dnschallenge=true
@@ -40,8 +42,19 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./dynamic:/etc/traefik/dynamic:ro
       - letsencrypt:/letsencrypt
+      # ADR 16: the htpasswd file dynamic/api.yml's auth middleware reads.
+      # install.sh writes it before this container starts; a bind mount of a
+      # path that does not yet exist becomes a directory, so order matters.
+      - /etc/traefik/dashboard-users:/etc/traefik/dashboard-users:ro
     networks:
       - harbor
+      # ADR 16: Portainer moved off `harbor` onto its own network so no
+      # project container can reach its read-write Docker socket over the
+      # bridge. Traefik joins both -- it is the trusted routing component,
+      # not an untrusted workload -- and Portainer's own
+      # `traefik.docker.network=admin` label tells Traefik which of its
+      # networks to route that one backend over.
+      - admin
     labels:
       harbor.kind: edge
       harbor.description: "Reverse proxy; every HTTPS route on this host"
@@ -51,4 +64,6 @@ volumes:
 
 networks:
   harbor:
+    external: true
+  admin:
     external: true

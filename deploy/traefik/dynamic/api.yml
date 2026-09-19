@@ -1,0 +1,33 @@
+# Traefik's own read-only API, gated by HTTP Basic Auth (ADR 16).
+#
+# The `traefik` entrypoint's host-side publish is loopback-only, but that
+# does not stop a container on the `harbor` Docker network from reaching
+# the same entrypoint directly as `traefik:8081` -- Docker's bridge
+# networking makes no distinction between "arrived via the host's published
+# port" and "arrived from a sibling container." Without this router and its
+# auth middleware, any container on `harbor` could read the whole edge
+# configuration for free: every routed hostname, every backend container
+# and port, every middleware definition.
+#
+# `usersFile` is the htpasswd-format file `install.sh` renders alongside
+# `/etc/traefik/env`. `harbor-console-web`, the one legitimate caller, reads
+# the matching plaintext password from a second file
+# (`/etc/traefik/dashboard-password`, group-readable by `harbor` rather than
+# root-only) and presents it as HTTP Basic Auth -- see
+# `harbor_console.webapp.read_traefik_credentials`.
+#
+# This file is static and checked in as-is; nothing here is host-specific,
+# so unlike `harbor.yml.in` it needs no `@TAILNET_ADDRESS@`-style rendering.
+http:
+  routers:
+    traefik-api:
+      rule: PathPrefix(`/api`)
+      entryPoints:
+        - traefik
+      service: api@internal
+      middlewares:
+        - traefik-api-auth
+  middlewares:
+    traefik-api-auth:
+      basicAuth:
+        usersFile: /etc/traefik/dashboard-users

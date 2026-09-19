@@ -38,6 +38,7 @@ fi
 echo "==> Checking edge prerequisites"
 require_cmd docker "Install Docker first."
 require_cmd tailscale "Install Tailscale first."
+require_cmd openssl "Needed to generate the Traefik dashboard/API password (ADR 16)."
 # The ufw rule below names the bridge interface, so the harbor network has to
 # carry a predictable one. A network created without it (by an older installer,
 # or by hand) would get a generated br-<id> name the rule cannot match, and the
@@ -149,15 +150,78 @@ chmod 0600 /etc/traefik/env
 # The bridge name is fixed so the ufw rule below can name the interface; the
 # prerequisite check above refuses an existing network that lacks it.
 docker network inspect harbor >/dev/null 2>&1 || docker network create -o com.docker.network.bridge.name=br-harbor harbor
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-  # ufw's default-deny INPUT drops container->host traffic; the edge must reach the page.
-  ufw allow in on br-harbor to "${TAILNET_ADDRESS}" port 8100 proto tcp comment 'harbor-console: traefik -> page' >/dev/null
+# ADR 16: Portainer's read-write Docker socket lives on its own network, not
+# on `harbor` where every routed project container now sits. No fixed
+# bridge name needed here -- nothing scopes a host-facing rule to it, only
+# Traefik and Portainer ever join it.
+docker network inspect admin >/dev/null 2>&1 || docker network create admin
+
+# ADR 16: Traefik's own /api is gated by HTTP Basic Auth rather than served
+# with none at all (`--api.insecure=true` would answer it, unauthenticated,
+# to any container on `harbor`, not only to the loopback-only host publish).
+# The password is generated once, on first install, and kept in
+# /etc/traefik/env alongside the other secrets; every run derives the
+# htpasswd file Traefik reads and the plaintext copy harbor-console-web
+# reads from that one source, so a hand-rotated password takes effect on
+# the next install.sh run with no other step.
+if ! grep -qE '^TRAEFIK_DASHBOARD_PASSWORD=' /etc/traefik/env 2>/dev/null; then
+  new_password=$(openssl rand -base64 24)
+  printf 'TRAEFIK_DASHBOARD_PASSWORD=%s\n' "${new_password}" >> /etc/traefik/env
+  chmod 0600 /etc/traefik/env
+  echo "==> Generated a new Traefik dashboard/API password -- it will not be shown again:"
+  echo "    ${new_password}"
 fi
+TRAEFIK_DASHBOARD_PASSWORD=$(grep -E '^TRAEFIK_DASHBOARD_PASSWORD=' /etc/traefik/env | tail -n1 | cut -d= -f2- | tr -d '\r')
+if [[ -z "${TRAEFIK_DASHBOARD_PASSWORD}" ]]; then
+  echo "Error: TRAEFIK_DASHBOARD_PASSWORD in /etc/traefik/env is empty." >&2
+  exit 1
+fi
+# Traefik itself reads the htpasswd form (root-only, mounted read-only into
+# the container). harbor-console-web -- running as the unprivileged
+# `harbor` user, not root -- reads the plaintext form instead, so it is
+# owned root:harbor and group-readable rather than root-only like
+# /etc/traefik/env, which also carries the Cloudflare token and stays
+# root-only.
+printf 'harbor:%s\n' "$(openssl passwd -apr1 "${TRAEFIK_DASHBOARD_PASSWORD}")" > /etc/traefik/dashboard-users
+chmod 0600 /etc/traefik/dashboard-users
+printf '%s\n' "${TRAEFIK_DASHBOARD_PASSWORD}" > /etc/traefik/dashboard-password
+chown "root:harbor" /etc/traefik/dashboard-password
+chmod 0640 /etc/traefik/dashboard-password
+
 TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
 printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
 sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp"
 mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.yml"
 ( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  # Scoped to Traefik's own address on `harbor`, not the whole bridge
+  # interface: `ufw allow in on br-harbor` would admit every container on
+  # that network to the status page's port, not only Traefik (ADR 16).
+  # Traefik's own connection to the page carries its actual container
+  # address as source -- ordinary bridge routing, not the port-publish NAT
+  # that makes host-loopback traffic arrive as the gateway address -- so
+  # this is the one address the rule needs to name. Applied after
+  # `docker compose up` above, once that address is known.
+  ufw_tag='harbor-console: traefik -> page'
+  # Idempotent: drop any earlier instance of this rule first, in case
+  # Traefik's address on `harbor` has changed since the last install (most
+  # likely a network recreation), so a stale allow for an address nothing
+  # uses any more is never left standing alongside a fresh one.
+  while true; do
+    rule_num=$(ufw status numbered 2>/dev/null | grep -F "${ufw_tag}" | head -n1 | grep -oE '^\[ *[0-9]+\]' | tr -dc '0-9')
+    if [[ -z "${rule_num}" ]]; then
+      break
+    fi
+    yes | ufw delete "${rule_num}" >/dev/null
+  done
+  traefik_harbor_ip=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").IPAddress}}' 2>/dev/null || true)
+  if [[ -n "${traefik_harbor_ip}" ]]; then
+    ufw allow in on br-harbor from "${traefik_harbor_ip}" to "${TAILNET_ADDRESS}" port 8100 proto tcp comment "${ufw_tag}" >/dev/null
+  else
+    echo "warning: could not determine Traefik's address on the harbor network; the page will not be reachable through the edge until this is fixed and install.sh is re-run." >&2
+  fi
+fi
 
 echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
 ( cd "${INSTALL_DIR}/deploy/hosted" && docker compose -p hosted up -d --remove-orphans )

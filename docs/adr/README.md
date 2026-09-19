@@ -26,6 +26,7 @@ the reasoning, including reasoning we later moved away from.
 | 0013 | [The ledger stays in the repository](0013-ledger-lives-in-repo.md) | Superseded by 0015 |
 | 0014 | [An edited want moves an uncontended lease](0014-want-edits-move-an-uncontended-lease.md) | Superseded by 0015 |
 | 0015 | [A reverse proxy fronts every HTTP service; labels are the only declaration](0015-reverse-proxy-and-label-declared-services.md) | Accepted |
+| 0016 | [Close the `harbor` network's attack surface: gate Traefik's API, isolate Portainer, scope the ufw rule by address](0016-close-the-harbor-network-attack-surface.md) | Accepted |
 
 ## Adding a new ADR
 

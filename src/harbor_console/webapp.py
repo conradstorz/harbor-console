@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from harbor_console.directory import (
     KIND_HTTP,
@@ -43,6 +44,14 @@ from harbor_console.web import make_handler
 WEB_PORT = 8100
 
 PROBE_INTERVAL_SECONDS = 30.0
+
+#: The credential this process presents to Traefik's own gated API (ADR 16).
+#: The username is fixed -- there is only ever one caller -- and the
+#: password lives in a file `install.sh` writes alongside the htpasswd file
+#: Traefik itself reads, group-readable by `harbor` rather than root-only,
+#: since this process runs as `harbor`, not root.
+TRAEFIK_DASHBOARD_USER = "harbor"
+TRAEFIK_DASHBOARD_PASSWORD_PATH = Path("/etc/traefik/dashboard-password")
 
 EXIT_OK = 0
 EXIT_REFUSED = 1
@@ -80,6 +89,26 @@ def starting_snapshot(host: str, now: datetime, tailnet_address: str | None = No
         },
         tailnet_address=tailnet_address,
     )
+
+
+def read_traefik_credentials(
+    path: Path = TRAEFIK_DASHBOARD_PASSWORD_PATH,
+) -> tuple[str, str] | None:
+    """This process's credential for Traefik's gated API, or None.
+
+    Degrades like every other collector: a missing or empty file means
+    either an older `install.sh` has not re-run since ADR 16, or the edge
+    is not deployed at all. Read with no credentials, `traefik_routers`
+    gets a 401 from the gate the same as any other reason Traefik could not
+    be read, and the page shows the same banner it always has for that.
+    """
+    try:
+        password = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not password:
+        return None
+    return (TRAEFIK_DASHBOARD_USER, password)
 
 
 def collect_snapshot(
@@ -188,7 +217,11 @@ def main(
 
 def _default_prober(holder: SnapshotHolder, tailnet_address: str) -> None:
     def collect() -> Snapshot:
-        return collect_snapshot(datetime.now(), tailnet_address=tailnet_address)
+        return collect_snapshot(
+            datetime.now(),
+            tailnet_address=tailnet_address,
+            routers=lambda: traefik_routers(credentials=read_traefik_credentials()),
+        )
 
     thread = threading.Thread(
         target=probe_loop, args=(holder, collect), name="harbor-prober", daemon=True

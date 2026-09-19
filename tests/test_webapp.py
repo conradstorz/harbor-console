@@ -308,3 +308,28 @@ def test_the_default_server_is_threading():
     default = inspect.signature(webapp.main).parameters["server_factory"].default
 
     assert default is ThreadingHTTPServer
+
+
+def test_read_traefik_credentials_reads_the_password_file(tmp_path):
+    path = tmp_path / "dashboard-password"
+    path.write_text("s3cret\n", encoding="utf-8")
+
+    assert webapp.read_traefik_credentials(path) == (webapp.TRAEFIK_DASHBOARD_USER, "s3cret")
+
+
+def test_read_traefik_credentials_strips_surrounding_whitespace(tmp_path):
+    path = tmp_path / "dashboard-password"
+    path.write_text("  s3cret  \n", encoding="utf-8")
+
+    assert webapp.read_traefik_credentials(path) == (webapp.TRAEFIK_DASHBOARD_USER, "s3cret")
+
+
+def test_read_traefik_credentials_degrades_when_the_file_is_missing(tmp_path):
+    assert webapp.read_traefik_credentials(tmp_path / "nope") is None
+
+
+def test_read_traefik_credentials_degrades_on_an_empty_file(tmp_path):
+    path = tmp_path / "dashboard-password"
+    path.write_text("\n", encoding="utf-8")
+
+    assert webapp.read_traefik_credentials(path) is None
