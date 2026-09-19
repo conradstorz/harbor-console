@@ -1,24 +1,15 @@
 import inspect
-import os
-import re
-from datetime import date, datetime
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 
-import pytest
-
-from harbor_console import web, webapp
+from harbor_console import webapp
+from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import Listener
-from harbor_console.ports.ledger import Lease, LedgerError
 from harbor_console.probe import Health
-from harbor_console.reconcile import (
-    DECLARED_NOT_RUNNING,
-    RUNNING_NOT_DECLARED,
-    UNDECLARED_TAILNET_LISTENER,
-)
-from harbor_console.serve import Proxy
 from harbor_console.snapshot import Snapshot
 from harbor_console.tailnet import TailnetUnavailable
+from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router
 
 METRICS = {
     "hostname": "hpz440",
@@ -30,84 +21,111 @@ METRICS = {
     "docker_container_count": 1,
     "current_datetime": "2026-09-02 14:02:11",
 }
+NOW = datetime(2026, 9, 2, 14, 2, 11)
+HOST = "parksmart.hpz440.ohr3023.org"
+PARKSMART = Container(
+    "parksmart-parksmart-1",
+    (),
+    {"traefik.enable": "true", "traefik.http.routers.parksmart.rule": f"Host(`{HOST}`)"},
+    frozenset({"harbor"}),
+)
+ROUTER = Router("parksmart@docker", HOST, "parksmart", True, None)
 
-WEB_LEASE = Lease("harbor-console", "web", "hpz440", "0.0.0.0", 8090, date(2026, 9, 1))
-GTE_LEASE = Lease("gte", "console", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1))
 
-
-def test_own_port_comes_from_the_ledger():
-    assert webapp.own_port([GTE_LEASE, WEB_LEASE]) == 8090
-
-
-def test_own_port_missing_is_an_error():
-    with pytest.raises(webapp.NotDeclared):
-        webapp.own_port([GTE_LEASE])
+def collect(**overrides):
+    kwargs = dict(
+        now=NOW,
+        collector=lambda: METRICS,
+        listeners=lambda: (),
+        containers=lambda: (PARKSMART,),
+        routers=lambda: (ROUTER,),
+        prober=lambda url: Health(True, "ok", "fine", (), None),
+        tailnet_address="100.69.239.123",
+    )
+    kwargs.update(overrides)
+    return webapp.collect_snapshot(**kwargs)
 
 
 def test_collect_snapshot_gathers_every_source():
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (Listener("0.0.0.0", 8080, None),),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, "ok", "fine", (), None),
-    )
+    snapshot = collect()
 
     assert snapshot.metrics == METRICS
     assert snapshot.docker_available is True
-    assert snapshot.health[("gte", "console", "hpz440")].up is True
-    assert snapshot.drift == ()
+    assert snapshot.traefik_available is True
+    assert snapshot.health["parksmart"].up is True
+    assert [r.name for r in snapshot.rows] == ["parksmart"]
+    assert snapshot.rows[0].state == "UP"
+    assert snapshot.findings == ()
+    assert snapshot.probed is True
     assert snapshot.collection_error is None
 
 
+def test_http_rows_are_probed_at_their_route():
+    seen = []
+
+    def prober(url):
+        seen.append(url)
+        return Health(True, None, None, (), None)
+
+    collect(prober=prober)
+
+    assert seen == [f"https://{HOST}/"]
+
+
+def test_rows_without_a_host_are_not_probed():
+    seen = []
+    plain = Container("plain", (), {"traefik.enable": "true"})
+
+    collect(containers=lambda: (plain,), routers=lambda: (), prober=lambda url: seen.append(url))
+
+    assert seen == []
+
+
+def test_non_http_rows_are_not_probed():
+    seen = []
+    mqtt = Container("mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    collect(containers=lambda: (mqtt,), routers=lambda: (), prober=lambda url: seen.append(url))
+
+    assert seen == []
+
+
 def test_collect_snapshot_marks_docker_unavailable():
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (Listener("0.0.0.0", 8080, None),),
-        containers=lambda: DOCKER_UNAVAILABLE,
-        prober=lambda host, port: Health(True, None, None, (), None),
-    )
+    snapshot = collect(containers=lambda: DOCKER_UNAVAILABLE)
 
     assert snapshot.docker_available is False
     assert snapshot.containers == ()
+    assert snapshot.rows == ()
+    assert snapshot.findings == ()
 
 
-def test_collect_snapshot_reconciles_against_the_host_it_serves():
-    """The host is this machine, so another host's lease covers nothing here."""
-    elsewhere = Lease("gte", "console", "other-box", "0.0.0.0", 8080, date(2026, 9, 1))
+def test_collect_snapshot_marks_traefik_unavailable():
+    snapshot = collect(routers=lambda: TRAEFIK_UNAVAILABLE)
 
-    snapshot = webapp.collect_snapshot(
-        leases=(elsewhere,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(False, None, None, (), None),
-    )
-
-    assert [item.kind for item in snapshot.drift] == [RUNNING_NOT_DECLARED]
+    assert snapshot.traefik_available is False
+    assert snapshot.rows[0].state == "UP"
+    assert all(f.kind != ROUTE_ERROR for f in snapshot.findings)
 
 
-def test_collect_snapshot_hands_reconcile_a_concrete_sequence():
-    """find_drift walks the leases twice; a generator would empty itself."""
-    snapshot = webapp.collect_snapshot(
-        leases=iter((GTE_LEASE,)),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (Listener("0.0.0.0", 8080, None),),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
-    )
+def test_collect_snapshot_reports_findings():
+    snapshot = collect(containers=lambda: (PARKSMART, Container("mystery", ())))
 
-    assert snapshot.leases == (GTE_LEASE,)
-    assert snapshot.drift == ()
+    assert [f.kind for f in snapshot.findings] == [UNDECLARED_CONTAINER]
+
+
+def test_the_pages_own_bind_is_not_a_finding():
+    snapshot = collect(listeners=lambda: (Listener("100.69.239.123", webapp.WEB_PORT, None),))
+
+    assert snapshot.findings == ()
+
+
+def test_starting_snapshot_has_looked_at_nothing():
+    snapshot = webapp.starting_snapshot("hpz440", NOW, tailnet_address="100.69.239.123")
+
+    assert snapshot.probed is False
+    assert snapshot.rows == ()
+    assert snapshot.metrics["hostname"] == "hpz440"
+    assert snapshot.tailnet_address == "100.69.239.123"
 
 
 def test_probe_loop_publishes_a_snapshot_then_exits_cleanly():
@@ -116,51 +134,32 @@ def test_probe_loop_publishes_a_snapshot_then_exits_cleanly():
     )
     calls = {"count": 0}
 
-    def collect():
+    def collect_fn():
         calls["count"] += 1
-        return Snapshot(
-            collected=datetime(2026, 9, 2), metrics=METRICS, leases=(GTE_LEASE,)
-        )
+        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
 
     def fake_sleep(_interval):
         raise KeyboardInterrupt
 
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, interval=30.0)
 
     assert calls["count"] == 1
-    assert holder.get().leases == (GTE_LEASE,)
+    assert holder.get().collected == datetime(2026, 9, 2)
 
 
 def test_probe_loop_keeps_the_last_snapshot_when_collection_fails():
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
+    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS)
     holder = webapp.SnapshotHolder(good)
 
-    def collect():
-        raise LedgerError("services.toml: boom")
-
-    def fake_sleep(_interval):
-        raise KeyboardInterrupt
-
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
-
-    assert holder.get().leases == (GTE_LEASE,)
-    assert holder.get().collection_error is not None
-
-
-def test_probe_loop_survives_a_failure_that_is_not_the_ledger():
-    """Any collector can fail; the page must not become the thing that is wrong."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
-    holder = webapp.SnapshotHolder(good)
-
-    def collect():
+    def collect_fn():
         raise RuntimeError("psutil fell over")
 
     def fake_sleep(_interval):
         raise KeyboardInterrupt
 
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, interval=30.0)
 
-    assert holder.get().leases == (GTE_LEASE,)
+    assert holder.get().collected == datetime(2026, 1, 1)
     assert "psutil fell over" in (holder.get().collection_error or "")
 
 
@@ -168,65 +167,100 @@ def test_probe_loop_clears_a_stale_reason_on_the_next_good_cycle():
     stale = Snapshot(
         collected=datetime(2026, 1, 1),
         metrics=METRICS,
-        collection_error="services.toml: boom",
+        collection_error="psutil fell over",
     )
     holder = webapp.SnapshotHolder(stale)
 
-    def collect():
+    def collect_fn():
         return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
 
     def fake_sleep(_interval):
         raise KeyboardInterrupt
 
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, interval=30.0)
 
     assert holder.get().collection_error is None
 
 
-def test_the_starting_snapshot_renders_before_the_first_cycle():
-    """A request landing before the prober's first cycle still gets a page."""
-    snapshot = webapp.starting_snapshot(
-        "hpz440", (WEB_LEASE,), datetime(2026, 9, 2, 14, 2, 11)
+def test_probe_loop_sleeps_for_the_interval_it_was_given():
+    holder = webapp.SnapshotHolder(
+        Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS)
+    )
+    slept = []
+
+    def collect_fn():
+        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    def fake_sleep(interval):
+        slept.append(interval)
+        raise KeyboardInterrupt
+
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, interval=30.0)
+
+    assert slept == [30.0]
+
+
+def test_the_default_probe_interval_is_not_a_busy_spin():
+    assert webapp.PROBE_INTERVAL_SECONDS >= 1.0
+    assert (
+        inspect.signature(webapp.probe_loop).parameters["interval"].default
+        == webapp.PROBE_INTERVAL_SECONDS
     )
 
-    assert b"hpz440" in web.render_page(snapshot)
+
+def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch, capsys):
+    def boom():
+        raise TailnetUnavailable("no tailnet")
+
+    monkeypatch.setattr(webapp, "tailscale_address", boom)
+
+    called = {"served": False}
+
+    def factory(_address, _handler):
+        called["served"] = True
+
+    result = webapp.main(server_factory=factory, start_prober=lambda _holder, _addr: None)
+
+    assert result != 0
+    assert called["served"] is False
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "no tailnet" in err
 
 
-def test_main_binds_the_tailnet_address_and_the_leased_port(monkeypatch):
-    bound = {}
-
-    class FakeServer:
-        def __init__(self, address, handler):
-            bound["address"] = address
-
-        def serve_forever(self):
-            raise KeyboardInterrupt
-
-        def server_close(self):
-            bound["closed"] = True
-
+def test_main_reports_a_bind_that_fails(monkeypatch, capsys):
+    """A port already in use is a refusal, not a traceback."""
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
 
-    result = webapp.main(server_factory=FakeServer, start_prober=lambda _holder, _host, _addr: None)
+    def factory(_address, _handler):
+        raise OSError("address in use")
 
-    assert result == 0
-    assert bound["address"] == ("100.69.239.123", 8090)
-    assert bound["closed"] is True
+    result = webapp.main(server_factory=factory, start_prober=lambda _h, _addr: None)
+
+    assert result != 0
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "100.69.239.123:8100" in err
+    assert "address in use" in err
+
+
+def test_a_failed_bind_starts_no_prober(monkeypatch):
+    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
+
+    started = {"probing": False}
+
+    def factory(_address, _handler):
+        raise OSError("address already in use")
+
+    def start(_holder, _addr):
+        started["probing"] = True
+
+    assert webapp.main(server_factory=factory, start_prober=start) != 0
+    assert started["probing"] is False
 
 
 def test_main_starts_the_prober_after_the_bind_and_before_it_serves(monkeypatch):
-    """The bind comes first, then the prober, then serving.
-
-    Starting the prober first made a refusal expensive: a bind that fails --
-    the leased port already taken -- would still have fired a whole collection
-    cycle on its way out, `docker ps` plus an HTTP probe of every leased port,
-    and `RestartSec=2` repeats that every two seconds for as long as the port
-    stays taken. It also contradicted `starting_snapshot`'s own docstring,
-    which promises the server binds before any collector runs.
-    """
     order = []
-    given = {}
 
     class FakeServer:
         def __init__(self, _address, _handler):
@@ -240,613 +274,37 @@ def test_main_starts_the_prober_after_the_bind_and_before_it_serves(monkeypatch)
             order.append("closed")
 
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
 
-    def start(_holder, host, _addr):
+    def start(_holder, _addr):
         order.append("probing")
-        given["host"] = host
 
     assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
     assert order == ["bound", "probing", "served", "closed"]
-    # The prober reconciles against the host this process bound for, which
-    # is the lease's host and never the OS's idea of it.
-    assert given["host"] == WEB_LEASE.host
 
 
-def test_main_reports_a_bind_that_fails(monkeypatch):
-    """The leased port already taken is a refusal, not a traceback."""
+def test_main_binds_the_tailnet_address_and_web_port(monkeypatch):
+    bound = {}
+
+    class FakeServer:
+        def __init__(self, address, _handler):
+            bound["address"] = address
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            bound["closed"] = True
+
     monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
 
-    def factory(_address, _handler):
-        raise OSError("address already in use")
+    result = webapp.main(server_factory=FakeServer, start_prober=lambda _holder, _addr: None)
 
-    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
-
-    assert result != 0
+    assert result == 0
+    assert bound["address"] == ("100.69.239.123", webapp.WEB_PORT)
+    assert bound["closed"] is True
 
 
 def test_the_default_server_is_threading():
-    """HTTP/1.1 keep-alive plus one thread would let one client hold the page."""
     default = inspect.signature(webapp.main).parameters["server_factory"].default
 
     assert default is ThreadingHTTPServer
-
-
-def test_main_refuses_to_start_without_a_tailnet_address(monkeypatch):
-    def boom():
-        raise TailnetUnavailable("tailscaled is not up")
-
-    monkeypatch.setattr(webapp, "tailscale_address", boom)
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
-
-    called = {"served": False}
-
-    def factory(_address, _handler):
-        called["served"] = True
-
-    result = webapp.main(server_factory=factory, start_prober=lambda _holder, _host, _addr: None)
-
-    assert result != 0
-    assert called["served"] is False
-
-
-def test_main_refuses_to_start_when_the_ledger_is_unreadable(monkeypatch):
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-
-    def boom(_path):
-        raise LedgerError("services.toml: unreadable")
-
-    monkeypatch.setattr(webapp, "load_leases", boom)
-
-    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host, _addr: None)
-
-    assert result != 0
-
-
-def test_main_refuses_to_start_when_its_own_lease_is_missing(monkeypatch):
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [GTE_LEASE])
-
-    result = webapp.main(server_factory=lambda *a: None, start_prober=lambda _h, _host, _addr: None)
-
-    assert result != 0
-
-
-def test_the_ledger_path_is_the_one_the_allocator_writes():
-    assert webapp.LEDGER_PATH.name == "services.toml"
-    assert webapp.LEDGER_PATH.exists()
-
-
-def test_collect_snapshot_uses_the_host_it_was_given_not_the_os_hostname():
-    """The ledger's host is hand-authored; the OS need not agree with it.
-
-    `gethostname()` says `hpz440.lan` while the ledger says `hpz440`. Deriving
-    the host from the collected metrics emptied this host's share of the
-    ledger: `find_drift` keeps only `lease.host == host`, so the dead service
-    below -- nothing listening on a leased port, the finding this page exists
-    to make -- disappeared, and the container correctly serving that lease was
-    reported as undeclared instead.
-    """
-    metrics = dict(METRICS, hostname="hpz440.lan")
-
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: metrics,
-        listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(False, None, None, (), None),
-    )
-
-    assert [item.kind for item in snapshot.drift] == [DECLARED_NOT_RUNNING]
-    # The page and /ports.json name the host the ledger names, so the heading
-    # before the first cycle and the one after it cannot disagree.
-    assert snapshot.metrics["hostname"] == "hpz440"
-    # The collector's dict is not ours to edit.
-    assert metrics["hostname"] == "hpz440.lan"
-
-
-def test_own_lease_refuses_when_two_hosts_declare_this_service():
-    """The ledger is fleet-wide, so the first match may be another machine's.
-
-    Binding a port this host does not hold is the exact collision the ledger
-    exists to prevent. There is no hostname tiebreak on purpose.
-    """
-    elsewhere = Lease("harbor-console", "web", "nas", "0.0.0.0", 8090, date(2026, 9, 1))
-
-    with pytest.raises(webapp.AmbiguousDeclaration) as caught:
-        webapp.own_lease([WEB_LEASE, elsewhere])
-
-    message = str(caught.value)
-    assert "hpz440" in message
-    assert "nas" in message
-
-
-def test_own_lease_ambiguity_names_addr_and_port_not_just_a_repeated_host():
-    """A hand-edited ledger can declare the same service twice on one host,
-    on different addresses or ports. Naming only `lease.host` reads as the
-    same string twice -- "hpz440, hpz440" -- and gives the operator nothing
-    to find in the file. addr:port must distinguish each candidate.
-    """
-    first = Lease("harbor-console", "web", "hpz440", "0.0.0.0", 8090, date(2026, 9, 1))
-    second = Lease("harbor-console", "web", "hpz440", "127.0.0.1", 8091, date(2026, 9, 1))
-
-    with pytest.raises(webapp.AmbiguousDeclaration) as caught:
-        webapp.own_lease([first, second])
-
-    message = str(caught.value)
-    assert "0.0.0.0:8090" in message
-    assert "127.0.0.1:8091" in message
-
-
-def test_main_refuses_to_start_when_its_own_lease_is_ambiguous(monkeypatch):
-    """An ambiguous identity is a refusal, like the other three, before any bind."""
-    elsewhere = Lease("harbor-console", "web", "nas", "0.0.0.0", 8090, date(2026, 9, 1))
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, elsewhere])
-
-    called = {"served": False}
-
-    def factory(_address, _handler):
-        called["served"] = True
-
-    result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
-
-    assert result != 0
-    assert called["served"] is False
-
-
-def _banners(html: str) -> str:
-    """The failure banners only, so an assertion about blame cannot veto page copy.
-
-    Asserting a word is absent from the whole document makes every future line of
-    copy answerable to a test about failure attribution -- which is how this one
-    silently dictated the footer's wording once already.
-    """
-    return " ".join(re.findall(r'<p class="banner">.*?</p>', html, re.DOTALL))
-
-
-def test_a_collector_failure_is_not_blamed_on_the_ledger():
-    """psutil raising must not send the operator to read services.toml."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
-    holder = webapp.SnapshotHolder(good)
-
-    def collect():
-        raise RuntimeError("psutil fell over")
-
-    def fake_sleep(_interval):
-        raise KeyboardInterrupt
-
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
-    html = web.render_page(holder.get()).decode()
-
-    assert "psutil fell over" in html
-    assert "ledger" not in _banners(html).lower()
-
-
-def test_a_ledger_failure_is_still_named_as_one():
-    """The common case must stay legible after the field stopped naming it."""
-    good = Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS, leases=(GTE_LEASE,))
-    holder = webapp.SnapshotHolder(good)
-
-    def collect():
-        raise LedgerError("services.toml: boom")
-
-    def fake_sleep(_interval):
-        raise KeyboardInterrupt
-
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
-    html = web.render_page(holder.get()).decode()
-
-    assert "ledger" in html.lower()
-    assert "services.toml: boom" in html
-
-
-def test_the_starting_snapshot_claims_no_clean_bill_of_health():
-    """Nothing has been probed, so nothing is UP, nothing is DOWN, nothing is clean."""
-    snapshot = webapp.starting_snapshot(
-        "hpz440", (WEB_LEASE,), datetime(2026, 9, 2, 14, 2, 11)
-    )
-
-    assert snapshot.probed is False
-
-    html = web.render_page(snapshot).decode()
-
-    assert "DOWN" not in html
-    assert "no drift" not in html.lower()
-    # Said in both places that would otherwise assert a state: services and drift.
-    assert html.lower().count("nothing has been collected yet") == 2
-
-
-def test_a_failed_bind_starts_no_prober(monkeypatch):
-    """A refusal must cost nothing but the refusal.
-
-    The prober used to start before the bind, so a process that could not hold
-    its port still ran a full cycle -- `docker ps` and an HTTP probe of every
-    leased port -- before exiting. `RestartSec=2` turns that into a collection
-    storm against every service on the host, every two seconds, for as long as
-    the port stays taken.
-    """
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE])
-
-    started = {"probing": False}
-
-    def factory(_address, _handler):
-        raise OSError("address already in use")
-
-    def start(_holder, _host, _addr):
-        started["probing"] = True
-
-    assert webapp.main(server_factory=factory, start_prober=start) != 0
-    assert started["probing"] is False
-
-
-def test_collect_snapshot_publishes_the_listeners_it_found():
-    """The listener list is the payload `/ports.json` is built from.
-
-    Dropping it on the floor here serves `"listening": []` with a 200: the
-    allocator's `fetch_live` reads that as a complete, verified-empty host and
-    grants ports that are already in use -- the same failure the 503 gate
-    exists to prevent, arriving through the other door. Nothing else in the
-    suite asserts `snapshot.listeners`.
-    """
-    found = (Listener("0.0.0.0", 8080, None), Listener("127.0.0.1", 5432, 42))
-
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: found,
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
-    )
-
-    assert snapshot.listeners == found
-    # And it survives all the way into the body the allocator reads.
-    payload = web.ports_payload(snapshot)
-    assert {(entry["addr"], entry["port"]) for entry in payload["listening"]} == {
-        ("0.0.0.0", 8080),
-        ("127.0.0.1", 5432),
-    }
-
-
-def test_collect_snapshot_records_when_the_ledger_was_last_written():
-    """The staleness indicator comes from the injected collector, not a live
-    stat call inside collect_snapshot itself."""
-    written = datetime(2026, 9, 1, 22, 20, 0)
-
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
-        ledger_mtime=lambda: written,
-    )
-
-    assert snapshot.ledger_written == written
-
-
-def test_read_ledger_mtime_returns_the_files_modification_time(tmp_path):
-    ledger = tmp_path / "services.toml"
-    ledger.write_text("", encoding="utf-8")
-    stamp = datetime(2026, 9, 1, 22, 20, 0).timestamp()
-    os.utime(ledger, (stamp, stamp))
-
-    result = webapp.read_ledger_mtime(ledger)
-
-    assert result == datetime.fromtimestamp(stamp)
-
-
-def test_read_ledger_mtime_degrades_when_the_ledger_is_missing(tmp_path):
-    """Every collector in this project degrades on a hostile environment
-    rather than raising -- a missing or unreadable ledger yields no
-    timestamp, not a traceback."""
-    missing = tmp_path / "does-not-exist.toml"
-
-    assert webapp.read_ledger_mtime(missing) is None
-
-
-def test_probe_loop_sleeps_for_the_interval_it_was_given():
-    """A busy-spin prober is invisible to a fake sleep that ignores its argument.
-
-    `sleep(0)` between cycles would hammer `docker ps` and every service on the
-    host at full CPU, and every other test here passes a `fake_sleep` that
-    discards what it is handed. Assert the value actually passed.
-    """
-    holder = webapp.SnapshotHolder(
-        Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS)
-    )
-    slept = []
-
-    def collect():
-        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
-
-    def fake_sleep(interval):
-        slept.append(interval)
-        raise KeyboardInterrupt
-
-    webapp.probe_loop(holder, collect=collect, sleep=fake_sleep, interval=30.0)
-
-    assert slept == [30.0]
-
-
-def test_the_default_probe_interval_is_not_a_busy_spin():
-    """The default the real prober thread runs on, asserted where it is read."""
-    assert webapp.PROBE_INTERVAL_SECONDS >= 1.0
-    assert (
-        inspect.signature(webapp.probe_loop).parameters["interval"].default
-        == webapp.PROBE_INTERVAL_SECONDS
-    )
-
-
-def test_every_refusal_says_why_on_stderr(monkeypatch, capsys):
-    """The refusal design's whole payoff is a line in journald.
-
-    Four refusals plus the bind, all silent-passing until now: no test in the
-    suite read stderr, so deleting every message left 289 tests green and an
-    operator with nothing but a non-zero exit code.
-    """
-    elsewhere = Lease("harbor-console", "web", "nas", "0.0.0.0", 8090, date(2026, 9, 1))
-
-    def no_tailnet():
-        raise TailnetUnavailable("tailscaled is not up")
-
-    def bad_ledger(_path):
-        raise LedgerError("services.toml: unreadable")
-
-    def bad_bind(_address, _handler):
-        raise OSError("address already in use")
-
-    cases = [
-        (no_tailnet, lambda _path: [WEB_LEASE], lambda *a: None, "tailscaled is not up"),
-        (lambda: "100.69.239.123", bad_ledger, lambda *a: None, "services.toml: unreadable"),
-        (lambda: "100.69.239.123", lambda _path: [GTE_LEASE], lambda *a: None, "harbor-console/web"),
-        (
-            lambda: "100.69.239.123",
-            lambda _path: [WEB_LEASE, elsewhere],
-            lambda *a: None,
-            "nas",
-        ),
-        (
-            lambda: "100.69.239.123",
-            lambda _path: [WEB_LEASE],
-            bad_bind,
-            "100.69.239.123:8090",
-        ),
-    ]
-
-    for address, leases, factory, expected in cases:
-        monkeypatch.setattr(webapp, "tailscale_address", address)
-        monkeypatch.setattr(webapp, "load_leases", leases)
-        capsys.readouterr()
-
-        result = webapp.main(server_factory=factory, start_prober=lambda _h, _host, _addr: None)
-
-        captured = capsys.readouterr()
-        assert result != 0
-        assert expected in captured.err, f"{expected!r} missing from {captured.err!r}"
-        assert captured.err.startswith("error:")
-
-
-def test_the_starting_snapshot_carries_the_tailnet_address():
-    """The address is known before the first page is served -- `main` resolves
-    it to bind -- so the page can name it from the very first request rather
-    than waiting a cycle for something it already has.
-    """
-    snapshot = webapp.starting_snapshot(
-        "hpz440",
-        (WEB_LEASE,),
-        datetime(2026, 9, 2, 14, 2, 11),
-        tailnet_address="100.69.239.123",
-    )
-
-    assert snapshot.tailnet_address == "100.69.239.123"
-
-
-def test_collect_snapshot_carries_the_tailnet_address():
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (),
-        containers=lambda: (),
-        prober=lambda host, port: Health(True, None, None, (), None),
-        tailnet_address="100.69.239.123",
-    )
-
-    assert snapshot.tailnet_address == "100.69.239.123"
-
-
-def test_main_hands_the_prober_the_address_it_bound(monkeypatch):
-    """The served address is decided once, where the host is, and passed down.
-    Re-resolving it per cycle would let a page bound to one address start
-    advertising another without a restart.
-    """
-    seen = {}
-
-    class FakeServer:
-        def __init__(self, address, handler):
-            pass
-
-        def serve_forever(self):
-            raise KeyboardInterrupt
-
-        def server_close(self):
-            pass
-
-    def start(_holder, host, tailnet_address):
-        seen["host"] = host
-        seen["tailnet_address"] = tailnet_address
-
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
-
-    assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
-    assert seen == {"host": "hpz440", "tailnet_address": "100.69.239.123"}
-
-
-def test_the_page_names_the_tailnet_address_before_the_first_cycle(monkeypatch):
-    """End to end through the starting snapshot: the address `main` bound is
-    what the very first page shows for a wildcard lease.
-    """
-    holder = {}
-
-    class FakeServer:
-        def __init__(self, address, handler):
-            holder["handler"] = handler
-
-        def serve_forever(self):
-            raise KeyboardInterrupt
-
-        def server_close(self):
-            pass
-
-    captured = {}
-
-    def start(snapshot_holder, _host, _tailnet_address):
-        captured["snapshot"] = snapshot_holder.get()
-
-    monkeypatch.setattr(webapp, "tailscale_address", lambda: "100.69.239.123")
-    monkeypatch.setattr(webapp, "load_leases", lambda _path: [WEB_LEASE, GTE_LEASE])
-
-    assert webapp.main(server_factory=FakeServer, start_prober=start) == 0
-    assert b"100.69.239.123:8080" in web.render_page(captured["snapshot"])
-
-
-def test_collect_snapshot_probes_the_address_the_page_advertises(monkeypatch):
-    """The prober and the renderer must agree on where a service is.
-
-    `harbor-console/web` and ARM both bind the tailnet address specifically.
-    Probing them by hostname sent the request to the LAN address, where
-    nothing was listening, and the page called two healthy services
-    LISTENING instead of UP -- while printing the tailnet address they do
-    answer on.
-    """
-    asked = []
-
-    webapp.collect_snapshot(
-        leases=(GTE_LEASE, Lease("arm", "web", "hpz440", "100.69.239.123", 49152, date(2026, 9, 1))),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (),
-        containers=lambda: (),
-        prober=lambda host, port: asked.append((host, port))
-        or Health(True, None, None, (), None),
-        tailnet_address="100.69.239.123",
-    )
-
-    assert asked == [("100.69.239.123", 8080), ("100.69.239.123", 49152)]
-
-
-def test_collect_snapshot_still_probes_by_hostname_without_a_tailnet_address():
-    """No address known means nothing to substitute, and a wildcard is not
-    somewhere to connect. The probe falls back to what it used before.
-    """
-    asked = []
-
-    webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (),
-        containers=lambda: (),
-        prober=lambda host, port: asked.append((host, port))
-        or Health(True, None, None, (), None),
-    )
-
-    assert asked == [("hpz440", 8080)]
-
-
-def test_collect_snapshot_reports_an_undeclared_tailnet_listener():
-    """End to end through the coordinator: the serve proxy on 8443 reaches
-    `find_drift` alongside the tailnet address, and the finding names the
-    lease behind it.
-
-    A second backend on the same front that no lease covers keeps the port
-    from being fully accounted for, so the finding still stands.
-    """
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (
-            Listener("100.69.239.123", 8443, None),
-            Listener("0.0.0.0", 8080, None),
-        ),
-        containers=lambda: (Container("gte", (("0.0.0.0", 8080),)),),
-        prober=lambda host, port: Health(True, None, None, (), None),
-        proxies=lambda: (
-            Proxy(8443, "/", "127.0.0.1", 8080),
-            Proxy(8443, "/other", "127.0.0.1", 9999),
-        ),
-        tailnet_address="100.69.239.123",
-    )
-
-    findings = [d for d in snapshot.drift if d.kind == UNDECLARED_TAILNET_LISTENER]
-    assert len(findings) == 1
-    assert "100.69.239.123:8443" in findings[0].detail
-    assert "127.0.0.1:8080" in findings[0].detail
-    assert "gte" in findings[0].detail
-
-
-def test_a_serve_outage_does_not_take_the_cycle_down():
-    """`serve_proxies` degrades to an empty tuple rather than raising, and a
-    cycle that collected no proxies still collects everything else.
-    """
-    snapshot = webapp.collect_snapshot(
-        leases=(GTE_LEASE,),
-        host="hpz440",
-        now=datetime(2026, 9, 2, 14, 2, 11),
-        collector=lambda: METRICS,
-        listeners=lambda: (Listener("100.69.239.123", 8443, None),),
-        containers=lambda: (),
-        prober=lambda host, port: Health(True, None, None, (), None),
-        proxies=lambda: (),
-        tailnet_address="100.69.239.123",
-    )
-
-    findings = [d for d in snapshot.drift if d.kind == UNDECLARED_TAILNET_LISTENER]
-    assert len(findings) == 1
-    assert "proxy" not in findings[0].detail.lower()
-
-
-def test_probe_results_do_not_collide_across_hosts():
-    """Lease identity everywhere else in this codebase is `(project, name,
-    host)`. A `health` dict keyed on `(project, name)` alone lets a
-    fleet-wide ledger's two hosts for the same project/name overwrite each
-    other's probe result.
-    """
-    leases = (
-        Lease("gte", "web", "hpz440", "0.0.0.0", 8080, date(2026, 9, 1)),
-        Lease("gte", "web", "elsewhere", "0.0.0.0", 8080, date(2026, 9, 1)),
-    )
-
-    def prober(target, _port):
-        # The local lease probes at an address; the remote one at its hostname.
-        up = target == "elsewhere"
-        return Health(up=up, state=None, summary=None, detail=(), warning=None)
-
-    snapshot = webapp.collect_snapshot(
-        leases=leases,
-        host="hpz440",
-        now=datetime(2026, 9, 9, 12, 0, 0),
-        collector=lambda: dict(METRICS),
-        listeners=lambda: (),
-        containers=lambda: (),
-        prober=prober,
-    )
-
-    assert snapshot.health[("gte", "web", "hpz440")].up is False
-    assert snapshot.health[("gte", "web", "elsewhere")].up is True
-    assert snapshot.collection_error is None

@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Harbor Console is a lightweight operational console for a small fleet of Linux servers, with two surfaces over one core:
+Harbor Console is a lightweight operational console for a small fleet of Linux servers, with two surfaces over one core, plus the host's edge:
 
 - **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU/memory/disk, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
-- **`harbor-console ports`** (v0.2.0, shipped) — the port allocator. Projects declare what they need in `.harbor.toml`; harbor-console leases a port from `services.toml` and writes it into the project's own `.env` ([ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)).
-- **`harbor-console-web`** (v0.2.0, shipped) — a read-only status page served to the tailnet: the service directory from `services.toml`, live/down state, and drift against Docker. It also serves the `/ports.json` the allocator reads. Runs as its own systemd unit (`deploy/harbor-console-web.service`), bound to the host's Tailscale address only ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)), collecting by convention rather than from declarations the server does not have ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)).
+- **`harbor-console-web`** (shipped) — a read-only status page served to the tailnet: the directory of every container that declares itself with compose labels, its state as Traefik and a probe through Traefik report it, and the findings where the declarations and the host disagree. Runs as its own systemd unit (`deploy/harbor-console-web.service`) on the host's Tailscale address, fixed port 8100 ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)), and is read at `harbor.hpz440.ohr3023.org` through the proxy.
+- **The edge** — Traefik, from `deploy/traefik/compose.yaml` in this repo, publishing the tailnet address's `:80` and `:443` and nothing else, with one wildcard certificate for `*.hpz440.ohr3023.org`. A container declares itself with labels and joins the `harbor` network; nothing generates those labels and there is no sync step ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 
-`founding_document.txt` is the authoritative spec — read it before adding features. Everything under its "v0.2.0" heading is now built. `plan.md` is the dated handoff brief that motivated the expansion; it is a historical record of how v0.2.0 was decided, not a description of the code — read it for reasoning, not for what exists (it still names a `registry.py` that was never written). The one question genuinely still open is under Scope discipline below.
+`founding_document.txt` is the original spec and `plan.md` the dated handoff brief behind v0.2.0; both describe the port ledger and allocator that ADR 15 retired, so read them for reasoning and history, not for what exists. What exists is described by `docs/superpowers/specs/2026-09-18-reverse-proxy-design.md` and by this file.
 
 ## Commands
 
@@ -23,10 +23,7 @@ Uses `uv` (not pip/venv). Python 3.13+.
 | Run all tests | `uv run pytest` |
 | Run one test file | `uv run pytest tests/test_system.py` |
 | Run one test | `uv run pytest tests/test_system.py::test_format_uptime` |
-| Report pending port changes | `uv run harbor-console ports scan` |
-| Apply port assignments, and repair drifted projects | `uv run harbor-console ports sync` |
-| Print the lease table (reads no declarations) | `uv run harbor-console ports show` |
-| Run the tailnet status page | `uv run harbor-console-web` (binds the Tailscale address; refuses without one) |
+| Run the tailnet status page | `uv run harbor-console-web` (binds the Tailscale address on port 8100; refuses without one) |
 
 `pyproject.toml` sets `pythonpath = ["src"]`, so tests import `harbor_console` without an editable install.
 
@@ -40,80 +37,74 @@ Existing (implemented):
 - `ui.py` — **renders** only. `build_dashboard(metrics)` turns the metrics dict into a `rich` renderable. No business logic, no metric collection.
 - `app.py` — **coordinates** the refresh loop (`rich.live.Live`). No collection or rendering logic of its own.
 
-The port allocator, implemented for v0.2.0, keeps the same split under `ports/`:
-
-- `ports/keys.py`, `ports/ledger.py`, `ports/declaration.py` — **collect** the lease ledger (`services.toml`) and each project's declaration (`.harbor.toml`). The uniqueness key is `(host, addr, port)`, compared by address *overlap*: `0.0.0.0` contends with every address on its host, two different specific addresses do not contend, two hosts never contend ([ADR 10](docs/adr/0010-address-scoped-port-key.md)). A ledger that claims one `(host, addr, port)` twice is a hard error at load time.
-- `ports/live.py`, `ports/discovery.py`, `ports/compose.py` — **collect** host state from `/ports.json`, the participating projects in the tree, and the ports each compose file publishes.
-- `ports/allocate.py` — the allocation policy. Pure: no I/O, so every rule is testable with plain values.
-- `ports/envfile.py`, `ports/explainer.py` — **render** the two generated artifacts: the managed fence in a project's `.env`, and `HARBOR_PORTS.md`.
-- `ports/atomic.py` — the one way a whole file is replaced: temp file beside the target, then `os.replace`. Every writer goes through it ([ADR 9](docs/adr/0009-atomic-writes-and-env-last.md)).
-- `ports/cli.py` — **coordinates** `scan` / `sync` / `show`, and is the **only module in the allocator that writes**. Nothing else touches the disk on its own.
-
-Two behaviours of that CLI are load-bearing and easy to undo by accident ([ADR 11](docs/adr/0011-sync-repairs-drift-and-show-stands-alone.md)):
-
-- **`sync` writes a project whose files have drifted, not only one whose decision changed.** `.env` is gitignored, so every fresh clone of a participating project starts without one while its lease stands and its decision is "keep"; writing only changes would report "up to date" over a project about to fall back to its compose default, on a port that may be leased to somebody else. A missing or mangled fence and a missing `HARBOR_PORTS.md` are repaired the same way. `scan` reports the same condition and writes nothing. A repair is reported *as* a repair, distinctly from a grant, and a tree that already matches stays a genuine no-op.
-- **`show` loads no declarations at all.** It reads the ledger and prints it, so a broken `.harbor.toml` anywhere in the tree — which does fail `scan` and `sync` — still leaves an operator able to read the lease table, which is exactly when they need it.
-
-The web surface, implemented for v0.2.0, is ten modules at the top level, and keeps the same split:
+The web surface is nine modules at the top level, and keeps the same split:
 
 - `tailnet.py` — **collects** the host's Tailscale address from `tailscale ip -4`. The one collector allowed to raise (see Graceful degradation below).
-- `listening.py` — **collects** every listening TCP socket via `psutil`, including loopback-bound and non-Docker ones. IPv6 `::` is normalised to `0.0.0.0`.
-- `docker.py` — **collects** running containers and the host ports they publish. `DOCKER_UNAVAILABLE` distinguishes "could not ask Docker" from "asked, nothing running"; the difference decides whether the page may call a service undeclared.
-- `probe.py` — **collects** liveness and optional detail for one service: `/` for up, `/hcstatus` for detail, both by convention ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)). Any HTTP response means up.
-- `serve.py` — **collects** what `tailscale serve` fronts and the backend behind each front. The one host process that holds a tailnet port while being neither a container nor anybody's lease, so the finding can name the true port instead of an unexplained one. Degrades quietly; its absence is reported as absence of knowledge, never as "nothing is proxying it".
-- `reconcile.py` — the drift policy. Pure, like `ports/allocate.py`: leases, listeners and containers in, findings out. Joins on `(addr, port)` by address overlap. `undeclared-tailnet-listener` covers what `running-not-declared` cannot: a host process binding the tailnet address *exactly* — a wildcard bind is every daemon on the box, and loopback is not on the tailnet at all — with no lease and no container behind it. Withheld without container evidence or a known tailnet address, for the same reason `running-not-declared` is.
-- `snapshot.py` — the **contract** between prober and renderer, data only. Its own module so neither imports the other, the way `ports/keys.py` serves the allocator. `Snapshot.probed` separates "found nothing" from "not looked yet"; `Snapshot.collection_error` — not `ledger_error` — carries why a cycle failed, whatever its source.
-- `addressing.py` — the **shared rule** for where a lease is reachable: `reachable_address` for the address the page prints, `probe_target` for the one the prober connects to, `fronts_for` for the `tailscale serve` URL a reader can actually use — a service that sets Secure cookies cannot be logged into over its plain leased port, so the front is the only way in. Pure, and its own module for the same reason `snapshot.py` is — the prober and the renderer must agree without importing each other. They did not once: the page printed the tailnet address while the probe still asked the hostname, which resolves to the LAN address, so two tailnet-bound services read as LISTENING rather than UP.
-- `web.py` — **renders** the HTML page from a snapshot and the `/ports.json` body, and serves both over stdlib `http.server`. No collection, no probing.
+- `listening.py` — **collects** every listening TCP socket via `psutil`, including loopback-bound and non-Docker ones. IPv6 `::` is normalised to `0.0.0.0`, and `addrs_overlap` lives here: the wildcard contends with every address on its host, two specific addresses do not contend.
+- `docker.py` — **collects** running containers: names, **labels**, published host ports and networks, via `docker inspect` over `docker ps -q`. Labels are how a container declares itself, which is why this reads `inspect` rather than `ps --format`. `DOCKER_UNAVAILABLE` distinguishes "could not ask Docker" from "asked, nothing running"; the difference decides whether the page may call a container undeclared.
+- `traefik.py` — **collects** the routers Traefik reports from its API on `127.0.0.1:8081`: the hostname parsed out of a `Host()` rule, the service behind it, and Traefik's own enabled/disabled verdict with its error text. Degrades to `TRAEFIK_UNAVAILABLE`, which is distinguishable from an empty router list the same way `DOCKER_UNAVAILABLE` is.
+- `probe.py` — **collects** liveness and optional detail for one **URL**: the route's own `https://<name>.hpz440.ohr3023.org/` for up, `/hcstatus` for detail, both by convention ([ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md)). Any HTTP response means up, so a green row proves the whole path through the proxy.
+- `directory.py` — the policy. Pure: containers, routers, listeners and probe results in; rows and findings out, so every rule is testable with plain values. Traefik is the truth for whether a route is live; this module only joins its verdict to the container that asked for it. Four findings — `undeclared-container`, `bypasses-proxy`, `route-error`, `undeclared-tailnet-listener` — each withheld when the evidence it needs is missing: container findings without Docker, route findings without Traefik. Absence of evidence is never a finding.
+- `snapshot.py` — the **contract** between prober and renderer, data only. Its own module so neither imports the other. `Snapshot.probed` separates "found nothing" from "not looked yet"; `docker_available` and `traefik_available` carry which evidence the cycle had; `Snapshot.collection_error` carries why a cycle failed, whatever its source.
+- `web.py` — **renders** the HTML page from a snapshot and serves it over stdlib `http.server`. No collection, no probing, and no endpoint but the page itself.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
 
 Three behaviours of that service are load-bearing and easy to undo by accident:
 
-- **The served host is decided once, in `webapp.main`, from the lease this process holds** — never from `socket.gethostname()`. The ledger's `host` is a hand-authored string; a name that disagrees with the OS (`hpz440` against `hpz440.lan`) would silently empty this host's share of the ledger and report every healthy container as undeclared.
-- **`harbor-console-web` has four startup refusals, and only four:** no tailnet address, an unreadable ledger, its own service not declared, and its own service declared more than once. Every one of them happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The last two are about identity: a page bound to a port no lease reserves is the collision the ledger exists to prevent, and multi-host operation needs an explicit choice of identity, which is deferred rather than guessed.
-- **`/ports.json` answers 503 until the first probe cycle completes, and again whenever Docker could not be read.** An unprobed snapshot has no listeners because none were looked for; serving it as 200 would read to the allocator as a verified empty host and let it grant a port already in use. The second window is a snapshot that was collected but cannot attribute anything to a container, which is just as dangerous a 200. Both become the refusal `ports/live.py` already has.
+- **The page binds the host's Tailscale address on fixed port 8100.** The port is a constant in `webapp.py`, not configuration: Traefik's file-provider route for `harbor.hpz440.ohr3023.org` points at it, and there is deliberately no flag, no environment variable and no file that moves it ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
+- **`harbor-console-web` has one startup refusal, and only one: no tailnet address.** It happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The four refusals of the ledger era went with the ledger. (Port 8100 already in use fails the bind and exits the same way, but that is the environment rather than a second rule.)
+- **Traefik or Docker being unreadable is a banner, never a refusal.** The page still renders from what it does have, says in the banner which evidence is missing, and withholds exactly the findings that evidence supported. A cycle that fails outright leaves the last good snapshot standing with the reason attached, and a successful cycle clears it.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
 
 The dict returned by `collect_system_metrics()` is the contract between `system` and `ui`; its keys are asserted directly in `tests/test_system.py`. Changing a key means updating the collector, the renderer, and that test together.
 
+### Declaring a service
+
+A container declares itself in its own compose file and nowhere else. Nothing in this repository generates these labels, and no file here has to be updated when a service appears.
+
+| Kind | Labels | `ports:` |
+|---|---|---|
+| HTTP | `traefik.enable=true`, ``traefik.http.routers.<name>.rule=Host(`<name>.hpz440.ohr3023.org`)``, and `traefik.http.services.<name>.loadbalancer.server.port=<port>` when the image exposes more than one port | none |
+| TCP | `harbor.kind=tcp`, `harbor.port=<host port>` | keeps its entry |
+| Internal | `harbor.kind=internal` | none |
+| Edge | `harbor.kind=edge` (Traefik only) | 80 and 443 |
+
+Any container may add `harbor.description=<one line>` for the directory.
+
+Every routed container also needs `networks: [harbor]` and the top-level `networks: { harbor: { external: true } }`. A container that is not on that network is not routed, and Traefik says so — which the page reports as `route-error`.
+
 ### Dependency injection for testability
 
-`app.run()` takes `collector`, `renderer`, and `sleep` as injectable parameters (defaulting to the real implementations). Tests drive the loop by passing fakes and raising `KeyboardInterrupt` from the fake `sleep` to exit after one iteration — no real time passes, no real metrics collected. Preserve this pattern when modifying the loop, and extend it to the web service: the prober and HTTP server get the same treatment, with no real sockets, no real time, and no real Docker in tests.
+`app.run()` takes `collector`, `renderer`, and `sleep` as injectable parameters (defaulting to the real implementations). Tests drive the loop by passing fakes and raising `KeyboardInterrupt` from the fake `sleep` to exit after one iteration — no real time passes, no real metrics collected. Preserve this pattern when modifying the loop, and keep it in the web service: the prober and HTTP server get the same treatment, with no real sockets, no real time, no real Docker and no real Traefik in tests.
 
 ### Graceful degradation
 
-Collectors never raise on a hostile environment: `get_docker_container_count()` returns `0` when the `docker` binary is missing or errors; `get_ipv4_address()` falls back to `127.0.0.1`. New collectors should follow suit — the dashboard "never crashes during normal operation" is a release criterion.
+Collectors never raise on a hostile environment: `get_docker_container_count()` returns `0` when the `docker` binary is missing or errors; `get_ipv4_address()` falls back to `127.0.0.1`; `docker.py` and `traefik.py` return their own sentinels rather than an exception or a silent empty list. New collectors should follow suit — the dashboard "never crashes during normal operation" is a release criterion.
 
-Three deliberate exceptions, where failing loudly is the point:
+One deliberate exception, where failing loudly is the point:
 
-- A duplicate `(host, addr, port)` in `services.toml` is a hard error at load time, not a warning. Catching that collision is why the ledger exists.
-- A `.harbor.toml` that cannot be parsed fails `scan` and `sync`: the allocator will not allocate against data it cannot read. `show` is deliberately exempt.
-- `harbor-console-web` refuses to start on any of four conditions: no tailnet address, a ledger that will not load, its own service not declared in that ledger, and its own service declared more than once. There is no fallback to `0.0.0.0` — see the hard constraints below. `tailnet.py` is therefore the one collector that raises rather than degrading. A leased port that is already in use fails the bind and refuses the same way, but it is a failure of the environment rather than a fifth rule.
+- `harbor-console-web` refuses to start without a tailnet address. There is no fallback to `0.0.0.0` — see the hard constraints below. `tailnet.py` is therefore the one collector that raises rather than degrading.
 
-### The `.harbor-tmp.*` sweep pattern
-
-`ports/atomic.py` writes to `.harbor-tmp.<target name>.<random>.tmp` beside the file it is replacing and removes it afterwards. A `SIGKILL` or a power cut leaves one behind, next to — and possibly containing part of — a `.env`. This repository ignores `.harbor-tmp.*`; **every participating project should add the same line to its own `.gitignore`**, because a rule for `.env` does not match a temp file derived from it. Since template version 2, `HARBOR_PORTS.md` tells each participating project that in its own words, which is what ADR 9 meant by "documented for them". That pattern is also how you find and remove abandoned temp files; nothing sweeps them automatically.
-
-## Hard constraints (v0.2.0)
+## Hard constraints
 
 These are load-bearing decisions, not preferences. Changing one needs a new ADR.
 
 - **The web service binds the Tailscale address only, never `0.0.0.0`, with no override and no dev-mode relaxation.** The page is an inventory of every service on the host; a silent broader bind publishes it to the whole LAN. Binding *is* the access control, which is why there is no login page ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)).
-- **Stdlib `http.server` and `tomllib` only.** v0.2.0 adds no runtime dependency; FastAPI and uvicorn were rejected as disproportionate to one page. The ledger writer is hand-rolled for the same reason — `tomllib` reads TOML but cannot write it.
-- **Every whole-file write is atomic, and a project's `.env` is written last.** `.env` is what makes a container bind the port; writing it before the ledger's record is safe would leave a project publishing a port the ledger no longer reserves ([ADR 9](docs/adr/0009-atomic-writes-and-env-last.md)).
+- **Traefik publishes the tailnet address only, and its API is loopback only.** `100.69.239.123:80` and `:443` are the whole of the edge's exposure; the API and dashboard live on `127.0.0.1:8081`, where only the page reads them. The bind is the access control for the proxy exactly as it is for the page ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md) extends ADR 7).
+- **Stdlib `http.server` only.** The web surface adds no runtime dependency; FastAPI and uvicorn were rejected as disproportionate to one page.
 - **Probing happens in a background thread, never inside a request handler.** One hung service must not make the status page slow to load.
-- **The page is read-only.** The registry's authority is port allocation only — not container lifecycle, not access control. No buttons that do anything.
-- **Health probing is dumb on purpose: any HTTP response means up.** GTE answers `/` with a 303 to `/login`; a probe insisting on 200 would call a healthy service down.
+- **The page is read-only.** Its authority is reporting — not container lifecycle, not access control, not routing. No buttons that do anything.
+- **Health probing is dumb on purpose: any HTTP response means up, except the three the proxy invents.** GTE answers `/` with a 303 to `/login`; a probe insisting on 200 would call a healthy service down. Probes now go through Traefik, so 502/503/504 are the edge answering for a backend that did not and mean down; a service's own 500 is still a service answering ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md) narrows [ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md) for the proxied path only).
 
 ## Scope discipline
 
 The project is deliberately minimal (MVP / YAGNI / KISS). `founding_document.txt` lists an explicit "Deferred Until Later" set — colors, themes, plugins, user configuration, interactive menus, service/Docker management, notifications, multi-host aggregation, and more. Do not add these without a demonstrated operational need. There are intentionally no colors, no keyboard shortcuts, no persistence, and no user-facing configuration.
 
-v0.2.0 expanded the scope once, and the bar it cleared is the bar: a real collision on port 8080 that would have failed silently. `services.toml` is a declared authority owned by this repo, not user configuration of the dashboard — the no-config stance still holds for everything it originally targeted ([ADR 6](docs/adr/0006-service-registry-and-web-status-page.md) amends [ADR 3](docs/adr/0003-no-plugins-in-mvp.md)).
+The scope has expanded twice, and each time the bar was a failure that had already happened: a real collision on port 8080 that failed silently ([ADR 6](docs/adr/0006-service-registry-and-web-status-page.md) amends [ADR 3](docs/adr/0003-no-plugins-in-mvp.md)), and then a container squatting a lease held by a service that was not running, which the ledger could not see because that project never declared anything ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)). The no-config stance still holds: a service's declaration lives in its own compose file, and this repo keeps no registry of them.
 
-How the port authority is enforced was answered on 2026-09-01: by allocation, which is the option that touches other repositories ([ADR 8](docs/adr/0008-allocate-ports-rather-than-validate.md)). Where the ledger lives on disk was answered on 2026-09-02: it stays in-repo, deployed to `/opt/harbor-console/` by `deploy/install.sh` — nothing on the server writes it, so the deploy step is the only way a fresh copy reaches the server, and `/etc` would need the identical rsync to get there ([ADR 13](docs/adr/0013-ledger-lives-in-repo.md)). Both questions this section once carried are now decided; there is no open question here to leave unanswered.
+ADR 15 is where the port ledger, the allocator, `.harbor.toml`, `HARBOR_PORTS.md` and `/ports.json` went, and why. ADRs 8–11, 13 and 14 describe that machinery; they stay as the record of why it was built and what it caught, not as a description of the code. Authentication at the proxy, LAN exposure, a second host, TCP routing through Traefik, and generating labels from any file are all out of scope.
 
 Development follows TDD and "main is always deployable."
 
-When you make or reverse a significant architectural decision, record it as an ADR in `docs/adr/` (Nygard format; copy `docs/adr/template.md`). ADRs are immutable once accepted — supersede rather than edit. Existing records explain the `rich` choice, the 1 Hz refresh, and the no-plugins/no-config stance.
+When you make or reverse a significant architectural decision, record it as an ADR in `docs/adr/` (Nygard format; copy `docs/adr/template.md`). ADRs are immutable once accepted — supersede rather than edit. Existing records explain the `rich` choice, the 1 Hz refresh, the no-plugins/no-config stance, and the reverse proxy.

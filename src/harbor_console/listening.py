@@ -19,6 +19,9 @@ import psutil
 IPV6_ANY = "::"
 IPV4_ANY = "0.0.0.0"
 
+#: The address that contends with every other on its host.
+ANY_ADDR = IPV4_ANY
+
 
 @dataclass(frozen=True)
 class Listener:
@@ -64,3 +67,16 @@ def listening_sockets(
             continue
 
     return tuple(sorted(found, key=lambda item: (item.port, item.addr)))
+
+
+def addrs_overlap(a: str, b: str) -> bool:
+    """True when two bind addresses contend for the same port.
+
+    `0.0.0.0` claims every address on the host, so it overlaps anything. Two
+    different specific addresses each hold the same port number without
+    conflict -- which is how ARM held 100.69.239.123:49152 without claiming
+    49152 from loopback.
+    """
+    if a == b:
+        return True
+    return ANY_ADDR in (a, b)

@@ -17,6 +17,20 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
+# compose.yaml interpolates TAILNET_ADDRESS and ACME_EMAIL under `${VAR:?}`
+# guards, so `docker compose down` fails outright when `.env` is missing --
+# which is exactly the half-removed state this script has to survive. Supply
+# placeholders (nothing is started, so the values do not matter), and fall
+# back to removing the container by name rather than reporting success with
+# the edge still running.
+if [[ -f "${INSTALL_DIR}/deploy/traefik/compose.yaml" ]]; then
+  echo "==> Stopping the edge (Traefik)"
+  if ! ( cd "${INSTALL_DIR}/deploy/traefik" && TAILNET_ADDRESS="${TAILNET_ADDRESS:-0.0.0.0}" ACME_EMAIL="${ACME_EMAIL:-none}" docker compose down ); then
+    echo "warning: docker compose down failed; removing the traefik container directly" >&2
+    docker rm -f traefik >/dev/null 2>&1 || echo "warning: could not remove the traefik container; check 'docker ps'" >&2
+  fi
+fi
+
 for unit in "${UNIT_NAMES[@]}"; do
   echo "==> Stopping and disabling ${unit}"
   systemctl disable --now "${unit}" 2>/dev/null || true
@@ -44,3 +58,4 @@ else
 fi
 
 echo "Harbor Console has been uninstalled."
+echo "/etc/traefik/env (the Cloudflare token) is left in place on purpose; remove it by hand if the host is being retired."

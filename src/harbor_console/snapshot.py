@@ -1,8 +1,7 @@
 """The contract between the prober and the renderer.
 
 Data only. The prober publishes one of these on an interval; the handler reads
-the last one and renders it. Keeping it in its own module lets both sides
-import it without a cycle, the way `ports/keys.py` serves the allocator.
+the last one and renders it. Its own module so neither side imports the other.
 """
 
 from __future__ import annotations
@@ -10,79 +9,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
 from harbor_console.listening import Listener
-from harbor_console.ports.ledger import Lease
 from harbor_console.probe import Health
-from harbor_console.serve import Proxy
-
-
-@dataclass(frozen=True)
-class Drift:
-    """One way the ledger and reality disagree."""
-
-    kind: str
-    detail: str
 
 
 @dataclass(frozen=True)
 class Snapshot:
     """Everything the page shows, collected at one moment.
 
-    `frozen=True` here is shallow: it stops a field being rebound, but `metrics`
-    and `health` are ordinary dicts whose contents can still be mutated, and a
-    snapshot is unhashable, so there is no `set[Snapshot]`. That is enough for
-    the pattern this serves -- the prober publishes one, handlers only read it
-    -- but a handler that mutates `metrics` in place edits what every other
-    reader sees; build a new snapshot instead.
+    `frozen=True` is shallow: `metrics` and `health` are ordinary dicts. The
+    prober publishes one, handlers only read it; build a new snapshot rather
+    than editing one in place.
 
     `probed` separates "collected, found nothing" from "collected nothing
-    yet". It defaults to False because that is the honest default: a
-    snapshot nobody has filled in must not read as a clean bill of health
-    for a fleet that has never been looked at.
+    yet". It defaults to False because that is the honest default.
     """
 
     collected: datetime
     metrics: dict[str, str | float | int]
-    #: When the ledger file this snapshot's leases came from was last written
-    #: to disk, or None when that could not be determined -- a missing or
-    #: unreadable ledger, or a snapshot collected before the first cycle. The
-    #: server never writes `services.toml`; only `ports sync`, run on the dev
-    #: box, does, and `install.sh` is what carries a fresh copy here. This is
-    #: how a copy stale because `install.sh` was forgotten becomes visible on
-    #: the page instead of silently degrading its directory and drift section.
-    ledger_written: datetime | None = None
-    leases: tuple[Lease, ...] = ()
+    rows: tuple[Row, ...] = ()
+    findings: tuple[Finding, ...] = ()
     listeners: tuple[Listener, ...] = ()
     containers: tuple[Container, ...] = ()
     docker_available: bool = True
-    #: Keyed on `(project, name, host)` -- the whole lease identity, matching
-    #: everywhere else in this codebase. `(project, name)` alone let two
-    #: hosts' leases for the same project/name collide, so one probe result
-    #: silently overwrote the other.
-    health: dict[tuple[str, str, str], Health] = field(default_factory=dict)
-    drift: tuple[Drift, ...] = ()
-    #: Why the last collection cycle failed, whatever its source -- the
-    #: ledger, a collector, the prober or the reconciler. Naming it for the
-    #: ledger alone pointed every failure at `services.toml`.
+    traefik_available: bool = True
+    #: Keyed by `Row.name` -- the router name for HTTP rows.
+    health: dict[str, Health] = field(default_factory=dict)
+    #: Why the last collection cycle failed, whatever its source.
     collection_error: str | None = None
-    #: True once a collection cycle has completed. The starting snapshot,
-    #: which collects nothing, leaves it False so the page can say "not yet"
-    #: rather than assert a state it has never looked at.
     probed: bool = False
-    #: The tailnet address this process bound, which is the address on which
-    #: every service on the served host is actually reachable. Decided once at
-    #: startup and passed down, never re-resolved per cycle, for the same
-    #: reason `metrics["hostname"]` is: a page that bound one address must not
-    #: begin advertising another without a restart. None means it is not
-    #: known -- a snapshot built outside `webapp.main`, as in a test -- and the
-    #: renderer then falls back to what the ledger says.
+    #: The tailnet address this process bound. None only outside `webapp.main`.
     tailnet_address: str | None = None
-    #: What `tailscale serve` fronts on this host. Carried so the page can
-    #: offer the URL a reader can actually use: a service behind a serve front
-    #: is reached over TLS at the MagicDNS name, and one that sets Secure
-    #: cookies -- GTE does -- cannot be logged into over the plain leased port
-    #: at all. Empty when nothing is fronted, and also when tailscale could
-    #: not be asked; the page draws no conclusion from the difference, it just
-    #: has nothing to offer.
-    proxies: tuple[Proxy, ...] = ()

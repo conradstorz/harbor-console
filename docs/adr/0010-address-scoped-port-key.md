@@ -4,10 +4,7 @@ Date: 2026-09-01
 
 ## Status
 
-Accepted — supersedes the `(host, port)` uniqueness rule of
-[ADR 6](0006-service-registry-and-web-status-page.md), and amends
-[ADR 8](0008-allocate-ports-rather-than-validate.md), which decided allocation
-without saying what a port number is scoped to.
+Superseded by [ADR-0015](0015-reverse-proxy-and-label-declared-services.md)
 
 ## Context
 

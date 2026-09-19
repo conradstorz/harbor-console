@@ -1,37 +1,22 @@
 """Rendering the status page, and serving it.
 
-Renders a snapshot and nothing else -- it never collects and never probes. One
-hung service must not make the page slow to load, which is why probing happens
-in a background thread and the handler only reads the last published snapshot.
+Renders a snapshot and nothing else -- it never collects and never probes.
+Probing happens in a background thread and the handler only reads the last
+published snapshot, so one hung service cannot make the page slow.
 
-The page is read-only: no forms, no buttons, no state-changing routes. Port
-allocation authority was chosen over lifecycle control, so nothing here can
-start or stop a container.
+The page is read-only: no forms, no buttons, no state-changing routes.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
-from harbor_console.addressing import fronts_for, reachable_address, url_host
-from harbor_console.ports.keys import ANY_ADDR, addrs_overlap
-from harbor_console.ports.ledger import Lease
-from harbor_console.serve import Proxy
+from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
-
-#: Why `/ports.json` may refuse. All three windows are "we looked at less than the
-#: whole host", and the allocator writes other repositories' `.env` files from
-#: what this endpoint says, so all are refusals rather than a thin 200.
-UNPROBED_REASON = "not yet probed: no collection cycle has completed"
-DOCKER_REASON = "docker could not be read: container attribution is incomplete"
-STALE_REASON = (
-    "the last collection cycle failed, so this listener data is stale: "
-)
 
 _STYLE = """
 body { font-family: ui-monospace, monospace; margin: 2rem; max-width: 60rem; }
@@ -39,67 +24,10 @@ h1, h2 { font-weight: 600; }
 table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
 td, th { text-align: left; padding: 0.25rem 0.75rem 0.25rem 0; vertical-align: top; }
 tr.detail td { padding-left: 2rem; opacity: 0.75; }
-.leased { opacity: 0.7; }
 .down { font-weight: 700; }
 .banner { border: 1px solid; padding: 0.5rem 0.75rem; margin-bottom: 1.5rem; }
 .stamp { opacity: 0.7; }
 """
-
-
-def ports_payload(snapshot: Snapshot) -> dict:
-    """Build the /ports.json body the allocator reads.
-
-    Container attribution is by (addr, port) against Docker's published ports,
-    not by PID: running unprivileged we cannot see another user's process, and
-    container processes are never ours. The fallback match uses
-    `ports.keys.addrs_overlap`, the same address-overlap rule the ledger and
-    `ports/live.py` use, so a wildcard listener matches a specific publish and
-    vice versa -- reimplementing that comparison here would drift from it.
-    """
-    owners: dict[tuple[str, int], str] = {}
-    for container in snapshot.containers:
-        for addr, port in container.published:
-            owners[(addr, port)] = container.name
-
-    listening = []
-    for listener in snapshot.listeners:
-        container = owners.get((listener.addr, listener.port))
-        if container is None:
-            for (owner_addr, owner_port), name in owners.items():
-                if owner_port == listener.port and addrs_overlap(owner_addr, listener.addr):
-                    container = name
-                    break
-        listening.append(
-            {"addr": listener.addr, "port": int(listener.port), "container": container}
-        )
-
-    return {
-        "host": str(snapshot.metrics["hostname"]),
-        "collected": snapshot.collected.isoformat(),
-        "listening": listening,
-    }
-
-
-def _ports_refusals(snapshot: Snapshot) -> tuple[str, ...]:
-    """Every reason `/ports.json` must refuse for this snapshot.
-
-    Empty means the payload is answerable. Three conditions: a snapshot
-    nothing has been collected into yet, one collected while Docker could
-    not be read, and one whose *latest* cycle failed. The third closes the
-    window the first two miss: after one good cycle, a permanently failing
-    prober would otherwise keep serving that cycle's listeners as a 200
-    forever, and the allocator would grant against sockets bound since.
-    The HTML page keeps serving in all three windows; it reports the
-    failure in its own banner.
-    """
-    reasons = []
-    if not snapshot.probed:
-        reasons.append(UNPROBED_REASON)
-    if not snapshot.docker_available:
-        reasons.append(DOCKER_REASON)
-    if snapshot.collection_error is not None:
-        reasons.append(STALE_REASON + snapshot.collection_error)
-    return tuple(reasons)
 
 
 def render_page(snapshot: Snapshot) -> bytes:
@@ -111,53 +39,32 @@ def render_page(snapshot: Snapshot) -> bytes:
         f"<style>{_STYLE}</style></head><body>",
         f"<h1>{escape(str(snapshot.metrics['hostname']))}</h1>",
     ]
-
     if snapshot.collection_error is not None:
-        if snapshot.probed:
-            parts.append(
-                f"<p class=\"banner\">The last collection cycle failed: "
-                f"{escape(snapshot.collection_error)}. Showing the last good page.</p>"
-            )
-        else:
-            # No cycle has ever completed, so there is no "last good page" to
-            # show -- only the starting placeholder. Claiming one would sit
-            # next to the "nothing has been collected yet" notes below and
-            # contradict them.
-            parts.append(
-                f"<p class=\"banner\">The last collection cycle failed: "
-                f"{escape(snapshot.collection_error)}.</p>"
-            )
+        tail = " Showing the last good page." if snapshot.probed else ""
+        parts.append(
+            f"<p class=\"banner\">The last collection cycle failed: "
+            f"{escape(snapshot.collection_error)}.{tail}</p>"
+        )
     if not snapshot.docker_available:
         parts.append(
             "<p class=\"banner\">Docker could not be read, so undeclared containers "
-            "and port mismatches are not reported.</p>"
+            "and bypassed routes are not reported.</p>"
         )
-
+    if not snapshot.traefik_available:
+        parts.append(
+            "<p class=\"banner\">Traefik could not be read, so route errors are not "
+            "reported and HTTP rows show only what the probe saw.</p>"
+        )
     parts.append(_host_table(snapshot))
-    parts.append(_services_table(snapshot))
-    parts.append(_drift_section(snapshot))
+    parts.append(_directory_table(snapshot))
+    parts.append(_findings_section(snapshot))
     parts.append(
         f"<p class=\"stamp\">Collected "
         f"{escape(snapshot.collected.strftime('%Y-%m-%d %H:%M:%S'))}, "
-        f"services.toml written {_ledger_written_text(snapshot)}, "
         f"refreshing every {REFRESH_SECONDS}s.</p>"
     )
     parts.append("</body></html>")
     return "".join(parts).encode("utf-8")
-
-
-def _ledger_written_text(snapshot: Snapshot) -> str:
-    """Render when the ledger this page serves was last written, or say so.
-
-    `snapshot.ledger_written` is None when the ledger file is missing or
-    unreadable, or before the first collection cycle -- both hostile
-    conditions this project's collectors degrade on rather than raise.
-    Rendering "unknown" in that case, instead of a bare `None`, is what makes
-    a forgotten `install.sh` legible on the page rather than a silent gap.
-    """
-    if snapshot.ledger_written is None:
-        return "unknown"
-    return escape(snapshot.ledger_written.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def _host_table(snapshot: Snapshot) -> str:
@@ -171,10 +78,6 @@ def _host_table(snapshot: Snapshot) -> str:
         ("Time", snapshot.metrics["current_datetime"]),
     ]
     if snapshot.tailnet_address is not None:
-        # Named rather than omitted-with-a-placeholder: an unknown address is
-        # only reachable in a test or a hand-built snapshot, because `main`
-        # refuses to start without one. There is nothing on the real page for
-        # an "unknown" row to tell anybody.
         rows.insert(5, ("Tailnet", snapshot.tailnet_address))
     cells = "".join(
         f"<tr><td>{escape(label)}</td><td>{escape(str(value))}</td></tr>"
@@ -183,223 +86,85 @@ def _host_table(snapshot: Snapshot) -> str:
     return f"<h2>Host</h2><table>{cells}</table>"
 
 
-def _lease_has_listener(snapshot: Snapshot, lease: Lease) -> bool:
-    """True when something on this host holds the lease's `(addr, port)`.
-
-    Uses `ports.keys.addrs_overlap`, the same address-overlap rule the ledger,
-    `ports/live.py` and `reconcile.py` join on, so a wildcard listener answers
-    a specific lease and vice versa.
-
-    `snapshot.listeners` is always local -- it comes from this machine's own
-    sockets -- but `snapshot.leases` is fleet-wide, the same ledger every
-    other host reads too. A lease belonging to another host must never be
-    credited with a listener here: `reconcile.find_drift` already filters by
-    `lease.host`, and this is that same filter, applied where the page
-    decides LISTENING vs DOWN rather than where it decides drift. Without it,
-    a lease on another host whose port happens to coincide with something
-    listening here would read as LISTENING for a service that, on this host,
-    is not running at all.
-    """
-    served_host = str(snapshot.metrics["hostname"])
-    if lease.host != served_host:
-        return False
-    return any(
-        listener.port == lease.port and addrs_overlap(listener.addr, lease.addr)
-        for listener in snapshot.listeners
-    )
+def _target_cell(row: Row) -> str:
+    if row.kind == KIND_HTTP and row.target:
+        return f"<a href=\"{escape(row.target)}\">{escape(row.target)}</a>"
+    return escape(row.target)
 
 
-def _address_cell(
-    addr: str, lease: Lease, url: str, fronts: Sequence[Proxy]
-) -> str:
-    """Every way in to one service, the one that works first.
-
-    A `tailscale serve` front is not a footnote to the leased address; where
-    there is one it is usually the only address that works. GTE sets Secure
-    cookies, so a login over its plain leased port never completes -- and a
-    reader scanning the directory for somewhere to click was finding, in the
-    column they were reading, the address that does not sign them in.
-
-    So the front leads and the lease follows, still shown and still linked.
-    The leased address is the ledger's fact -- it is what the drift rules
-    reconcile and what `ports sync` grants -- and dropping it would leave the
-    page unable to say what it had actually leased.
-    """
-    ways = [
-        f"<a href=\"{escape(str(front.url))}\">{escape(str(front.url))}</a>"
-        for front in fronts
-    ]
-    leased = f"<a href=\"{escape(url)}\">{escape(addr)}:{lease.port}</a>"
-    if not ways:
-        return leased
-    ways.append(f"<span class=\"leased\">{leased} &mdash; leased</span>")
-    return "<br>".join(ways)
+def _state_cell(row: Row) -> str:
+    if row.state in (STATE_DOWN, STATE_ROUTE_ERROR):
+        return f"<span class=\"down\">{escape(row.state)}</span>"
+    return escape(row.state)
 
 
-def _services_table(snapshot: Snapshot) -> str:
-    """Render the directory, saying "unknown" until something has been probed.
-
-    Before the first cycle the health map is empty, and reading that as DOWN
-    would report the whole fleet dead on the strength of having looked at
-    none of it. The leases are real either way -- they come from the ledger,
-    not from a probe -- so the directory is still shown.
-
-    Three states, not two. The probe speaks only HTTP, and the ledger leases
-    ports that do not: `ice-colder/mqtt` holds 1883 today. Calling a listening
-    MQTT broker DOWN would print a red state directly under "No drift: every
-    lease matches what is running", because `find_drift` joins on the listener
-    and correctly finds nothing wrong. So a lease whose port is held but whose
-    HTTP probe failed is LISTENING -- something is there, it just does not
-    speak HTTP -- and DOWN is reserved for a lease with no listener at all,
-    which is the finding this page exists to make.
-    """
-    if not snapshot.leases:
-        return "<h2>Services</h2><p>No services are declared.</p>"
-
-    rows = []
-    listening_shown = False
-    for lease in snapshot.leases:
-        health = snapshot.health.get((lease.project, lease.name, lease.host))
-        up = health is not None and health.up
-        addr = reachable_address(
-            lease, str(snapshot.metrics["hostname"]), snapshot.tailnet_address
-        )
-        # Link what the row prints. A specific address -- tailnet or loopback
-        # -- is where the service actually answers, so the link agrees with
-        # the text beside it; a loopback link only works from the host, but a
-        # hostname link for a loopback bind works from nowhere and lies about
-        # it. Only a wildcard, which nobody can point a browser at, falls
-        # back to the hostname.
-        url = (
-            f"http://{url_host(addr)}:{lease.port}/"
-            if addr != ANY_ADDR
-            else f"http://{lease.host}:{lease.port}/"
-        )
-        if not snapshot.probed:
-            status = "UNKNOWN"
-        elif up:
-            status = "UP"
-        elif _lease_has_listener(snapshot, lease):
-            status = "LISTENING"
-            listening_shown = True
-        else:
-            status = "<span class=\"down\">DOWN</span>"
-        summary = escape(health.summary) if health and health.summary else ""
-        fronts = fronts_for(lease, str(snapshot.metrics["hostname"]), snapshot.proxies)
-        rows.append(
-            f"<tr><td>{escape(lease.project)}/{escape(lease.name)}</td>"
-            f"<td>{_address_cell(addr, lease, url, fronts)}</td>"
-            f"<td>{status}</td><td>{summary}</td></tr>"
-        )
-        if health is not None:
-            for row in health.detail:
-                rows.append(
-                    f"<tr class=\"detail\"><td colspan=\"4\">{escape(row.label)}: "
-                    f"{escape(row.value)}</td></tr>"
-                )
-            if health.warning:
-                rows.append(
-                    f"<tr class=\"detail\"><td colspan=\"4\">{escape(health.warning)}</td></tr>"
-                )
-
-    note = (
-        ""
-        if snapshot.probed
-        else "<p>Nothing has been collected yet: the first cycle has not "
-        "completed, so service state is unknown.</p>"
-    )
-    legend = (
-        "<p>LISTENING: something holds the leased port but did not answer an "
-        "HTTP probe. That is the expected state for a service that does not "
-        "speak HTTP, such as an MQTT broker.</p>"
-        if listening_shown
-        else ""
-    )
-    return (
-        "<h2>Services</h2>"
-        + note
-        + "<table>"
-        "<tr><th>Project</th><th>Address</th><th>State</th><th></th></tr>"
-        + "".join(rows)
-        + "</table>"
-        + legend
-    )
-
-
-def _drift_section(snapshot: Snapshot) -> str:
-    """Report drift, distinguishing "none found" from "nothing looked at".
-
-    An empty tuple means both, and only one of them is good news.
-    """
+def _directory_table(snapshot: Snapshot) -> str:
     if not snapshot.probed:
         return (
-            "<h2>Drift</h2><p>Nothing has been collected yet: the first "
-            "cycle has not completed, so drift is unknown.</p>"
+            "<h2>Directory</h2><p>Nothing has been collected yet: the first cycle "
+            "has not completed, so the directory is unknown.</p>"
         )
-    if not snapshot.drift:
-        return "<h2>Drift</h2><p>No drift: every lease matches what is running.</p>"
-
-    items = "".join(
-        f"<li>{escape(item.kind)} &mdash; {escape(item.detail)}</li>" for item in snapshot.drift
+    if not snapshot.rows:
+        return "<h2>Directory</h2><p>No services are declared.</p>"
+    rows = []
+    for row in snapshot.rows:
+        rows.append(
+            f"<tr><td>{escape(row.name)}</td><td>{escape(row.kind)}</td>"
+            f"<td>{_target_cell(row)}</td><td>{_state_cell(row)}</td>"
+            f"<td>{escape(row.container)}</td><td>{escape(row.description)}</td></tr>"
+        )
+        # `health` is keyed by router name, which only an HTTP row carries;
+        # a tcp or internal container of the same name must not inherit it.
+        health = snapshot.health.get(row.name) if row.kind == KIND_HTTP else None
+        if health is not None:
+            if health.summary:
+                rows.append(f"<tr class=\"detail\"><td colspan=\"6\">{escape(health.summary)}</td></tr>")
+            for detail in health.detail:
+                rows.append(
+                    f"<tr class=\"detail\"><td colspan=\"6\">{escape(detail.label)}: "
+                    f"{escape(detail.value)}</td></tr>"
+                )
+            if health.warning:
+                rows.append(f"<tr class=\"detail\"><td colspan=\"6\">{escape(health.warning)}</td></tr>")
+    return (
+        "<h2>Directory</h2><table>"
+        "<tr><th>Name</th><th>Kind</th><th>Where</th><th>State</th><th>Container</th><th></th></tr>"
+        + "".join(rows) + "</table>"
     )
-    return f"<h2>Drift</h2><ul>{items}</ul>"
+
+
+def _findings_section(snapshot: Snapshot) -> str:
+    if not snapshot.probed:
+        return (
+            "<h2>Findings</h2><p>Nothing has been collected yet: the first cycle "
+            "has not completed, so findings are unknown.</p>"
+        )
+    if not snapshot.findings:
+        return (
+            "<h2>Findings</h2><p>No findings: every container is declared and "
+            "every route is live.</p>"
+        )
+    items = "".join(
+        f"<li>{escape(item.kind)} &mdash; {escape(item.detail)}</li>" for item in snapshot.findings
+    )
+    return f"<h2>Findings</h2><ul>{items}</ul>"
 
 
 def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHandler]:
     """Build a handler class that reads the latest snapshot and nothing else."""
 
     class Handler(BaseHTTPRequestHandler):
-        """Serves the page and /ports.json. Read-only; no other route exists."""
-
         protocol_version = "HTTP/1.1"
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib's required name
-            """Dispatch one read-only request, and never fail silently.
-
-            The guard is at the dispatch boundary only. A `KeyError` from a
-            metrics dict missing a key, or a `ValueError` from anything the
-            renderer touches, used to propagate out of the handler with no
-            response written at all: the client got an empty reply rather
-            than a status, on every request, while the prober went on
-            publishing. That contradicts this module's own promise that
-            nothing takes the page down. It does not wrap the rendering
-            internals, where a blanket catch would hide the bug instead of
-            reporting it.
-            """
             try:
                 self._dispatch()
-            except Exception:  # noqa: BLE001 - a request boundary, see above
+            except Exception:  # noqa: BLE001 - a request boundary
                 self._send(500, "text/plain; charset=utf-8", b"internal error\n")
 
         def _dispatch(self) -> None:
             if self.path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", render_page(get_snapshot()))
-            elif self.path == "/ports.json":
-                snapshot = get_snapshot()
-                reasons = _ports_refusals(snapshot)
-                if reasons:
-                    # Three windows, one refusal. An unprobed snapshot has no
-                    # listeners in it -- not because none are found, but
-                    # because none were looked for. A snapshot collected
-                    # while Docker was unreachable has listeners but cannot
-                    # attribute them, and `container` reads as null for every
-                    # one: the allocator then sees a project's own container
-                    # nowhere on the port it already runs on, and moves it.
-                    # And a snapshot whose latest cycle failed is the last
-                    # good one, however old, standing in for the present.
-                    # Serving either as 200 reads to the allocator as a
-                    # verified answer, and `ports/allocate.py` grants on it.
-                    # 503 makes `urllib` raise `HTTPError`, which
-                    # `ports.live.fetch_live` turns into `LiveUnavailable`,
-                    # so the allocator falls back to the refusal it already
-                    # has for a page it cannot reach at all. The body says
-                    # which window it is, because the operator's next move
-                    # differs: wait, or go fix the Docker daemon.
-                    body = ("; ".join(reasons) + "\n").encode("utf-8")
-                    self._send(503, "text/plain; charset=utf-8", body)
-                else:
-                    body = json.dumps(ports_payload(snapshot)).encode("utf-8")
-                    self._send(200, "application/json", body)
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found\n")
 

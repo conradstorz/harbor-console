@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import psutil
 
-from harbor_console.listening import Listener, listening_sockets
+from harbor_console.listening import ANY_ADDR, Listener, addrs_overlap, listening_sockets
 
 
 def conn(ip, port, status=psutil.CONN_LISTEN, pid=None):
@@ -102,3 +102,16 @@ def test_an_unexpected_exception_from_net_connections_degrades_to_empty():
         raise RuntimeError("partly-readable /proc")
 
     assert listening_sockets(net_connections=boom) == ()
+
+
+def test_wildcard_overlaps_everything():
+    assert addrs_overlap(ANY_ADDR, "127.0.0.1")
+    assert addrs_overlap("100.69.239.123", ANY_ADDR)
+
+
+def test_same_specific_address_overlaps():
+    assert addrs_overlap("127.0.0.1", "127.0.0.1")
+
+
+def test_different_specific_addresses_do_not_overlap():
+    assert not addrs_overlap("127.0.0.1", "100.69.239.123")

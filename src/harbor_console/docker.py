@@ -1,17 +1,17 @@
-"""Live container state, for reconciliation against the lease ledger.
+"""Live container state: names, labels, published ports, networks.
 
-Answers only "which container publishes which host port". Container names are
-how a running service is matched to a declared lease; the ledger itself carries
-no container field, so the match is by port, with the name used to report a
-mismatch when it happens to equal a project's name.
+Labels are how a container declares itself (see `directory.py`): Traefik's
+`traefik.*` labels for an HTTP route, `harbor.kind` for everything else. The
+page can only report an undeclared container if it can read labels, which is
+why this collector uses `docker inspect` rather than `docker ps --format`.
 """
 
 from __future__ import annotations
 
-import re
+import json
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class _Unavailable(tuple):
@@ -20,92 +20,114 @@ class _Unavailable(tuple):
 
 #: Returned when Docker could not be asked at all, so a caller can tell that
 #: apart from "asked, and nothing is running" -- the difference decides whether
-#: the page may claim a service is undeclared. It is an empty tuple subclass, so
-#: every consumer can iterate it without caring, while `is DOCKER_UNAVAILABLE`
-#: still distinguishes it from an ordinary empty result.
+#: the page may claim a container is undeclared.
 DOCKER_UNAVAILABLE = _Unavailable()
 
-#: A bound on `docker ps`. This runs inside the prober thread on every
-#: collection cycle, unlike `tailnet.py`'s one-shot startup check -- so a
-#: wedged daemon here does not just delay one boot, it blocks the thread
-#: forever and freezes the last good snapshot in place. Served as a 200 with
-#: `probed=True` and `docker_available=True`, that snapshot's age keeps
-#: growing while the allocator treats it as current evidence. A timeout is
-#: the same failure as any other Docker outage: refuse, and let the next
-#: cycle try again.
+#: A bound on `docker ps`. This runs inside the prober thread on every cycle;
+#: a wedged daemon must not freeze the last good snapshot in place.
 DOCKER_TIMEOUT_SECONDS = 2.0
+
+#: A bound on `docker inspect`, which reads every running container's full
+#: configuration rather than listing ids. It is the slower of the two calls by
+#: a wide margin, and a busy daemon answering it in three seconds is not an
+#: outage -- sharing `ps`'s two would report one as if it were.
+DOCKER_INSPECT_TIMEOUT_SECONDS = 5.0
 
 IPV6_ANY = "::"
 IPV4_ANY = "0.0.0.0"
 
-#: Matches the published half of `0.0.0.0:8080->8080/tcp`, `:::8080->8080/tcp`
-#: and the range form `0.0.0.0:8000-8005->8000-8005/tcp`.
-_PUBLISHED = re.compile(r"^(?P<addr>.*):(?P<lo>\d+)(?:-(?P<hi>\d+))?->")
-
 
 @dataclass(frozen=True)
 class Container:
-    """One running container and the host ports it publishes."""
+    """One running container: what it publishes and what it declares."""
 
     name: str
     published: tuple[tuple[str, int], ...]
+    labels: dict[str, str] = field(default_factory=dict)
+    networks: frozenset[str] = frozenset()
 
 
 def running_containers(
     run: Callable[..., object] = subprocess.run,
     timeout: float = DOCKER_TIMEOUT_SECONDS,
+    inspect_timeout: float = DOCKER_INSPECT_TIMEOUT_SECONDS,
 ) -> tuple[Container, ...]:
     """Collect running containers. Returns DOCKER_UNAVAILABLE if Docker cannot be read.
 
-    A `docker ps` that hangs is treated exactly like one that is missing or
-    exits non-zero: without the bound, a wedged daemon would block the caller
-    forever and the last good snapshot would keep being served as current,
-    since nothing else in this collector's contract distinguishes "still
-    running" from "will never return".
+    Two calls: `docker ps -q` for the running set, then one `docker inspect`
+    over all of it. Either failing, hanging, or answering something that is
+    not JSON is the same outage. One malformed entry inside good JSON is
+    skipped, the way `listening.py` skips one bad socket: the rest is still
+    evidence.
     """
     try:
-        result = run(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        listed = run(
+            ["docker", "ps", "-q"],
+            check=False, capture_output=True, text=True, timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
-        return DOCKER_UNAVAILABLE
-    except (FileNotFoundError, OSError):
+        if listed.returncode != 0:  # type: ignore[attr-defined]
+            return DOCKER_UNAVAILABLE
+        ids = listed.stdout.split()  # type: ignore[attr-defined]
+        if not ids:
+            return ()
+        inspected = run(
+            ["docker", "inspect", *ids],
+            check=False, capture_output=True, text=True, timeout=inspect_timeout,
+        )
+        if inspected.returncode != 0:  # type: ignore[attr-defined]
+            return DOCKER_UNAVAILABLE
+        entries = json.loads(inspected.stdout)  # type: ignore[attr-defined]
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
         return DOCKER_UNAVAILABLE
 
-    if result.returncode != 0:  # type: ignore[attr-defined]
+    if not isinstance(entries, list):
         return DOCKER_UNAVAILABLE
 
     containers = []
-    for line in result.stdout.splitlines():  # type: ignore[attr-defined]
-        if not line.strip():
-            continue
-        name, _, ports = line.partition("\t")
-        containers.append(Container(name=name.strip(), published=_publish_pairs(ports)))
-
+    for entry in entries:
+        container = _parse(entry)
+        if container is not None:
+            containers.append(container)
     return tuple(sorted(containers, key=lambda item: item.name))
 
 
-def _publish_pairs(ports: str) -> tuple[tuple[str, int], ...]:
-    """Parse the published `addr:port->container/proto` entries from one line."""
-    pairs: list[tuple[str, int]] = []
-    for entry in ports.split(","):
-        entry = entry.strip()
-        if "->" not in entry:
-            continue
-        match = _PUBLISHED.match(entry)
-        if match is None:
-            continue
-        addr = match.group("addr")
-        if addr.startswith("[") and addr.endswith("]"):
-            addr = addr[1:-1]
-        addr = IPV4_ANY if addr in ("", IPV6_ANY) else addr
-        lo = int(match.group("lo"))
-        hi = int(match.group("hi") or lo)
-        for port in range(lo, hi + 1) if hi >= lo else (lo,):
-            pairs.append((addr, port))
+def _parse(entry: object) -> Container | None:
+    """One inspect entry to one Container; None when it has no usable name."""
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("Name")
+    if not isinstance(name, str) or not name:
+        return None
+    config = entry.get("Config") if isinstance(entry.get("Config"), dict) else {}
+    labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
+    settings = (
+        entry.get("NetworkSettings")
+        if isinstance(entry.get("NetworkSettings"), dict)
+        else {}
+    )
+    ports = settings.get("Ports") if isinstance(settings.get("Ports"), dict) else {}
+    networks = settings.get("Networks") if isinstance(settings.get("Networks"), dict) else {}
+    return Container(
+        name=name.lstrip("/"),
+        published=_publish_pairs(ports),
+        labels={str(k): str(v) for k, v in labels.items()},
+        networks=frozenset(str(n) for n in networks),
+    )
 
-    return tuple(sorted(set(pairs)))
+
+def _publish_pairs(ports: dict) -> tuple[tuple[str, int], ...]:
+    """Host `(addr, port)` pairs from inspect's `NetworkSettings.Ports`."""
+    pairs: set[tuple[str, int]] = set()
+    for key, bindings in ports.items():
+        if not str(key).endswith("/tcp") or not isinstance(bindings, list):
+            continue
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            addr = str(binding.get("HostIp", ""))
+            addr = IPV4_ANY if addr in ("", IPV6_ANY) else addr
+            try:
+                pairs.add((addr, int(binding.get("HostPort"))))
+            except (TypeError, ValueError):
+                continue
+    return tuple(sorted(pairs))

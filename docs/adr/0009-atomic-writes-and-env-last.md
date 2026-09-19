@@ -4,7 +4,7 @@ Date: 2026-09-01
 
 ## Status
 
-Accepted
+Superseded by [ADR-0015](0015-reverse-proxy-and-label-declared-services.md)
 
 ## Context
 
