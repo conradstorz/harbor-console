@@ -17,6 +17,11 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
+if [[ -f /opt/harbor-console/deploy/traefik/compose.yaml ]]; then
+  echo "==> Stopping the edge (Traefik)"
+  ( cd /opt/harbor-console/deploy/traefik && docker compose down ) || true
+fi
+
 for unit in "${UNIT_NAMES[@]}"; do
   echo "==> Stopping and disabling ${unit}"
   systemctl disable --now "${unit}" 2>/dev/null || true

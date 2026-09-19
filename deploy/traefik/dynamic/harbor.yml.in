@@ -1,0 +1,14 @@
+# Rendered to harbor.yml by install.sh. The page is a systemd process, not a
+# container, so it carries no labels; this is its declaration.
+http:
+  routers:
+    harbor:
+      rule: Host(`harbor.hpz440.ohr3023.org`)
+      entryPoints:
+        - websecure
+      service: harbor
+  services:
+    harbor:
+      loadBalancer:
+        servers:
+          - url: http://@TAILNET_ADDRESS@:8100

@@ -44,6 +44,8 @@ rsync -a --delete \
   --exclude '__pycache__' \
   --exclude '.pytest_cache' \
   --exclude '*.egg-info' \
+  --exclude 'deploy/traefik/.env' \
+  --exclude 'deploy/traefik/dynamic/harbor.yml' \
   "${REPO_ROOT}/" "${INSTALL_DIR}/"
 
 # The service runs as the unprivileged 'harbor' user with ProtectHome=yes. If the host
@@ -78,6 +80,33 @@ fi
 
 usermod -aG docker harbor
 
+echo "==> Preparing the edge (Traefik)"
+require_cmd docker "Install Docker first."
+require_cmd tailscale "Install Tailscale first."
+if [[ ! -f /etc/traefik/env ]]; then
+  echo "Error: /etc/traefik/env is missing. Create it (mode 0600) with:" >&2
+  echo "  CF_DNS_API_TOKEN=<cloudflare token with Zone.DNS edit on ohr3023.org>" >&2
+  echo "  ACME_EMAIL=<address for Let's Encrypt notices>" >&2
+  exit 1
+fi
+chmod 0600 /etc/traefik/env
+TAILNET_ADDRESS=$(tailscale ip -4 | head -n1)
+if [[ -z "${TAILNET_ADDRESS}" ]]; then
+  echo "Error: tailscale ip -4 returned nothing; the edge binds the tailnet address only." >&2
+  exit 1
+fi
+# shellcheck disable=SC1091
+ACME_EMAIL=$(. /etc/traefik/env; echo "${ACME_EMAIL:-}")
+if [[ -z "${ACME_EMAIL}" ]]; then
+  echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
+  exit 1
+fi
+docker network inspect harbor >/dev/null 2>&1 || docker network create harbor
+TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
+printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
+sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/harbor.yml"
+( cd "${TRAEFIK_DIR}" && docker compose up -d --remove-orphans )
+
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"
 
@@ -100,8 +129,7 @@ done
 
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
-echo "The status page is served to the tailnet by harbor-console-web, on the"
-echo "port services.toml leases it."
+echo "The status page is https://harbor.hpz440.ohr3023.org/ (direct: http://${TAILNET_ADDRESS}:8100/)."
 echo "Admin logins remain on tty2-tty6 (Ctrl+Alt+F2 ... F6) and via SSH."
 echo
 for unit in "${UNIT_NAMES[@]}"; do
