@@ -94,7 +94,8 @@ def build_rows(
     probed: bool,
 ) -> tuple[Row, ...]:
     """One row per declared container, ordered by name."""
-    by_name = {} if routers is TRAEFIK_UNAVAILABLE else {r.name: r for r in routers}
+    traefik_available = routers is not TRAEFIK_UNAVAILABLE
+    by_name = {r.name: r for r in routers} if traefik_available else {}
     rows = []
     for container in containers:
         kind = declared_kind(container)
@@ -102,7 +103,9 @@ def build_rows(
             continue
         description = container.labels.get(LABEL_DESCRIPTION, "")
         if kind == KIND_HTTP:
-            rows.append(_http_row(container, by_name, health, probed, description))
+            rows.append(
+                _http_row(container, by_name, traefik_available, health, probed, description)
+            )
         elif kind == KIND_TCP:
             rows.append(_tcp_row(container, listeners, description))
         elif kind == KIND_EDGE:
@@ -117,14 +120,27 @@ def build_rows(
 def _http_row(
     container: Container,
     routers: Mapping[str, Router],
+    traefik_available: bool,
     health: Mapping[str, Health],
     probed: bool,
     description: str,
 ) -> Row:
+    """One HTTP row. Traefik's verdict decides the state before the probe does.
+
+    A router Traefik does not report is a route error, not a down service:
+    the container asked for a route and did not get one, most often by not
+    being on the harbor network. That is only knowable when Traefik answered
+    -- an empty `routers` because it could not be asked says nothing, so the
+    probe decides, exactly as it did before there was a proxy.
+    """
     name, host = route_of(container)  # type: ignore[misc] - kind is HTTP here
     router = routers.get(router_name(name))
     target = route_url(host) if host else ""
-    if host is None or (router is not None and not router.enabled):
+    if (
+        host is None
+        or (traefik_available and router is None)
+        or (router is not None and not router.enabled)
+    ):
         state = STATE_ROUTE_ERROR
     elif not probed:
         state = STATE_UNKNOWN

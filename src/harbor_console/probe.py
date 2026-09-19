@@ -1,8 +1,11 @@
 """Liveness and optional detail for one declared service.
 
-Deliberately dumb: connect, and any HTTP response means up. GTE answers `/`
+Deliberately dumb: connect, and any HTTP response means up -- except the
+three the proxy invents for a backend that did not answer. GTE answers `/`
 with a 303 to `/login`; a probe insisting on 200 would call a healthy service
-down, and a status page that cries wolf is worse than no status page.
+down, and a status page that cries wolf is worse than no status page. A
+service's own 500 is still a service answering; a 502, 503 or 504 on the
+proxied path is Traefik reporting that nothing answered behind it (ADR 15).
 
 `/hcstatus` only ever adds detail. A project whose endpoint is missing, slow,
 malformed or wrongly shaped still shows as up -- with a warning where the
@@ -20,6 +23,11 @@ from dataclasses import dataclass
 
 HCSTATUS_PATH = "/hcstatus"
 VALID_STATES = ("ok", "warn", "error")
+
+#: The statuses only a proxy produces on behalf of a backend that did not
+#: answer. Probes go through Traefik (ADR 15), so these are the edge speaking,
+#: not the service -- they mean down where every other status means up.
+EDGE_FAILURE_CODES = frozenset({502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -63,7 +71,7 @@ def probe(
 
 
 def _answers(url: str, opener: Callable[..., object], timeout: float) -> bool:
-    """True when anything answers over HTTP, including an error status.
+    """True when the service answers over HTTP, including with an error status.
 
     The whole call is somebody else's code -- a platform-dependent transport
     -- so the catch here is deliberately broad: any way it can fail, short of
@@ -72,9 +80,12 @@ def _answers(url: str, opener: Callable[..., object], timeout: float) -> bool:
     try:
         with opener(url, timeout=timeout):  # type: ignore[union-attr]
             return True
-    except urllib.error.HTTPError:
-        # A 404 or a 500 is still a service answering.
-        return True
+    except urllib.error.HTTPError as exc:
+        # Any response from the service itself is up, including its own 5xx:
+        # a 404, a 500 and a 303 to /login are all a service answering.
+        # 502/503/504 on the proxied path are the edge answering for a
+        # backend that did not, so they are the one HTTP response meaning down.
+        return exc.code not in EDGE_FAILURE_CODES
     except (OSError, ValueError, http.client.HTTPException):
         return False
 

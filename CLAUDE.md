@@ -95,7 +95,7 @@ These are load-bearing decisions, not preferences. Changing one needs a new ADR.
 - **Stdlib `http.server` only.** The web surface adds no runtime dependency; FastAPI and uvicorn were rejected as disproportionate to one page.
 - **Probing happens in a background thread, never inside a request handler.** One hung service must not make the status page slow to load.
 - **The page is read-only.** Its authority is reporting — not container lifecycle, not access control, not routing. No buttons that do anything.
-- **Health probing is dumb on purpose: any HTTP response means up.** GTE answers `/` with a 303 to `/login`; a probe insisting on 200 would call a healthy service down.
+- **Health probing is dumb on purpose: any HTTP response means up, except the three the proxy invents.** GTE answers `/` with a 303 to `/login`; a probe insisting on 200 would call a healthy service down. Probes now go through Traefik, so 502/503/504 are the edge answering for a backend that did not and mean down; a service's own 500 is still a service answering ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md) narrows [ADR 12](docs/adr/0012-web-surface-collectors-and-conventions.md) for the proxied path only).
 
 ## Scope discipline
 

@@ -11,6 +11,7 @@ from harbor_console.directory import (
     Finding,
     Row,
 )
+from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Snapshot
 
 METRICS = {
@@ -72,6 +73,20 @@ def test_route_error_is_emphasised():
     page = web.render_page(snapshot(rows=(bad,))).decode()
 
     assert '<span class="down">ROUTE ERROR</span>' in page
+
+
+def test_a_tcp_row_named_like_a_router_gets_no_health_detail():
+    """`health` is keyed by router name; only HTTP rows may look in it. A
+    tcp or internal container that happens to share a router's name must not
+    inherit another service's detail rows."""
+    tcp = Row("parksmart", KIND_TCP, "0.0.0.0:1883", "parksmart-mqtt-1", "", "LISTENING")
+    health = {"parksmart": Health(True, "ok", "3 queued", (Detail("queue", "3"),), "a warning")}
+
+    page = web.render_page(snapshot(rows=(tcp,), health=health)).decode()
+
+    assert "3 queued" not in page
+    assert "queue: 3" not in page
+    assert "a warning" not in page
 
 
 def test_no_rows_says_so():

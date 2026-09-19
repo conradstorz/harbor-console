@@ -21,6 +21,8 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].main=hpz440.ohr3023.org
       - --entrypoints.websecure.http.tls.domains[0].sans=*.hpz440.ohr3023.org
       - --entrypoints.traefik.address=:8081
+      # Read-only API. The published bind is loopback, but the entrypoint also
+      # answers as traefik:8081 to anything on the harbor network.
       - --api.insecure=true
       - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL:?set ACME_EMAIL in /etc/traefik/env}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json

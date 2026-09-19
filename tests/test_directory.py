@@ -96,6 +96,12 @@ def test_http_row_is_route_error_when_traefik_disabled_it():
     assert rows[0].state == "ROUTE ERROR"
 
 
+def test_http_row_traefik_does_not_report_is_route_error():
+    rows = build_rows((http_container(),), (), (), {"parksmart": UP}, probed=True)
+
+    assert rows[0].state == "ROUTE ERROR"
+
+
 def test_http_row_without_a_rule_is_route_error():
     rows = build_rows((Container("plain", (), {"traefik.enable": "true"}),), (), (), {}, probed=True)
 
@@ -104,7 +110,9 @@ def test_http_row_without_a_rule_is_route_error():
 
 
 def test_http_row_is_unknown_before_the_first_probe():
-    rows = build_rows((http_container(),), (), (), {}, probed=False)
+    routers = (Router("parksmart@docker", HOST, "parksmart", True, None),)
+
+    rows = build_rows((http_container(),), routers, (), {}, probed=False)
 
     assert rows[0].state == "UNKNOWN"
 
@@ -186,8 +194,9 @@ def test_undeclared_containers_produce_no_row():
 def test_rows_sort_by_name():
     a = http_container("zz-1", route="zeta", host="zeta.hpz440.ohr3023.org")
     b = Container("aa-1", (), {"harbor.kind": "internal"})
+    routers = (Router("zeta@docker", "zeta.hpz440.ohr3023.org", "zeta", True, None),)
 
-    assert [r.name for r in build_rows((a, b), (), (), {}, probed=True)] == ["aa-1", "zeta"]
+    assert [r.name for r in build_rows((a, b), routers, (), {}, probed=True)] == ["aa-1", "zeta"]
 
 
 TAILNET = "100.69.239.123"

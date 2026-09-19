@@ -49,5 +49,18 @@ the scarce resource is the hostname, and the proxy knows every live one.
   with Docker and the page reports it as an edge row.
 - Non-HTTP services are listed but not routed; MQTT stays on a published
   port by declaration.
+- Probes now go through the proxy, so 502, 503 and 504 mean down while any
+  other response — including the service's own 500 — means up. Only the edge
+  produces those three on behalf of a backend that did not answer. This
+  narrows ADR 12's "any HTTP response means up" for the proxied path only.
+- A router Traefik does not report is a route error, not a down service: the
+  container asked for a route and did not get one. That verdict is only
+  available when Traefik answered; when it could not be asked, the probe
+  decides, as it did before there was a proxy.
+- The edge reaches the page through one ufw rule, scoped to the harbor bridge
+  (`br-harbor`), the tailnet address and port 8100. ufw's default-deny INPUT
+  drops container→host traffic, so without it Traefik's file-provider route
+  times out. The installer creates the network with that fixed bridge name and
+  refuses to continue against one that lacks it.
 - ADRs 8–11, 13 and 14 describe machinery that no longer exists. They stay
   as the record of why it was built and what it caught.

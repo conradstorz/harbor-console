@@ -60,6 +60,36 @@ def test_a_404_on_the_root_still_means_up():
     assert probe("http://h:1", opener=opener_for(routes)).up is True
 
 
+def test_a_502_from_the_edge_means_down():
+    """502/503/504 on the proxied path are Traefik answering for a backend
+    that did not; only the edge can produce them, and it means down."""
+    routes = {"/": http_error(502), "/hcstatus": http_error(502)}
+
+    health = probe("https://x.example", opener=opener_for(routes))
+
+    assert health.up is False
+    assert health.detail == ()
+
+
+def test_a_503_and_a_504_from_the_edge_also_mean_down():
+    for code in (503, 504):
+        routes = {"/": http_error(code), "/hcstatus": http_error(code)}
+
+        assert probe("https://x.example", opener=opener_for(routes)).up is False
+
+
+def test_a_500_from_the_service_still_means_up():
+    routes = {"/": http_error(500), "/hcstatus": http_error(404)}
+
+    assert probe("https://x.example", opener=opener_for(routes)).up is True
+
+
+def test_a_303_to_a_login_page_still_means_up():
+    routes = {"/": http_error(303), "/hcstatus": http_error(404)}
+
+    assert probe("https://x.example", opener=opener_for(routes)).up is True
+
+
 def test_connection_refused_means_down():
     routes = {
         "/": urllib.error.URLError("refused"),

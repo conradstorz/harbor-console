@@ -23,9 +23,15 @@ class _Unavailable(tuple):
 #: the page may claim a container is undeclared.
 DOCKER_UNAVAILABLE = _Unavailable()
 
-#: A bound on each docker call. This runs inside the prober thread on every
-#: cycle; a wedged daemon must not freeze the last good snapshot in place.
+#: A bound on `docker ps`. This runs inside the prober thread on every cycle;
+#: a wedged daemon must not freeze the last good snapshot in place.
 DOCKER_TIMEOUT_SECONDS = 2.0
+
+#: A bound on `docker inspect`, which reads every running container's full
+#: configuration rather than listing ids. It is the slower of the two calls by
+#: a wide margin, and a busy daemon answering it in three seconds is not an
+#: outage -- sharing `ps`'s two would report one as if it were.
+DOCKER_INSPECT_TIMEOUT_SECONDS = 5.0
 
 IPV6_ANY = "::"
 IPV4_ANY = "0.0.0.0"
@@ -44,6 +50,7 @@ class Container:
 def running_containers(
     run: Callable[..., object] = subprocess.run,
     timeout: float = DOCKER_TIMEOUT_SECONDS,
+    inspect_timeout: float = DOCKER_INSPECT_TIMEOUT_SECONDS,
 ) -> tuple[Container, ...]:
     """Collect running containers. Returns DOCKER_UNAVAILABLE if Docker cannot be read.
 
@@ -65,7 +72,7 @@ def running_containers(
             return ()
         inspected = run(
             ["docker", "inspect", *ids],
-            check=False, capture_output=True, text=True, timeout=timeout,
+            check=False, capture_output=True, text=True, timeout=inspect_timeout,
         )
         if inspected.returncode != 0:  # type: ignore[attr-defined]
             return DOCKER_UNAVAILABLE

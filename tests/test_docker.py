@@ -2,7 +2,13 @@ import json
 import subprocess
 from types import SimpleNamespace
 
-from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
+from harbor_console.docker import (
+    DOCKER_INSPECT_TIMEOUT_SECONDS,
+    DOCKER_TIMEOUT_SECONDS,
+    DOCKER_UNAVAILABLE,
+    Container,
+    running_containers,
+)
 
 
 def inspect_entry(name, ports=None, labels=None, networks=("bridge",)):
@@ -94,8 +100,32 @@ def test_containers_sort_by_name():
 def test_no_running_containers_skips_inspect():
     run = fake_run("")
 
-    assert running_containers(run=run) == ()
+    result = running_containers(run=run)
+
+    assert result == ()
+    assert result is not DOCKER_UNAVAILABLE
     assert len(run.calls) == 1
+
+
+def test_inspect_gets_its_own_longer_timeout():
+    """`docker ps` is a cheap list; `docker inspect` over every running
+    container is not, and a busy daemon must not read as an outage."""
+    seen = []
+
+    def run(args, **kwargs):
+        seen.append((tuple(args[:2]), kwargs["timeout"]))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(stdout="abc123", returncode=0)
+        return SimpleNamespace(stdout="[]", returncode=0)
+
+    running_containers(run=run)
+
+    assert DOCKER_INSPECT_TIMEOUT_SECONDS == 5.0
+    assert DOCKER_TIMEOUT_SECONDS == 2.0
+    assert seen == [
+        (("docker", "ps"), DOCKER_TIMEOUT_SECONDS),
+        (("docker", "inspect"), DOCKER_INSPECT_TIMEOUT_SECONDS),
+    ]
 
 
 def test_missing_binary_reports_unavailable():

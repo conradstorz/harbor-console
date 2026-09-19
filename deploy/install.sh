@@ -38,6 +38,21 @@ fi
 echo "==> Checking edge prerequisites"
 require_cmd docker "Install Docker first."
 require_cmd tailscale "Install Tailscale first."
+# The ufw rule below names the bridge interface, so the harbor network has to
+# carry a predictable one. A network created without it (by an older installer,
+# or by hand) would get a generated br-<id> name the rule cannot match, and the
+# edge would silently fail to reach the page. Check before anything is changed.
+if docker network inspect harbor >/dev/null 2>&1; then
+  harbor_bridge=$(docker network inspect harbor -f '{{index .Options "com.docker.network.bridge.name"}}' 2>/dev/null || true)
+  if [[ "${harbor_bridge}" != "br-harbor" ]]; then
+    echo "Error: the 'harbor' Docker network exists without the fixed bridge name 'br-harbor' (found: '${harbor_bridge:-none}')." >&2
+    echo "  The ufw rule that lets the edge reach the status page names that interface, so the network has to be recreated:" >&2
+    echo "    stop everything attached to it (e.g. cd /opt/harbor-console/deploy/traefik && docker compose down)," >&2
+    echo "    then: docker network rm harbor" >&2
+    echo "  and re-run this installer." >&2
+    exit 1
+  fi
+fi
 if [[ ! -f /etc/traefik/env ]]; then
   echo "Error: /etc/traefik/env is missing. Create it (mode 0600) with:" >&2
   echo "  CF_DNS_API_TOKEN=<cloudflare token with Zone.DNS edit on ohr3023.org>" >&2
@@ -51,7 +66,10 @@ if [[ -z "${TAILNET_ADDRESS}" ]]; then
   exit 1
 fi
 # shellcheck disable=SC1091
-ACME_EMAIL=$(. /etc/traefik/env; echo "${ACME_EMAIL:-}")
+if ! ACME_EMAIL=$(. /etc/traefik/env 2>/dev/null; echo "${ACME_EMAIL:-}"); then
+  echo "Error: /etc/traefik/env could not be sourced; it must be plain KEY=value lines." >&2
+  exit 1
+fi
 if [[ -z "${ACME_EMAIL}" ]]; then
   echo "Error: ACME_EMAIL is not set in /etc/traefik/env." >&2
   exit 1
@@ -104,7 +122,13 @@ usermod -aG docker harbor
 
 echo "==> Preparing the edge (Traefik)"
 chmod 0600 /etc/traefik/env
-docker network inspect harbor >/dev/null 2>&1 || docker network create harbor
+# The bridge name is fixed so the ufw rule below can name the interface; the
+# prerequisite check above refuses an existing network that lacks it.
+docker network inspect harbor >/dev/null 2>&1 || docker network create -o com.docker.network.bridge.name=br-harbor harbor
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  # ufw's default-deny INPUT drops container->host traffic; the edge must reach the page.
+  ufw allow in on br-harbor to "${TAILNET_ADDRESS}" port 8100 proto tcp comment 'harbor-console: traefik -> page' >/dev/null
+fi
 TRAEFIK_DIR="${INSTALL_DIR}/deploy/traefik"
 printf 'TAILNET_ADDRESS=%s\nACME_EMAIL=%s\n' "${TAILNET_ADDRESS}" "${ACME_EMAIL}" > "${TRAEFIK_DIR}/.env"
 sed "s/@TAILNET_ADDRESS@/${TAILNET_ADDRESS}/" "${TRAEFIK_DIR}/dynamic/harbor.yml.in" > "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp"

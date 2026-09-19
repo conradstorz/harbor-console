@@ -29,8 +29,11 @@ background thread, so one hung service cannot make the page slow to load, and
 the page is strictly read-only: nothing on it can start or stop anything.
 
 Health probing is deliberately dumb: any HTTP response means up, including a
-redirect to a login page. A project can offer `/hcstatus` returning a little JSON
-to add detail to its row; a missing or broken one never makes it show as down.
+redirect to a login page or the service's own 500. The exceptions are 502, 503
+and 504 — probes go through Traefik, so those three are the edge reporting that
+nothing answered behind the route, and they mean down. A project can offer
+`/hcstatus` returning a little JSON to add detail to its row; a missing or
+broken one never makes it show as down.
 
 Run it with `uv run harbor-console-web`. `deploy/install.sh` installs it as a
 second systemd unit alongside the tty1 dashboard; the two have independent

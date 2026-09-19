@@ -72,9 +72,10 @@ The installer is idempotent — re-run it any time to update.
 - Creates a `harbor` system user (added to the `docker` group) that owns
   `/opt/harbor-console` and runs both services.
 - Prepares the edge: creates the external `harbor` Docker network if it is
-  missing, renders `deploy/traefik/.env` and `deploy/traefik/dynamic/harbor.yml`
-  from the host's tailnet address, and brings Traefik up with
-  `docker compose up -d`.
+  missing (with the fixed bridge name `br-harbor`), adds the one `ufw` rule the
+  edge needs to reach the page when ufw is active, renders
+  `deploy/traefik/.env` and `deploy/traefik/dynamic/harbor.yml` from the host's
+  tailnet address, and brings Traefik up with `docker compose up -d`.
 - Installs `/etc/systemd/system/harbor-console.service` **and**
   `/etc/systemd/system/harbor-console-web.service`.
 - Masks `getty@tty1.service` (removes the login prompt on **tty1 only**).
@@ -104,6 +105,17 @@ the host's edge is versioned with everything else.
 - Traefik's own container carries `harbor.kind=edge`, a kind reserved for the
   proxy, so the page neither calls it undeclared nor reports it for publishing
   80 and 443.
+
+If `ufw` is active, the installer adds exactly one rule to it:
+`ufw allow in on br-harbor to <tailnet ip> port 8100 proto tcp`. ufw's
+default-deny INPUT chain drops traffic from containers to the host, so without
+it Traefik's file-provider route to the status page times out and every other
+route keeps working — a confusing failure to diagnose. The rule is scoped as
+narrowly as the path it opens: that one bridge, that one address, that one
+port. It is why the installer creates the `harbor` network with the fixed
+bridge name `br-harbor`, and why it refuses to continue against an existing
+network that carries a generated name instead (`docker network rm harbor`
+after stopping what is attached, then re-run).
 
 A service joins the edge by adding labels and the `harbor` network to its own
 compose file — see [Declaring a service](../README.md#declaring-a-service).
@@ -139,8 +151,10 @@ sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console and the har
 Both units are disabled, stopped and removed, Traefik is brought down, and
 `getty@tty1` is unmasked and started. The `harbor` network and the
 `letsencrypt` volume are left in place — other projects join that network, and
-re-issuing the certificate is not free. Without `--purge`,
-`/opt/harbor-console` and the `harbor` user are left in place too.
+re-issuing the certificate is not free. So are `/etc/traefik/env` (it holds the
+Cloudflare token; remove it by hand if the host is being retired) and the
+`br-harbor` ufw rule. Without `--purge`, `/opt/harbor-console` and the `harbor`
+user are left in place too.
 
 ## Checking status and logs
 
@@ -242,8 +256,11 @@ These are findings, not faults in the service:
   `harbor` network, or a `harbor.port` naming a port the container does not
   publish. For an HTTP row the Findings list carries Traefik's own reason.
 - **`DOWN`** on an HTTP row means the route exists but nothing answered
-  through it; on a `tcp` or `edge` row it means nothing is listening on the
-  declared port.
+  through it — either the probe never got a response, or Traefik answered
+  502/503/504 for a backend that did not. Every other status is **`UP`**,
+  including the service's own 500 and a 303 to a login page: probing is
+  deliberately dumb, and only the edge can produce those three. On a `tcp` or
+  `edge` row, `DOWN` means nothing is listening on the declared port.
 - **`LISTENING`** is the healthy state for a `tcp` row, such as
   `ice-colder-mqtt` on 1883: something holds the port, and no HTTP probe is
   attempted. **`INTERNAL`** is the healthy state for a container that

@@ -113,7 +113,9 @@ def _directory_table(snapshot: Snapshot) -> str:
             f"<td>{_target_cell(row)}</td><td>{_state_cell(row)}</td>"
             f"<td>{escape(row.container)}</td><td>{escape(row.description)}</td></tr>"
         )
-        health = snapshot.health.get(row.name)
+        # `health` is keyed by router name, which only an HTTP row carries;
+        # a tcp or internal container of the same name must not inherit it.
+        health = snapshot.health.get(row.name) if row.kind == KIND_HTTP else None
         if health is not None:
             if health.summary:
                 rows.append(f"<tr class=\"detail\"><td colspan=\"6\">{escape(health.summary)}</td></tr>")
