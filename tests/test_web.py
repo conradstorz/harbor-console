@@ -177,6 +177,16 @@ def test_handler_404s_ports_json():
     assert status == 404
 
 
+def test_handler_answers_head_with_headers_and_no_body():
+    get_status, get_headers, get_body = _get(web.make_handler(snapshot), "/")
+    status, headers, body = _get(web.make_handler(snapshot), "/", method="HEAD")
+
+    assert status == 200
+    assert headers["Content-Type"] == get_headers["Content-Type"]
+    assert int(headers["Content-Length"]) == len(get_body)
+    assert body == b""
+
+
 def test_handler_404s_an_unknown_path():
     assert _get(web.make_handler(snapshot), "/nope")[0] == 404
 
@@ -194,8 +204,8 @@ def test_handler_answers_500_rather_than_nothing_when_rendering_raises():
     assert body == b"internal error\n"
 
 
-def _get(handler_cls, path):
-    """Drive `do_GET` directly: no real socket, no real server.
+def _get(handler_cls, path, method="GET"):
+    """Drive `do_GET` (or `do_HEAD`) directly: no real socket, no real server.
 
     `BaseHTTPRequestHandler.__init__` normally reads the request off a live
     socket, so the class is instantiated with `__new__` and given only the
@@ -207,12 +217,12 @@ def _get(handler_cls, path):
     handler.wfile = BytesIO()
     handler.client_address = ("127.0.0.1", 51234)
     handler.request_version = "HTTP/1.1"
-    handler.requestline = f"GET {path} HTTP/1.1"
-    handler.command = "GET"
+    handler.requestline = f"{method} {path} HTTP/1.1"
+    handler.command = method
     handler.path = path
     handler.close_connection = True
 
-    handler.do_GET()
+    getattr(handler, f"do_{method}")()
 
     raw = handler.wfile.getvalue()
     head, _, body = raw.partition(b"\r\n\r\n")

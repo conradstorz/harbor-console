@@ -162,6 +162,10 @@ def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHa
             except Exception:  # noqa: BLE001 - a request boundary
                 self._send(500, "text/plain; charset=utf-8", b"internal error\n")
 
+        def do_HEAD(self) -> None:  # noqa: N802 - stdlib's required name
+            """Same headers as GET, no body: what `curl -I` and uptime checks send."""
+            self.do_GET()
+
         def _dispatch(self) -> None:
             if self.path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", render_page(get_snapshot()))
@@ -173,7 +177,8 @@ def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHa
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
         def log_message(self, fmt: str, *args: object) -> None:
             """Quiet by default; journald already timestamps what matters."""
