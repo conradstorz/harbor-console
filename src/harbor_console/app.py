@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from collections.abc import Callable
 
@@ -35,11 +34,6 @@ def run(
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint. A bare invocation runs the tty1 dashboard."""
-    args = sys.argv[1:] if argv is None else argv
-    if args and args[0] == "ports":
-        from harbor_console.ports import cli
-
-        return cli.main(args[1:])
     return run()
 
 
