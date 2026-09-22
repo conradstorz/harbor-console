@@ -333,3 +333,26 @@ def test_read_traefik_credentials_degrades_on_an_empty_file(tmp_path):
     path.write_text("\n", encoding="utf-8")
 
     assert webapp.read_traefik_credentials(path) is None
+
+
+def test_collect_snapshot_builds_the_listening_inventory():
+    snapshot = collect(listeners=lambda: (Listener("0.0.0.0", 22, None),))
+
+    assert [(e.addr, e.port, e.reach, e.accounted) for e in snapshot.inventory] == [
+        ("0.0.0.0", 22, "LAN + tailnet", "")
+    ]
+
+
+def test_the_inventory_knows_the_pages_own_bind():
+    snapshot = collect(listeners=lambda: (Listener("100.69.239.123", 8100, None),))
+
+    assert snapshot.inventory[0].accounted == "harbor-console-web"
+
+
+def test_the_inventory_is_unknown_when_docker_is_unavailable():
+    snapshot = collect(
+        listeners=lambda: (Listener("0.0.0.0", 1883, None),),
+        containers=lambda: DOCKER_UNAVAILABLE,
+    )
+
+    assert snapshot.inventory[0].accounted == "unknown"
