@@ -32,8 +32,8 @@ class Snapshot:
     rows: tuple[Row, ...] = ()
     findings: tuple[Finding, ...] = ()
     #: One entry per listening socket: what it is, who can reach it, and what
-    #: accounts for it. Derived from `listeners` and `containers` so the
-    #: renderer does no policy of its own.
+    #: accounts for it. Derived from the listeners collector's own result and
+    #: `containers` so the renderer does no policy of its own.
     inventory: tuple[Entry, ...] = ()
     containers: tuple[Container, ...] = ()
     docker_available: bool = True
