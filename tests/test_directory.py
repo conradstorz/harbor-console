@@ -1,3 +1,4 @@
+from harbor_console import directory
 from harbor_console.directory import (
     BYPASSES_PROXY,
     KIND_EDGE,
@@ -394,11 +395,24 @@ def test_tailnet_findings_are_withheld_without_a_tailnet_address():
     assert find_findings((), (), (Listener(TAILNET, 8443, None),), None) == ()
 
 
-def test_tailnet_findings_are_withheld_when_listeners_are_unavailable():
+def test_tailnet_findings_are_withheld_when_listeners_are_unavailable(monkeypatch):
     # The socket table could not be read at all -- distinct from "nothing is
     # listening" -- so reporting zero undeclared listeners would claim a
     # clean host the collector never actually saw.
-    findings = find_findings((), (), LISTENING_UNAVAILABLE, TAILNET)
+    #
+    # LISTENING_UNAVAILABLE is itself an empty tuple, so a naive test that
+    # just hands it to find_findings passes whether or not the guard exists
+    # -- the loop finds nothing to report either way. A populated instance
+    # of the sentinel's own class makes the guard's absence observable, but
+    # `is LISTENING_UNAVAILABLE` is an identity check against the specific
+    # singleton, and a new instance is never identical to it -- so the
+    # sentinel directory.py checks against is patched to be that same new
+    # instance, matching how the real collector's one-and-only sentinel
+    # object is always what the identity check compares against.
+    populated_unavailable = type(LISTENING_UNAVAILABLE)((Listener(TAILNET, 8443, None),))
+    monkeypatch.setattr(directory, "LISTENING_UNAVAILABLE", populated_unavailable)
+
+    findings = find_findings((), (), populated_unavailable, TAILNET)
 
     assert findings == ()
 
