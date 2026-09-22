@@ -371,6 +371,21 @@ def test_the_pages_own_port_is_not_an_undeclared_listener():
     assert findings == ()
 
 
+def test_a_wildcard_bind_on_the_pages_own_port_is_still_reported():
+    # The page's own bind is only the page's own bind on the page's own
+    # address (see inventory._accounted). A foreign process wildcard-bound
+    # to the same port must not be swallowed by the own-port exemption.
+    findings = find_findings((), (), (Listener("0.0.0.0", 8100, None),), TAILNET, own_port=8100)
+
+    assert findings == (
+        Finding(
+            UNDECLARED_TAILNET_LISTENER,
+            "0.0.0.0:8100 is listening on every address including the tailnet, "
+            "and no container publishes it",
+        ),
+    )
+
+
 def test_findings_come_in_a_stable_order():
     containers = (
         Container("mystery", (("0.0.0.0", 9000),)),

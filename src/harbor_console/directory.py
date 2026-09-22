@@ -304,7 +304,13 @@ def find_findings(
             {(l.addr, l.port) for l in listeners
              if l.proto == PROTO_TCP and addrs_overlap(l.addr, tailnet_address)}
         ):
-            if port == own_port or EPHEMERAL_MIN <= port <= EPHEMERAL_MAX:
+            # The page's own bind is only the page's own bind on the page's
+            # own address -- matching inventory._accounted's OWN_NAME rule --
+            # so a foreign process wildcard-bound to the same port is not
+            # exempted just because the port number matches.
+            if (port == own_port and addr == tailnet_address) or (
+                EPHEMERAL_MIN <= port <= EPHEMERAL_MAX
+            ):
                 continue
             if any(p == port and addrs_overlap(a, addr) for a, p in published):
                 continue
