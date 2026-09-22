@@ -5,10 +5,14 @@ from harbor_console.directory import (
     KIND_INTERNAL,
     KIND_TCP,
     ROUTE_ERROR,
+    STATE_DOWN,
+    STATE_UNKNOWN,
     UNDECLARED_CONTAINER,
     UNDECLARED_TAILNET_LISTENER,
     Finding,
     Row,
+    _edge_row,
+    _tcp_row,
     build_rows,
     declared_kind,
     find_findings,
@@ -215,6 +219,40 @@ def test_edge_row_is_down_when_one_port_is_missing():
     rows = build_rows((edge,), (), (Listener("100.69.239.123", 80, None),), {}, probed=True)
 
     assert rows[0].state == "DOWN"
+
+
+def test_tcp_row_is_unknown_when_listeners_are_unavailable():
+    # LISTENING_UNAVAILABLE is an empty tuple, so a naive search finds no
+    # match either way -- the row must not read that as "genuinely down".
+    mqtt = Container("ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    row = _tcp_row(mqtt, LISTENING_UNAVAILABLE, "")
+
+    assert row.state == STATE_UNKNOWN
+
+
+def test_tcp_row_is_still_down_with_real_but_empty_listeners():
+    mqtt = Container("ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    row = _tcp_row(mqtt, (), "")
+
+    assert row.state == STATE_DOWN
+
+
+def test_edge_row_is_unknown_when_listeners_are_unavailable():
+    edge = Container("traefik", (("100.69.239.123", 80), ("100.69.239.123", 443)), {"harbor.kind": "edge"})
+
+    row = _edge_row(edge, LISTENING_UNAVAILABLE, "")
+
+    assert row.state == STATE_UNKNOWN
+
+
+def test_edge_row_is_still_down_with_real_but_empty_listeners():
+    edge = Container("traefik", (("100.69.239.123", 80), ("100.69.239.123", 443)), {"harbor.kind": "edge"})
+
+    row = _edge_row(edge, (), "")
+
+    assert row.state == STATE_DOWN
 
 
 def test_undeclared_containers_produce_no_row():

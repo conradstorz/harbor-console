@@ -167,6 +167,11 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
         # declaration error, not a live port: there is no address to check
         # a listener against, so guessing "0.0.0.0" would match everything.
         return Row(container.name, KIND_TCP, "", container.name, description, STATE_ROUTE_ERROR)
+    target = ", ".join(f"{addr}:{port}" for addr, _ in published)
+    if listeners is LISTENING_UNAVAILABLE:
+        # The socket table could not be read: there is no evidence either
+        # way, so the row must not assert DOWN as though it had looked.
+        return Row(container.name, KIND_TCP, target, container.name, description, STATE_UNKNOWN)
     # A container may publish the same declared port on more than one
     # address (a specific address plus loopback, say). The service is
     # reachable if a listener overlaps *any* of them, not just the first
@@ -179,7 +184,6 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
         for addr, _ in published
         for listener in listeners
     )
-    target = ", ".join(f"{addr}:{port}" for addr, _ in published)
     return Row(
         container.name,
         KIND_TCP,
@@ -191,6 +195,12 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
 
 
 def _edge_row(container: Container, listeners: Sequence[Listener], description: str) -> Row:
+    target = ", ".join(f"{addr}:{port}" for addr, port in container.published)
+    if listeners is LISTENING_UNAVAILABLE:
+        # Same reasoning as _tcp_row -- and it matters more here, since the
+        # edge container is Traefik: an unreadable socket table must not
+        # make the page declare the proxy itself down.
+        return Row(container.name, KIND_EDGE, target, container.name, description, STATE_UNKNOWN)
     held = all(
         any(
             listener.proto == PROTO_TCP
@@ -200,7 +210,6 @@ def _edge_row(container: Container, listeners: Sequence[Listener], description: 
         )
         for addr, port in container.published
     ) and bool(container.published)
-    target = ", ".join(f"{addr}:{port}" for addr, port in container.published)
     return Row(
         container.name,
         KIND_EDGE,
