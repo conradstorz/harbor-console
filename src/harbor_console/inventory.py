@@ -69,8 +69,9 @@ def reach_of(addr: str, tailnet_address: str | None) -> str:
 
     Link-local `fe80::/10` counts as LAN: a DHCPv6 client socket is reachable
     from the link, which is the LAN, and a fifth class for it would be
-    precision nobody reads. An address that will not parse -- one carrying a
-    scope suffix, say -- lands there too.
+    precision nobody reads. A scoped address (`fe80::1%eno1`) parses normally
+    and lands there too, like any other specific address; an address that
+    genuinely will not parse also lands in LAN.
     """
     if addr in (ANY_ADDR, IPV6_ANY):
         return REACH_ANY

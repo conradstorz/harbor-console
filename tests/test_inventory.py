@@ -46,8 +46,12 @@ def test_a_link_local_address_reaches_the_lan():
     assert reach_of("fe80::a28c:fdff:fee8:3e59", TAILNET) == REACH_LAN
 
 
-def test_an_unparseable_address_reaches_the_lan():
+def test_a_scoped_address_reaches_the_lan():
     assert reach_of("fe80::1%eno1", TAILNET) == REACH_LAN
+
+
+def test_an_unparseable_address_reaches_the_lan():
+    assert reach_of("not-an-address", TAILNET) == REACH_LAN
 
 
 def test_reachability_without_a_tailnet_address_still_classifies():
