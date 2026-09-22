@@ -32,7 +32,7 @@ from harbor_console.directory import (
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
 from harbor_console.inventory import build_inventory
-from harbor_console.listening import Listener, listening_sockets
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener, listening_sockets
 from harbor_console.probe import Health, probe
 from harbor_console.snapshot import Snapshot
 from harbor_console.system import collect_system_metrics
@@ -152,6 +152,7 @@ def collect_snapshot(
         containers=tuple(running),
         docker_available=running is not DOCKER_UNAVAILABLE,
         traefik_available=routed is not TRAEFIK_UNAVAILABLE,
+        listeners_available=found is not LISTENING_UNAVAILABLE,
         health=health,
         collection_error=None,
         probed=True,

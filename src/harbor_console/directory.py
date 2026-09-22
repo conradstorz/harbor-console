@@ -16,7 +16,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import ANY_ADDR, PROTO_TCP, Listener, addrs_overlap
+from harbor_console.listening import (
+    ANY_ADDR,
+    LISTENING_UNAVAILABLE,
+    PROTO_TCP,
+    Listener,
+    addrs_overlap,
+)
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name
 
@@ -240,11 +246,14 @@ def find_findings(
 
     Container findings need container evidence and are withheld when Docker
     could not be read; route findings need Traefik's verdict and are withheld
-    when it could not be asked. Absence of evidence is never a finding.
+    when it could not be asked; the undeclared-tailnet-listener finding needs
+    the socket table and is withheld when that could not be read. Absence of
+    evidence is never a finding.
     """
     findings: list[Finding] = []
     docker_available = containers is not DOCKER_UNAVAILABLE
     traefik_available = routers is not TRAEFIK_UNAVAILABLE
+    listeners_available = listeners is not LISTENING_UNAVAILABLE
 
     if docker_available:
         for container in sorted(containers, key=lambda c: c.name):
@@ -286,7 +295,7 @@ def find_findings(
                     Finding(ROUTE_ERROR, f"router {name} is disabled: {router.error or 'no reason given'}")
                 )
 
-    if docker_available and tailnet_address is not None:
+    if docker_available and tailnet_address is not None and listeners_available:
         published = [pair for container in containers for pair in container.published]
         # `addrs_overlap`, not `==`: a process bound to 0.0.0.0 answers on the
         # tailnet address too, and comparing the strings hid every wildcard

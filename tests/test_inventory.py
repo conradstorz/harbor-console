@@ -10,7 +10,7 @@ from harbor_console.inventory import (
     build_inventory,
     reach_of,
 )
-from harbor_console.listening import Listener
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 
 TAILNET = "100.69.239.123"
 TAILNET_V6 = "fd7a:115c:a1e0::7b37:ef7d"
@@ -122,6 +122,12 @@ def test_udp_carries_its_protocol_through():
 
     assert result[0].proto == "udp"
     assert result[0].reach == REACH_ANY
+
+
+def test_the_sentinel_yields_no_entries_without_claiming_the_host_is_empty():
+    result = build_inventory(LISTENING_UNAVAILABLE, (), TAILNET, 8100)
+
+    assert result == ()
 
 
 def test_entries_are_ordered_by_port_then_address_then_protocol():

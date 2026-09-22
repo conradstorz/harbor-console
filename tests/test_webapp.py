@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer
 from harbor_console import webapp
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
 from harbor_console.tailnet import TailnetUnavailable
@@ -52,6 +52,7 @@ def test_collect_snapshot_gathers_every_source():
     assert snapshot.metrics == METRICS
     assert snapshot.docker_available is True
     assert snapshot.traefik_available is True
+    assert snapshot.listeners_available is True
     assert snapshot.health["parksmart"].up is True
     assert [r.name for r in snapshot.rows] == ["parksmart"]
     assert snapshot.rows[0].state == "UP"
@@ -97,6 +98,14 @@ def test_collect_snapshot_marks_docker_unavailable():
     assert snapshot.containers == ()
     assert snapshot.rows == ()
     assert snapshot.findings == ()
+
+
+def test_collect_snapshot_marks_listeners_unavailable():
+    snapshot = collect(listeners=lambda: LISTENING_UNAVAILABLE)
+
+    assert snapshot.listeners_available is False
+    assert snapshot.inventory == ()
+    assert all(f.kind != "undeclared-tailnet-listener" for f in snapshot.findings)
 
 
 def test_collect_snapshot_marks_traefik_unavailable():

@@ -14,6 +14,18 @@ from dataclasses import dataclass
 
 import psutil
 
+
+class _Unavailable(tuple):
+    """A distinguishable empty result: falsy, iterable, and identity-checkable."""
+
+
+#: Returned when the socket table itself could not be read -- access denied,
+#: a partly-readable `/proc`, anything. Distinguishable from "asked, and
+#: nothing is listening": the page binds a socket of its own on every
+#: successful cycle, so a genuinely empty reachable table never happens and
+#: an empty result here always means collection failed.
+LISTENING_UNAVAILABLE = _Unavailable()
+
 #: A socket bound to IPv6 `::` accepts IPv4 traffic too, so it is the wildcard
 #: in practice. The allocator's overlap rule knows `0.0.0.0` and nothing else,
 #: so normalise here rather than teaching every consumer about both spellings.
@@ -45,10 +57,12 @@ def listening_sockets(
 ) -> tuple[Listener, ...]:
     """Collect listening TCP sockets and bound UDP sockets.
 
-    Two distinct failure modes, both degrading rather than raising:
+    Two distinct failure modes, degrading differently:
 
     - `net_connections` itself failing -- access denied, a partly-readable
-      `/proc`, anything -- yields `()`. There is nothing to salvage.
+      `/proc`, anything -- yields `LISTENING_UNAVAILABLE`. There is nothing
+      to salvage, and it must not be mistaken for a host with nothing
+      listening.
     - One malformed connection in an otherwise good list -- a missing
       attribute, a `laddr` that isn't psutil's named tuple, a port that
       won't `int()` -- is skipped. The rest of the list is still trustworthy
@@ -59,7 +73,7 @@ def listening_sockets(
     try:
         connections = net_connections(kind="inet")
     except Exception:
-        return ()
+        return LISTENING_UNAVAILABLE
 
     found: set[Listener] = set()
     for connection in connections:  # type: ignore[union-attr]

@@ -40,6 +40,7 @@ class Snapshot:
     containers: tuple[Container, ...] = ()
     docker_available: bool = True
     traefik_available: bool = True
+    listeners_available: bool = True
     #: Keyed by `Row.name` -- the router name for HTTP rows.
     health: dict[str, Health] = field(default_factory=dict)
     #: Why the last collection cycle failed, whatever its source.

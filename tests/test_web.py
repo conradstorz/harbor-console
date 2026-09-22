@@ -131,6 +131,19 @@ def test_page_notes_when_traefik_could_not_be_read():
     assert "Traefik could not be read" in page
 
 
+def test_page_notes_when_listeners_could_not_be_read():
+    page = web.render_page(snapshot(listeners_available=False)).decode()
+
+    assert "listening sockets could not be read" in page
+
+
+def test_inventory_section_does_not_claim_nothing_is_listening_when_unavailable():
+    page = web.render_page(snapshot(listeners_available=False, inventory=())).decode()
+
+    assert "Nothing is listening on a reachable address" not in page
+    assert "what is listening is unknown" in page
+
+
 def test_page_shows_a_collection_failure_banner():
     page = web.render_page(snapshot(collection_error="psutil exploded")).decode()
 

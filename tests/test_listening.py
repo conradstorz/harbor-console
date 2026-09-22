@@ -5,6 +5,7 @@ import psutil
 
 from harbor_console.listening import (
     ANY_ADDR,
+    LISTENING_UNAVAILABLE,
     PROTO_TCP,
     PROTO_UDP,
     Listener,
@@ -58,18 +59,21 @@ def test_a_socket_with_no_local_address_is_skipped():
     assert listening_sockets(net_connections=lambda kind: conns) == ()
 
 
-def test_access_denied_degrades_to_empty():
+def test_access_denied_degrades_to_unavailable():
     def denied(kind):
         raise psutil.AccessDenied()
 
-    assert listening_sockets(net_connections=denied) == ()
+    result = listening_sockets(net_connections=denied)
+
+    assert result is LISTENING_UNAVAILABLE
+    assert result == ()
 
 
-def test_any_oserror_degrades_to_empty():
+def test_any_oserror_degrades_to_unavailable():
     def boom(kind):
         raise OSError("nope")
 
-    assert listening_sockets(net_connections=boom) == ()
+    assert listening_sockets(net_connections=boom) is LISTENING_UNAVAILABLE
 
 
 def test_results_are_sorted_and_deduplicated():
@@ -117,11 +121,23 @@ def test_a_port_that_will_not_int_is_skipped():
     assert result == (Listener("0.0.0.0", 8080, 10),)
 
 
-def test_an_unexpected_exception_from_net_connections_degrades_to_empty():
+def test_an_unexpected_exception_from_net_connections_degrades_to_unavailable():
     def boom(kind):
         raise RuntimeError("partly-readable /proc")
 
-    assert listening_sockets(net_connections=boom) == ()
+    assert listening_sockets(net_connections=boom) is LISTENING_UNAVAILABLE
+
+
+def test_a_single_bad_connection_is_not_an_outage():
+    # The per-connection except is not the whole-call except: one malformed
+    # socket must still yield a real tuple, not the unavailable sentinel.
+    bad = SimpleNamespace(laddr=(), status=psutil.CONN_LISTEN, pid=None, type=socket.SOCK_STREAM, raddr=())
+    good = conn("0.0.0.0", 8080, pid=10)
+
+    result = listening_sockets(net_connections=lambda kind: [bad, good])
+
+    assert result is not LISTENING_UNAVAILABLE
+    assert result == (Listener("0.0.0.0", 8080, 10),)
 
 
 def test_wildcard_overlaps_everything():

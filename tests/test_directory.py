@@ -16,7 +16,7 @@ from harbor_console.directory import (
     route_url,
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router
 
@@ -354,6 +354,15 @@ def test_an_ephemeral_tailnet_port_is_not_reported():
 
 def test_tailnet_findings_are_withheld_without_a_tailnet_address():
     assert find_findings((), (), (Listener(TAILNET, 8443, None),), None) == ()
+
+
+def test_tailnet_findings_are_withheld_when_listeners_are_unavailable():
+    # The socket table could not be read at all -- distinct from "nothing is
+    # listening" -- so reporting zero undeclared listeners would claim a
+    # clean host the collector never actually saw.
+    findings = find_findings((), (), LISTENING_UNAVAILABLE, TAILNET)
+
+    assert findings == ()
 
 
 def test_the_pages_own_port_is_not_an_undeclared_listener():

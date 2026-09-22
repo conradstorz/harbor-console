@@ -57,6 +57,12 @@ def render_page(snapshot: Snapshot) -> bytes:
             "<p class=\"banner\">Traefik could not be read, so route errors are not "
             "reported and HTTP rows show only what the probe saw.</p>"
         )
+    if not snapshot.listeners_available:
+        parts.append(
+            "<p class=\"banner\">The host's listening sockets could not be read, so "
+            "the inventory below is missing and undeclared tailnet listeners are not "
+            "reported.</p>"
+        )
     parts.append(_host_table(snapshot))
     parts.append(_directory_table(snapshot))
     parts.append(_findings_section(snapshot))
@@ -190,6 +196,11 @@ def _inventory_section(snapshot: Snapshot) -> str:
         return (
             "<h2>Listening</h2><p>Nothing has been collected yet: the first cycle "
             "has not completed, so what is listening is unknown.</p>"
+        )
+    if not snapshot.listeners_available:
+        return (
+            "<h2>Listening</h2><p>The host's listening sockets could not be read, "
+            "so what is listening is unknown.</p>"
         )
     reachable = tuple(e for e in snapshot.inventory if e.reach != REACH_LOOPBACK)
     loopback = tuple(e for e in snapshot.inventory if e.reach == REACH_LOOPBACK)
