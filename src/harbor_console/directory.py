@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener, addrs_overlap
+from harbor_console.listening import PROTO_TCP, Listener, addrs_overlap
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name
 
@@ -167,7 +167,9 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
     # Docker happened to list -- checking only that one could report DOWN
     # for a service that is, in fact, up on a different published address.
     held = any(
-        listener.port == port and addrs_overlap(listener.addr, addr)
+        listener.proto == PROTO_TCP
+        and listener.port == port
+        and addrs_overlap(listener.addr, addr)
         for addr, _ in published
         for listener in listeners
     )
@@ -185,7 +187,9 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
 def _edge_row(container: Container, listeners: Sequence[Listener], description: str) -> Row:
     held = all(
         any(
-            listener.port == port and addrs_overlap(listener.addr, addr)
+            listener.proto == PROTO_TCP
+            and listener.port == port
+            and addrs_overlap(listener.addr, addr)
             for listener in listeners
         )
         for addr, port in container.published
@@ -284,7 +288,10 @@ def find_findings(
 
     if docker_available and tailnet_address is not None:
         published = [pair for container in containers for pair in container.published]
-        for addr, port in sorted({(l.addr, l.port) for l in listeners if l.addr == tailnet_address}):
+        for addr, port in sorted(
+            {(l.addr, l.port) for l in listeners
+             if l.proto == PROTO_TCP and l.addr == tailnet_address}
+        ):
             if port == own_port or EPHEMERAL_MIN <= port <= EPHEMERAL_MAX:
                 continue
             if any(p == port and addrs_overlap(a, addr) for a, p in published):

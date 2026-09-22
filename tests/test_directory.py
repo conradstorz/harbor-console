@@ -350,3 +350,31 @@ def test_findings_come_in_a_stable_order():
     kinds = [f.kind for f in find_findings(containers, (), listeners, TAILNET)]
 
     assert kinds == [UNDECLARED_CONTAINER, BYPASSES_PROXY, ROUTE_ERROR, UNDECLARED_TAILNET_LISTENER]
+
+
+def test_a_udp_socket_does_not_make_a_tcp_row_listening():
+    mqtt = Container(
+        "ice-colder-mqtt",
+        (("0.0.0.0", 1883),),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    rows = build_rows(
+        (mqtt,), (), (Listener("0.0.0.0", 1883, None, "udp"),), {}, probed=True
+    )
+
+    assert rows[0].state == "DOWN"
+
+
+def test_a_udp_socket_does_not_make_an_edge_row_listening():
+    edge = Container("traefik", ((TAILNET, 443),), {"harbor.kind": "edge"})
+
+    rows = build_rows(
+        (edge,), (), (Listener(TAILNET, 443, None, "udp"),), {}, probed=True
+    )
+
+    assert rows[0].state == "DOWN"
+
+
+def test_a_udp_tailnet_listener_is_not_a_finding():
+    assert find_findings((), (), (Listener(TAILNET, 41641, None, "udp"),), TAILNET) == ()
