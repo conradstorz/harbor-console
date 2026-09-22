@@ -12,7 +12,6 @@ from datetime import datetime
 from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
 from harbor_console.inventory import Entry
-from harbor_console.listening import Listener
 from harbor_console.probe import Health
 
 
@@ -32,7 +31,6 @@ class Snapshot:
     metrics: dict[str, str | float | int]
     rows: tuple[Row, ...] = ()
     findings: tuple[Finding, ...] = ()
-    listeners: tuple[Listener, ...] = ()
     #: One entry per listening socket: what it is, who can reach it, and what
     #: accounts for it. Derived from `listeners` and `containers` so the
     #: renderer does no policy of its own.

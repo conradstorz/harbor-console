@@ -147,7 +147,6 @@ def collect_snapshot(
         metrics=metrics,
         rows=build_rows(running, routed, found, health, probed=True),
         findings=find_findings(running, routed, found, tailnet_address, own_port=own_port),
-        listeners=found,
         inventory=build_inventory(found, running, tailnet_address, own_port),
         containers=tuple(running),
         docker_available=running is not DOCKER_UNAVAILABLE,
