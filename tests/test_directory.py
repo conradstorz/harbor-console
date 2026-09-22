@@ -322,8 +322,30 @@ def test_a_tailnet_listener_a_container_publishes_is_not_reported():
     assert find_findings((edge,), (), (Listener(TAILNET, 443, None),), TAILNET) == ()
 
 
-def test_a_wildcard_listener_is_not_a_tailnet_finding():
-    assert find_findings((), (), (Listener("0.0.0.0", 22, None),), TAILNET) == ()
+def test_a_wildcard_listener_is_a_tailnet_finding():
+    findings = find_findings((), (), (Listener("0.0.0.0", 22, None),), TAILNET)
+
+    assert findings == (
+        Finding(
+            UNDECLARED_TAILNET_LISTENER,
+            "0.0.0.0:22 is listening on every address including the tailnet, "
+            "and no container publishes it",
+        ),
+    )
+
+
+def test_a_wildcard_listener_a_container_publishes_is_not_reported():
+    mqtt = Container(
+        "ice-colder-mqtt",
+        (("0.0.0.0", 1883),),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    assert find_findings((mqtt,), (), (Listener("0.0.0.0", 1883, None),), TAILNET) == ()
+
+
+def test_a_loopback_listener_is_not_a_tailnet_finding():
+    assert find_findings((), (), (Listener("127.0.0.1", 8081, None),), TAILNET) == ()
 
 
 def test_an_ephemeral_tailnet_port_is_not_reported():

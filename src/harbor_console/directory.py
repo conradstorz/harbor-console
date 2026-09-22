@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import PROTO_TCP, Listener, addrs_overlap
+from harbor_console.listening import ANY_ADDR, PROTO_TCP, Listener, addrs_overlap
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name
 
@@ -288,18 +288,24 @@ def find_findings(
 
     if docker_available and tailnet_address is not None:
         published = [pair for container in containers for pair in container.published]
+        # `addrs_overlap`, not `==`: a process bound to 0.0.0.0 answers on the
+        # tailnet address too, and comparing the strings hid every wildcard
+        # bind on the host -- sshd included.
         for addr, port in sorted(
             {(l.addr, l.port) for l in listeners
-             if l.proto == PROTO_TCP and l.addr == tailnet_address}
+             if l.proto == PROTO_TCP and addrs_overlap(l.addr, tailnet_address)}
         ):
             if port == own_port or EPHEMERAL_MIN <= port <= EPHEMERAL_MAX:
                 continue
             if any(p == port and addrs_overlap(a, addr) for a, p in published):
                 continue
+            where = (
+                "every address including the tailnet" if addr == ANY_ADDR else "the tailnet"
+            )
             findings.append(
                 Finding(
                     UNDECLARED_TAILNET_LISTENER,
-                    f"{addr}:{port} is listening on the tailnet, and no container publishes it",
+                    f"{addr}:{port} is listening on {where}, and no container publishes it",
                 )
             )
 
