@@ -14,6 +14,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler
 
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
+from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
 
 REFRESH_SECONDS = 30
@@ -25,6 +26,7 @@ table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
 td, th { text-align: left; padding: 0.25rem 0.75rem 0.25rem 0; vertical-align: top; }
 tr.detail td { padding-left: 2rem; opacity: 0.75; }
 .down { font-weight: 700; }
+.unaccounted { font-weight: 700; }
 .banner { border: 1px solid; padding: 0.5rem 0.75rem; margin-bottom: 1.5rem; }
 .stamp { opacity: 0.7; }
 """
@@ -55,9 +57,16 @@ def render_page(snapshot: Snapshot) -> bytes:
             "<p class=\"banner\">Traefik could not be read, so route errors are not "
             "reported and HTTP rows show only what the probe saw.</p>"
         )
+    if not snapshot.listeners_available:
+        parts.append(
+            "<p class=\"banner\">The host's listening sockets could not be read, so "
+            "the inventory below is missing, undeclared tailnet listeners are not "
+            "reported, and tcp and edge rows show UNKNOWN rather than a state.</p>"
+        )
     parts.append(_host_table(snapshot))
     parts.append(_directory_table(snapshot))
     parts.append(_findings_section(snapshot))
+    parts.append(_inventory_section(snapshot))
     parts.append(
         f"<p class=\"stamp\">Collected "
         f"{escape(snapshot.collected.strftime('%Y-%m-%d %H:%M:%S'))}, "
@@ -148,6 +157,62 @@ def _findings_section(snapshot: Snapshot) -> str:
         f"<li>{escape(item.kind)} &mdash; {escape(item.detail)}</li>" for item in snapshot.findings
     )
     return f"<h2>Findings</h2><ul>{items}</ul>"
+
+
+def _where_cell(entry: Entry) -> str:
+    """`addr:port`, bracketing IPv6 so the port is still legible."""
+    if ":" in entry.addr:
+        return f"[{entry.addr}]:{entry.port}"
+    return f"{entry.addr}:{entry.port}"
+
+
+def _accounted_cell(entry: Entry) -> str:
+    if entry.accounted:
+        return escape(entry.accounted)
+    return "<span class=\"unaccounted\">&mdash;</span>"
+
+
+def _inventory_table(entries: tuple[Entry, ...]) -> str:
+    rows = "".join(
+        f"<tr><td>{escape(entry.proto)}</td><td>{escape(_where_cell(entry))}</td>"
+        f"<td>{escape(entry.reach)}</td><td>{_accounted_cell(entry)}</td></tr>"
+        for entry in entries
+    )
+    return (
+        "<table><tr><th>Proto</th><th>Address:Port</th><th>Reach</th>"
+        "<th>Accounted for</th></tr>" + rows + "</table>"
+    )
+
+
+def _inventory_section(snapshot: Snapshot) -> str:
+    """Every listening socket, reachable ones first.
+
+    This is the reference, not the alert: the findings above are what
+    disagrees, and this is what is there. Loopback is split out rather than
+    dropped -- it cannot be reached from off the host, but it is still the
+    answer to "what is running".
+    """
+    if not snapshot.probed:
+        return (
+            "<h2>Listening</h2><p>Nothing has been collected yet: the first cycle "
+            "has not completed, so what is listening is unknown.</p>"
+        )
+    if not snapshot.listeners_available:
+        return (
+            "<h2>Listening</h2><p>The host's listening sockets could not be read, "
+            "so what is listening is unknown.</p>"
+        )
+    reachable = tuple(e for e in snapshot.inventory if e.reach != REACH_LOOPBACK)
+    loopback = tuple(e for e in snapshot.inventory if e.reach == REACH_LOOPBACK)
+    parts = ["<h2>Listening</h2>"]
+    if reachable:
+        parts.append(_inventory_table(reachable))
+    else:
+        parts.append("<p>Nothing is listening on a reachable address.</p>")
+    if loopback:
+        parts.append("<h2>Loopback only</h2>")
+        parts.append(_inventory_table(loopback))
+    return "".join(parts)
 
 
 def make_handler(get_snapshot: Callable[[], Snapshot]) -> type[BaseHTTPRequestHandler]:

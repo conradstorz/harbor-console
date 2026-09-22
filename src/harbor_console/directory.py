@@ -16,7 +16,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener, addrs_overlap
+from harbor_console.listening import (
+    ANY_ADDR,
+    LISTENING_UNAVAILABLE,
+    PROTO_TCP,
+    Listener,
+    addrs_overlap,
+)
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name
 
@@ -161,17 +167,23 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
         # declaration error, not a live port: there is no address to check
         # a listener against, so guessing "0.0.0.0" would match everything.
         return Row(container.name, KIND_TCP, "", container.name, description, STATE_ROUTE_ERROR)
+    target = ", ".join(f"{addr}:{port}" for addr, _ in published)
+    if listeners is LISTENING_UNAVAILABLE:
+        # The socket table could not be read: there is no evidence either
+        # way, so the row must not assert DOWN as though it had looked.
+        return Row(container.name, KIND_TCP, target, container.name, description, STATE_UNKNOWN)
     # A container may publish the same declared port on more than one
     # address (a specific address plus loopback, say). The service is
     # reachable if a listener overlaps *any* of them, not just the first
     # Docker happened to list -- checking only that one could report DOWN
     # for a service that is, in fact, up on a different published address.
     held = any(
-        listener.port == port and addrs_overlap(listener.addr, addr)
+        listener.proto == PROTO_TCP
+        and listener.port == port
+        and addrs_overlap(listener.addr, addr)
         for addr, _ in published
         for listener in listeners
     )
-    target = ", ".join(f"{addr}:{port}" for addr, _ in published)
     return Row(
         container.name,
         KIND_TCP,
@@ -183,14 +195,21 @@ def _tcp_row(container: Container, listeners: Sequence[Listener], description: s
 
 
 def _edge_row(container: Container, listeners: Sequence[Listener], description: str) -> Row:
+    target = ", ".join(f"{addr}:{port}" for addr, port in container.published)
+    if listeners is LISTENING_UNAVAILABLE:
+        # Same reasoning as _tcp_row -- and it matters more here, since the
+        # edge container is Traefik: an unreadable socket table must not
+        # make the page declare the proxy itself down.
+        return Row(container.name, KIND_EDGE, target, container.name, description, STATE_UNKNOWN)
     held = all(
         any(
-            listener.port == port and addrs_overlap(listener.addr, addr)
+            listener.proto == PROTO_TCP
+            and listener.port == port
+            and addrs_overlap(listener.addr, addr)
             for listener in listeners
         )
         for addr, port in container.published
     ) and bool(container.published)
-    target = ", ".join(f"{addr}:{port}" for addr, port in container.published)
     return Row(
         container.name,
         KIND_EDGE,
@@ -236,11 +255,14 @@ def find_findings(
 
     Container findings need container evidence and are withheld when Docker
     could not be read; route findings need Traefik's verdict and are withheld
-    when it could not be asked. Absence of evidence is never a finding.
+    when it could not be asked; the undeclared-tailnet-listener finding needs
+    the socket table and is withheld when that could not be read. Absence of
+    evidence is never a finding.
     """
     findings: list[Finding] = []
     docker_available = containers is not DOCKER_UNAVAILABLE
     traefik_available = routers is not TRAEFIK_UNAVAILABLE
+    listeners_available = listeners is not LISTENING_UNAVAILABLE
 
     if docker_available:
         for container in sorted(containers, key=lambda c: c.name):
@@ -282,17 +304,32 @@ def find_findings(
                     Finding(ROUTE_ERROR, f"router {name} is disabled: {router.error or 'no reason given'}")
                 )
 
-    if docker_available and tailnet_address is not None:
+    if docker_available and tailnet_address is not None and listeners_available:
         published = [pair for container in containers for pair in container.published]
-        for addr, port in sorted({(l.addr, l.port) for l in listeners if l.addr == tailnet_address}):
-            if port == own_port or EPHEMERAL_MIN <= port <= EPHEMERAL_MAX:
+        # `addrs_overlap`, not `==`: a process bound to 0.0.0.0 answers on the
+        # tailnet address too, and comparing the strings hid every wildcard
+        # bind on the host -- sshd included.
+        for addr, port in sorted(
+            {(l.addr, l.port) for l in listeners
+             if l.proto == PROTO_TCP and addrs_overlap(l.addr, tailnet_address)}
+        ):
+            # The page's own bind is only the page's own bind on the page's
+            # own address -- matching inventory._accounted's OWN_NAME rule --
+            # so a foreign process wildcard-bound to the same port is not
+            # exempted just because the port number matches.
+            if (port == own_port and addr == tailnet_address) or (
+                EPHEMERAL_MIN <= port <= EPHEMERAL_MAX
+            ):
                 continue
             if any(p == port and addrs_overlap(a, addr) for a, p in published):
                 continue
+            where = (
+                "every address including the tailnet" if addr == ANY_ADDR else "the tailnet"
+            )
             findings.append(
                 Finding(
                     UNDECLARED_TAILNET_LISTENER,
-                    f"{addr}:{port} is listening on the tailnet, and no container publishes it",
+                    f"{addr}:{port} is listening on {where}, and no container publishes it",
                 )
             )
 

@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer
 from harbor_console import webapp
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
 from harbor_console.tailnet import TailnetUnavailable
@@ -52,6 +52,7 @@ def test_collect_snapshot_gathers_every_source():
     assert snapshot.metrics == METRICS
     assert snapshot.docker_available is True
     assert snapshot.traefik_available is True
+    assert snapshot.listeners_available is True
     assert snapshot.health["parksmart"].up is True
     assert [r.name for r in snapshot.rows] == ["parksmart"]
     assert snapshot.rows[0].state == "UP"
@@ -97,6 +98,18 @@ def test_collect_snapshot_marks_docker_unavailable():
     assert snapshot.containers == ()
     assert snapshot.rows == ()
     assert snapshot.findings == ()
+
+
+def test_collect_snapshot_marks_listeners_unavailable():
+    # A third assertion here that no undeclared-tailnet-listener finding
+    # appears would be vacuous: the `collect` fixture's container publishes
+    # nothing, so no such finding would arise even with ordinary empty
+    # listeners. That guard is exercised directly, with a populated
+    # sentinel, in test_directory.py and test_inventory.py.
+    snapshot = collect(listeners=lambda: LISTENING_UNAVAILABLE)
+
+    assert snapshot.listeners_available is False
+    assert snapshot.inventory == ()
 
 
 def test_collect_snapshot_marks_traefik_unavailable():
@@ -333,3 +346,26 @@ def test_read_traefik_credentials_degrades_on_an_empty_file(tmp_path):
     path.write_text("\n", encoding="utf-8")
 
     assert webapp.read_traefik_credentials(path) is None
+
+
+def test_collect_snapshot_builds_the_listening_inventory():
+    snapshot = collect(listeners=lambda: (Listener("0.0.0.0", 22, None),))
+
+    assert [(e.addr, e.port, e.reach, e.accounted) for e in snapshot.inventory] == [
+        ("0.0.0.0", 22, "LAN + tailnet", "")
+    ]
+
+
+def test_the_inventory_knows_the_pages_own_bind():
+    snapshot = collect(listeners=lambda: (Listener("100.69.239.123", 8100, None),))
+
+    assert snapshot.inventory[0].accounted == "harbor-console-web"
+
+
+def test_the_inventory_is_unknown_when_docker_is_unavailable():
+    snapshot = collect(
+        listeners=lambda: (Listener("0.0.0.0", 1883, None),),
+        containers=lambda: DOCKER_UNAVAILABLE,
+    )
+
+    assert snapshot.inventory[0].accounted == "unknown"

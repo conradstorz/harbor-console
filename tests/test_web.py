@@ -11,6 +11,7 @@ from harbor_console.directory import (
     Finding,
     Row,
 )
+from harbor_console.inventory import REACH_ANY, REACH_LOOPBACK, REACH_TAILNET, Entry
 from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Snapshot
 
@@ -115,7 +116,7 @@ def test_page_does_not_call_an_unprobed_host_clean():
 
     assert "No findings" not in page
     assert "No services are declared" not in page
-    assert page.lower().count("nothing has been collected yet") == 2
+    assert page.lower().count("nothing has been collected yet") == 3
 
 
 def test_page_notes_when_docker_could_not_be_read():
@@ -128,6 +129,19 @@ def test_page_notes_when_traefik_could_not_be_read():
     page = web.render_page(snapshot(traefik_available=False)).decode()
 
     assert "Traefik could not be read" in page
+
+
+def test_page_notes_when_listeners_could_not_be_read():
+    page = web.render_page(snapshot(listeners_available=False)).decode()
+
+    assert "listening sockets could not be read" in page
+
+
+def test_inventory_section_does_not_claim_nothing_is_listening_when_unavailable():
+    page = web.render_page(snapshot(listeners_available=False, inventory=())).decode()
+
+    assert "Nothing is listening on a reachable address" not in page
+    assert "what is listening is unknown" in page
 
 
 def test_page_shows_a_collection_failure_banner():
@@ -146,11 +160,14 @@ def test_banner_does_not_claim_a_last_good_page_before_the_first_cycle():
 def test_page_escapes_every_field_that_originates_outside_this_project():
     evil = Row("<b>n</b>", KIND_HTTP, "https://x/?a=<s>", "<i>c</i>", "<u>d</u>", "UP")
     finding = Finding("<k>", "<d>")
+    socket = Entry("<p>", "<a>", 1, REACH_ANY, "<c>")
     metrics = dict(METRICS, hostname="<h>")
 
-    page = web.render_page(snapshot(rows=(evil,), findings=(finding,), metrics=metrics)).decode()
+    page = web.render_page(
+        snapshot(rows=(evil,), findings=(finding,), inventory=(socket,), metrics=metrics)
+    ).decode()
 
-    for raw in ("<b>n</b>", "<s>", "<i>c</i>", "<u>d</u>", "<k>", "<d>", "<h>"):
+    for raw in ("<b>n</b>", "<s>", "<i>c</i>", "<u>d</u>", "<k>", "<d>", "<h>", "<p>", "<a>", "<c>"):
         assert raw not in page
         assert escape(raw) in page
 
@@ -202,6 +219,83 @@ def test_handler_answers_500_rather_than_nothing_when_rendering_raises():
 
     assert status == 500
     assert body == b"internal error\n"
+
+
+SSHD = Entry("tcp", "0.0.0.0", 22, REACH_ANY, "")
+MQTT_SOCKET = Entry("tcp", "0.0.0.0", 1883, REACH_ANY, "ice-colder-mqtt")
+WIREGUARD = Entry("udp", "0.0.0.0", 41641, REACH_ANY, "")
+API = Entry("tcp", "127.0.0.1", 8081, REACH_LOOPBACK, "traefik")
+TAILNET_V6_SOCKET = Entry("tcp", "fd7a:115c:a1e0::7b37:ef7d", 51365, REACH_TAILNET, "")
+
+
+def test_page_lists_what_is_listening():
+    page = web.render_page(snapshot(inventory=(SSHD, MQTT_SOCKET, WIREGUARD))).decode()
+
+    assert "Listening" in page
+    assert "0.0.0.0:22" in page
+    assert "0.0.0.0:1883" in page
+    assert "ice-colder-mqtt" in page
+    assert escape(REACH_ANY) in page
+
+
+def test_page_shows_the_protocol_of_each_socket():
+    page = web.render_page(snapshot(inventory=(WIREGUARD,))).decode()
+
+    assert "<td>udp</td>" in page
+
+
+def test_loopback_sockets_go_in_their_own_table():
+    page = web.render_page(snapshot(inventory=(SSHD, API))).decode()
+
+    listening, loopback = page.split("Loopback only")
+    assert "0.0.0.0:22" in listening
+    assert "127.0.0.1:8081" not in listening
+    assert "127.0.0.1:8081" in loopback
+
+
+def test_a_socket_nothing_accounts_for_is_marked():
+    page = web.render_page(snapshot(inventory=(SSHD,))).decode()
+
+    assert 'class="unaccounted"' in page
+
+
+def test_an_accounted_socket_is_not_marked():
+    page = web.render_page(snapshot(inventory=(MQTT_SOCKET,))).decode()
+
+    assert 'class="unaccounted"' not in page
+
+
+def test_an_ipv6_address_is_bracketed():
+    page = web.render_page(snapshot(inventory=(TAILNET_V6_SOCKET,))).decode()
+
+    assert "[fd7a:115c:a1e0::7b37:ef7d]:51365" in page
+
+
+def test_the_loopback_table_is_omitted_when_nothing_is_on_loopback():
+    page = web.render_page(snapshot(inventory=(SSHD,))).decode()
+
+    assert "Loopback only" not in page
+
+
+def test_nothing_listening_on_a_reachable_address_says_so():
+    page = web.render_page(snapshot(inventory=(API,))).decode()
+
+    assert "Nothing is listening on a reachable address" in page
+
+
+def test_the_inventory_is_unknown_before_the_first_cycle():
+    page = web.render_page(snapshot(probed=False, inventory=())).decode()
+
+    assert "so what is listening is unknown" in page
+
+
+def test_an_unknown_attribution_is_not_marked_unaccounted():
+    unknown = Entry("tcp", "0.0.0.0", 1883, REACH_ANY, "unknown")
+
+    page = web.render_page(snapshot(inventory=(unknown,), docker_available=False)).decode()
+
+    assert "unknown" in page
+    assert 'class="unaccounted"' not in page
 
 
 def _get(handler_cls, path, method="GET"):

@@ -1,3 +1,4 @@
+from harbor_console import directory
 from harbor_console.directory import (
     BYPASSES_PROXY,
     KIND_EDGE,
@@ -5,10 +6,14 @@ from harbor_console.directory import (
     KIND_INTERNAL,
     KIND_TCP,
     ROUTE_ERROR,
+    STATE_DOWN,
+    STATE_UNKNOWN,
     UNDECLARED_CONTAINER,
     UNDECLARED_TAILNET_LISTENER,
     Finding,
     Row,
+    _edge_row,
+    _tcp_row,
     build_rows,
     declared_kind,
     find_findings,
@@ -16,7 +21,7 @@ from harbor_console.directory import (
     route_url,
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import Listener
+from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router
 
@@ -217,6 +222,40 @@ def test_edge_row_is_down_when_one_port_is_missing():
     assert rows[0].state == "DOWN"
 
 
+def test_tcp_row_is_unknown_when_listeners_are_unavailable():
+    # LISTENING_UNAVAILABLE is an empty tuple, so a naive search finds no
+    # match either way -- the row must not read that as "genuinely down".
+    mqtt = Container("ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    row = _tcp_row(mqtt, LISTENING_UNAVAILABLE, "")
+
+    assert row.state == STATE_UNKNOWN
+
+
+def test_tcp_row_is_still_down_with_real_but_empty_listeners():
+    mqtt = Container("ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
+
+    row = _tcp_row(mqtt, (), "")
+
+    assert row.state == STATE_DOWN
+
+
+def test_edge_row_is_unknown_when_listeners_are_unavailable():
+    edge = Container("traefik", (("100.69.239.123", 80), ("100.69.239.123", 443)), {"harbor.kind": "edge"})
+
+    row = _edge_row(edge, LISTENING_UNAVAILABLE, "")
+
+    assert row.state == STATE_UNKNOWN
+
+
+def test_edge_row_is_still_down_with_real_but_empty_listeners():
+    edge = Container("traefik", (("100.69.239.123", 80), ("100.69.239.123", 443)), {"harbor.kind": "edge"})
+
+    row = _edge_row(edge, (), "")
+
+    assert row.state == STATE_DOWN
+
+
 def test_undeclared_containers_produce_no_row():
     assert build_rows((Container("mystery", ()),), (), (), {}, probed=True) == ()
 
@@ -322,8 +361,30 @@ def test_a_tailnet_listener_a_container_publishes_is_not_reported():
     assert find_findings((edge,), (), (Listener(TAILNET, 443, None),), TAILNET) == ()
 
 
-def test_a_wildcard_listener_is_not_a_tailnet_finding():
-    assert find_findings((), (), (Listener("0.0.0.0", 22, None),), TAILNET) == ()
+def test_a_wildcard_listener_is_a_tailnet_finding():
+    findings = find_findings((), (), (Listener("0.0.0.0", 22, None),), TAILNET)
+
+    assert findings == (
+        Finding(
+            UNDECLARED_TAILNET_LISTENER,
+            "0.0.0.0:22 is listening on every address including the tailnet, "
+            "and no container publishes it",
+        ),
+    )
+
+
+def test_a_wildcard_listener_a_container_publishes_is_not_reported():
+    mqtt = Container(
+        "ice-colder-mqtt",
+        (("0.0.0.0", 1883),),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    assert find_findings((mqtt,), (), (Listener("0.0.0.0", 1883, None),), TAILNET) == ()
+
+
+def test_a_loopback_listener_is_not_a_tailnet_finding():
+    assert find_findings((), (), (Listener("127.0.0.1", 8081, None),), TAILNET) == ()
 
 
 def test_an_ephemeral_tailnet_port_is_not_reported():
@@ -334,10 +395,47 @@ def test_tailnet_findings_are_withheld_without_a_tailnet_address():
     assert find_findings((), (), (Listener(TAILNET, 8443, None),), None) == ()
 
 
+def test_tailnet_findings_are_withheld_when_listeners_are_unavailable(monkeypatch):
+    # The socket table could not be read at all -- distinct from "nothing is
+    # listening" -- so reporting zero undeclared listeners would claim a
+    # clean host the collector never actually saw.
+    #
+    # LISTENING_UNAVAILABLE is itself an empty tuple, so a naive test that
+    # just hands it to find_findings passes whether or not the guard exists
+    # -- the loop finds nothing to report either way. A populated instance
+    # of the sentinel's own class makes the guard's absence observable, but
+    # `is LISTENING_UNAVAILABLE` is an identity check against the specific
+    # singleton, and a new instance is never identical to it -- so the
+    # sentinel directory.py checks against is patched to be that same new
+    # instance, matching how the real collector's one-and-only sentinel
+    # object is always what the identity check compares against.
+    populated_unavailable = type(LISTENING_UNAVAILABLE)((Listener(TAILNET, 8443, None),))
+    monkeypatch.setattr(directory, "LISTENING_UNAVAILABLE", populated_unavailable)
+
+    findings = find_findings((), (), populated_unavailable, TAILNET)
+
+    assert findings == ()
+
+
 def test_the_pages_own_port_is_not_an_undeclared_listener():
     findings = find_findings((), (), (Listener(TAILNET, 8100, None),), TAILNET, own_port=8100)
 
     assert findings == ()
+
+
+def test_a_wildcard_bind_on_the_pages_own_port_is_still_reported():
+    # The page's own bind is only the page's own bind on the page's own
+    # address (see inventory._accounted). A foreign process wildcard-bound
+    # to the same port must not be swallowed by the own-port exemption.
+    findings = find_findings((), (), (Listener("0.0.0.0", 8100, None),), TAILNET, own_port=8100)
+
+    assert findings == (
+        Finding(
+            UNDECLARED_TAILNET_LISTENER,
+            "0.0.0.0:8100 is listening on every address including the tailnet, "
+            "and no container publishes it",
+        ),
+    )
 
 
 def test_findings_come_in_a_stable_order():
@@ -350,3 +448,31 @@ def test_findings_come_in_a_stable_order():
     kinds = [f.kind for f in find_findings(containers, (), listeners, TAILNET)]
 
     assert kinds == [UNDECLARED_CONTAINER, BYPASSES_PROXY, ROUTE_ERROR, UNDECLARED_TAILNET_LISTENER]
+
+
+def test_a_udp_socket_does_not_make_a_tcp_row_listening():
+    mqtt = Container(
+        "ice-colder-mqtt",
+        (("0.0.0.0", 1883),),
+        {"harbor.kind": "tcp", "harbor.port": "1883"},
+    )
+
+    rows = build_rows(
+        (mqtt,), (), (Listener("0.0.0.0", 1883, None, "udp"),), {}, probed=True
+    )
+
+    assert rows[0].state == "DOWN"
+
+
+def test_a_udp_socket_does_not_make_an_edge_row_listening():
+    edge = Container("traefik", ((TAILNET, 443),), {"harbor.kind": "edge"})
+
+    rows = build_rows(
+        (edge,), (), (Listener(TAILNET, 443, None, "udp"),), {}, probed=True
+    )
+
+    assert rows[0].state == "DOWN"
+
+
+def test_a_udp_tailnet_listener_is_not_a_finding():
+    assert find_findings((), (), (Listener(TAILNET, 1883, None, "udp"),), TAILNET) == ()
