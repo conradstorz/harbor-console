@@ -81,6 +81,14 @@ def test_the_pages_own_bind_is_attributed_to_the_page():
     assert result[0].accounted == OWN_NAME
 
 
+def test_a_foreign_bind_on_the_pages_own_port_is_not_attributed_to_the_page():
+    # Same port, different address: this is not the page's own bind, and
+    # must not be attributed to it just because the port number matches.
+    result = build_inventory((Listener("0.0.0.0", 8100, None),), (), TAILNET, 8100)
+
+    assert result[0].accounted != OWN_NAME
+
+
 def test_a_readable_pid_is_the_fallback_attribution():
     result = build_inventory((Listener("0.0.0.0", 22, 812),), (), TAILNET, 8100)
 
