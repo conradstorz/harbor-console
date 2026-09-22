@@ -1,3 +1,4 @@
+from harbor_console import inventory
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.inventory import (
     OWN_NAME,
@@ -132,8 +133,21 @@ def test_udp_carries_its_protocol_through():
     assert result[0].reach == REACH_ANY
 
 
-def test_the_sentinel_yields_no_entries_without_claiming_the_host_is_empty():
-    result = build_inventory(LISTENING_UNAVAILABLE, (), TAILNET, 8100)
+def test_the_sentinel_yields_no_entries_without_claiming_the_host_is_empty(monkeypatch):
+    # LISTENING_UNAVAILABLE is itself an empty tuple, so this cannot tell
+    # the sentinel apart from a plain empty tuple -- it would pass with no
+    # guard at all. A populated instance of the sentinel's own class proves
+    # build_inventory tolerates the sentinel rather than treating its
+    # contents as real sockets. The identity check inside build_inventory
+    # compares against the specific singleton object, which a new instance
+    # is never identical to, so the module's own reference is patched to be
+    # that same populated instance -- matching how the real collector's
+    # one-and-only sentinel object is always what the check compares
+    # against.
+    populated_unavailable = type(LISTENING_UNAVAILABLE)((Listener(TAILNET, 8443, None),))
+    monkeypatch.setattr(inventory, "LISTENING_UNAVAILABLE", populated_unavailable)
+
+    result = build_inventory(populated_unavailable, (), TAILNET, 8100)
 
     assert result == ()
 

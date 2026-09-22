@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
-from harbor_console.listening import ANY_ADDR, IPV6_ANY, Listener, addrs_overlap
+from harbor_console.listening import (
+    ANY_ADDR,
+    IPV6_ANY,
+    LISTENING_UNAVAILABLE,
+    Listener,
+    addrs_overlap,
+)
 
 #: Who can reach a socket, given the address it is bound to.
 REACH_LOOPBACK = "loopback"
@@ -119,6 +125,11 @@ def build_inventory(
     own_port: int | None = None,
 ) -> tuple[Entry, ...]:
     """One entry per listening socket, ordered as the collector orders them."""
+    if listeners is LISTENING_UNAVAILABLE:
+        # The socket table could not be read: there is nothing to report an
+        # entry for, and reporting an empty inventory would claim a clean
+        # host the collector never actually saw.
+        return ()
     docker_available = containers is not DOCKER_UNAVAILABLE
     entries = [
         Entry(
