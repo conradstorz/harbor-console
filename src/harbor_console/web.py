@@ -60,8 +60,8 @@ def render_page(snapshot: Snapshot) -> bytes:
     if not snapshot.listeners_available:
         parts.append(
             "<p class=\"banner\">The host's listening sockets could not be read, so "
-            "the inventory below is missing and undeclared tailnet listeners are not "
-            "reported.</p>"
+            "the inventory below is missing, undeclared tailnet listeners are not "
+            "reported, and tcp and edge rows show UNKNOWN rather than a state.</p>"
         )
     parts.append(_host_table(snapshot))
     parts.append(_directory_table(snapshot))
