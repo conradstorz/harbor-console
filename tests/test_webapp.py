@@ -101,11 +101,15 @@ def test_collect_snapshot_marks_docker_unavailable():
 
 
 def test_collect_snapshot_marks_listeners_unavailable():
+    # A third assertion here that no undeclared-tailnet-listener finding
+    # appears would be vacuous: the `collect` fixture's container publishes
+    # nothing, so no such finding would arise even with ordinary empty
+    # listeners. That guard is exercised directly, with a populated
+    # sentinel, in test_directory.py and test_inventory.py.
     snapshot = collect(listeners=lambda: LISTENING_UNAVAILABLE)
 
     assert snapshot.listeners_available is False
     assert snapshot.inventory == ()
-    assert all(f.kind != "undeclared-tailnet-listener" for f in snapshot.findings)
 
 
 def test_collect_snapshot_marks_traefik_unavailable():
