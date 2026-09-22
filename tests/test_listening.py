@@ -1,12 +1,30 @@
+import socket
 from types import SimpleNamespace
 
 import psutil
 
-from harbor_console.listening import ANY_ADDR, Listener, addrs_overlap, listening_sockets
+from harbor_console.listening import (
+    ANY_ADDR,
+    PROTO_TCP,
+    PROTO_UDP,
+    Listener,
+    addrs_overlap,
+    listening_sockets,
+)
 
 
-def conn(ip, port, status=psutil.CONN_LISTEN, pid=None):
-    return SimpleNamespace(laddr=SimpleNamespace(ip=ip, port=port), status=status, pid=pid)
+def conn(ip, port, status=psutil.CONN_LISTEN, pid=None, sock_type=socket.SOCK_STREAM, raddr=()):
+    return SimpleNamespace(
+        laddr=SimpleNamespace(ip=ip, port=port),
+        status=status,
+        pid=pid,
+        type=sock_type,
+        raddr=raddr,
+    )
+
+
+def udp(ip, port, pid=None, raddr=()):
+    return conn(ip, port, status=psutil.CONN_NONE, pid=pid, sock_type=socket.SOCK_DGRAM, raddr=raddr)
 
 
 def test_returns_only_listening_sockets():
@@ -33,7 +51,9 @@ def test_other_ipv6_addresses_are_left_alone():
 
 
 def test_a_socket_with_no_local_address_is_skipped():
-    conns = [SimpleNamespace(laddr=(), status=psutil.CONN_LISTEN, pid=None)]
+    conns = [
+        SimpleNamespace(laddr=(), status=psutil.CONN_LISTEN, pid=None, type=socket.SOCK_STREAM, raddr=())
+    ]
 
     assert listening_sockets(net_connections=lambda kind: conns) == ()
 
@@ -115,3 +135,59 @@ def test_same_specific_address_overlaps():
 
 def test_different_specific_addresses_do_not_overlap():
     assert not addrs_overlap("127.0.0.1", "100.69.239.123")
+
+
+def test_the_collector_asks_for_both_protocols():
+    seen = []
+
+    def net_connections(kind):
+        seen.append(kind)
+        return []
+
+    listening_sockets(net_connections=net_connections)
+
+    assert seen == ["inet"]
+
+
+def test_a_bound_udp_socket_is_collected():
+    result = listening_sockets(net_connections=lambda kind: [udp("0.0.0.0", 41641, pid=7)])
+
+    assert result == (Listener("0.0.0.0", 41641, 7, PROTO_UDP),)
+
+
+def test_a_connected_udp_socket_is_not_collected():
+    conns = [udp("192.168.86.26", 68, raddr=SimpleNamespace(ip="192.168.86.1", port=67))]
+
+    assert listening_sockets(net_connections=lambda kind: conns) == ()
+
+
+def test_a_udp_socket_does_not_need_the_listen_state():
+    result = listening_sockets(net_connections=lambda kind: [udp("127.0.0.53", 53)])
+
+    assert result[0].proto == PROTO_UDP
+
+
+def test_tcp_still_requires_the_listen_state():
+    conns = [conn("10.0.0.1", 51234, status=psutil.CONN_ESTABLISHED)]
+
+    assert listening_sockets(net_connections=lambda kind: conns) == ()
+
+
+def test_tcp_defaults_to_the_tcp_proto():
+    result = listening_sockets(net_connections=lambda kind: [conn("0.0.0.0", 22)])
+
+    assert result == (Listener("0.0.0.0", 22, None, PROTO_TCP),)
+
+
+def test_the_same_port_on_both_protocols_is_two_listeners():
+    conns = [udp("127.0.0.53", 53), conn("127.0.0.53", 53)]
+
+    result = listening_sockets(net_connections=lambda kind: conns)
+
+    assert [item.proto for item in result] == [PROTO_TCP, PROTO_UDP]
+
+
+def test_the_ipv6_wildcard_is_normalised_for_udp_too():
+    result = listening_sockets(net_connections=lambda kind: [udp("::", 41641)])
+
+    assert result == (Listener("0.0.0.0", 41641, None, PROTO_UDP),)

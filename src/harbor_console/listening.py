@@ -8,6 +8,7 @@ from outside.
 
 from __future__ import annotations
 
+import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -22,6 +23,12 @@ IPV4_ANY = "0.0.0.0"
 #: The address that contends with every other on its host.
 ANY_ADDR = IPV4_ANY
 
+#: The two protocols a listening socket can speak. `proto` defaults to tcp
+#: because tcp is all this collector gathered before UDP was added, so every
+#: `Listener` built positionally by older code still means what it said.
+PROTO_TCP = "tcp"
+PROTO_UDP = "udp"
+
 
 @dataclass(frozen=True)
 class Listener:
@@ -30,12 +37,13 @@ class Listener:
     addr: str
     port: int
     pid: int | None
+    proto: str = PROTO_TCP
 
 
 def listening_sockets(
     net_connections: Callable[..., object] = psutil.net_connections,
 ) -> tuple[Listener, ...]:
-    """Collect listening TCP sockets.
+    """Collect listening TCP sockets and bound UDP sockets.
 
     Two distinct failure modes, both degrading rather than raising:
 
@@ -49,24 +57,32 @@ def listening_sockets(
       missing one listener.
     """
     try:
-        connections = net_connections(kind="tcp")
+        connections = net_connections(kind="inet")
     except Exception:
         return ()
 
     found: set[Listener] = set()
     for connection in connections:  # type: ignore[union-attr]
         try:
-            if connection.status != psutil.CONN_LISTEN:
+            proto = PROTO_UDP if connection.type == socket.SOCK_DGRAM else PROTO_TCP
+            if proto == PROTO_TCP:
+                if connection.status != psutil.CONN_LISTEN:
+                    continue
+            elif connection.raddr:
+                # UDP has no LISTEN state. A datagram socket with a peer is
+                # a conversation, not a service waiting to be spoken to.
                 continue
             laddr = connection.laddr
             if not laddr:
                 continue
             addr = IPV4_ANY if laddr.ip == IPV6_ANY else laddr.ip
-            found.add(Listener(addr=addr, port=int(laddr.port), pid=connection.pid))
+            found.add(
+                Listener(addr=addr, port=int(laddr.port), pid=connection.pid, proto=proto)
+            )
         except (AttributeError, TypeError, ValueError):
             continue
 
-    return tuple(sorted(found, key=lambda item: (item.port, item.addr)))
+    return tuple(sorted(found, key=lambda item: (item.port, item.addr, item.proto)))
 
 
 def addrs_overlap(a: str, b: str) -> bool:
