@@ -377,4 +377,4 @@ def test_a_udp_socket_does_not_make_an_edge_row_listening():
 
 
 def test_a_udp_tailnet_listener_is_not_a_finding():
-    assert find_findings((), (), (Listener(TAILNET, 41641, None, "udp"),), TAILNET) == ()
+    assert find_findings((), (), (Listener(TAILNET, 1883, None, "udp"),), TAILNET) == ()
