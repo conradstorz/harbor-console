@@ -80,9 +80,15 @@ def test_format_usage_pairs_the_bytes_with_the_percent():
 
 
 def test_swap_summary_reports_used_of_total():
-    swap = SimpleNamespace(total=8 * 1024**3, used=2 * 1024**3, percent=25.0)
+    # percent is deliberately NOT total * used / 100 (which would be 25.0%
+    # here): total * percent / 100 = 2.4 GiB, while swap.used = 2.0 GiB. That
+    # divergence is what makes the assertion discriminate between reading
+    # swap.used directly (correct) and recomputing it from the percentage
+    # (wrong) -- with a consistent triple the two implementations agree and
+    # the test cannot tell them apart.
+    swap = SimpleNamespace(total=8 * 1024**3, used=2 * 1024**3, percent=30.0)
 
-    assert system.get_swap_summary(swap_memory=lambda: swap) == "2.0 / 8.0 GiB (25.0%)"
+    assert system.get_swap_summary(swap_memory=lambda: swap) == "2.0 / 8.0 GiB (30.0%)"
 
 
 def test_swap_summary_says_none_configured_when_there_is_no_swap():
