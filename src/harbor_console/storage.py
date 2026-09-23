@@ -122,11 +122,16 @@ def image_mounts(
         found = list(partitions(all=False))
     except Exception:
         return []
-    count = sum(1 for p in found if getattr(p, "fstype", "") in IMAGE_FSTYPES)
+    image_mounts_found = [p for p in found if getattr(p, "fstype", "") in IMAGE_FSTYPES]
+    count = len(image_mounts_found)
     if not count:
         return []
+    fstypes = sorted(set(getattr(p, "fstype", "") for p in image_mounts_found))
+    fstype_str = ", ".join(fstypes)
+    mount_word = "mount" if count == 1 else "mounts"
     return [
         StorageEntry(
-            label="Image mounts", note=f"{count} image mounts (squashfs, read-only)"
+            label="Image mounts",
+            note=f"{count} image {mount_word} ({fstype_str}, read-only)",
         )
     ]

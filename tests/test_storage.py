@@ -127,3 +127,37 @@ def test_read_only_real_filesystems_are_not_collapsed():
 
     assert [e.label for e in entries] == ["/boot/efi"]
     assert image_mounts(partitions=partitions) == []
+
+
+def test_image_mounts_singular_wording_for_one_mount():
+    """1 mount uses singular 'mount', not plural 'mounts'."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-root", "/", "ext4"),
+        part("/dev/loop0", "/snap/core20/2866", "squashfs", opts="ro"),
+    ]
+
+    entries = image_mounts(partitions=partitions)
+
+    assert len(entries) == 1
+    assert format_entry(entries[0]) == "1 image mount (squashfs, read-only)"
+
+
+def test_image_mounts_mixed_fstypes_sorted_alphabetically():
+    """Multiple different fstypes are listed sorted and comma-separated."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-root", "/", "ext4"),
+        part("/dev/loop0", "/snap/core20/2866", "squashfs", opts="ro"),
+        part("/dev/loop1", "/snap/lxd/40575", "squashfs", opts="ro"),
+        part("/dev/loop2", "/snap/ubuntu-core/13486", "squashfs", opts="ro"),
+        part("/dev/loop3", "/snap/other/1", "squashfs", opts="ro"),
+        part("/dev/loop4", "/snap/other/2", "squashfs", opts="ro"),
+        part("/dev/loop5", "/snap/other/3", "squashfs", opts="ro"),
+        part("/dev/loop6", "/snap/other/4", "squashfs", opts="ro"),
+        part("/dev/loop7", "/snap/other/5", "squashfs", opts="ro"),
+        part("/dev/loop8", "/sys/kernel/security", "erofs", opts="ro"),
+    ]
+
+    entries = image_mounts(partitions=partitions)
+
+    assert len(entries) == 1
+    assert format_entry(entries[0]) == "9 image mounts (erofs, squashfs, read-only)"
