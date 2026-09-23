@@ -199,7 +199,9 @@ def test_image_mounts_collapse_to_one_counted_line():
     entries = image_mounts(partitions=partitions)
 
     assert len(entries) == 1
-    assert format_entry(entries[0]) == "2 image mounts (squashfs, read-only)"
+    assert entries[0].label == "2 image mounts"
+    assert entries[0].note == "(squashfs, read-only)"
+    assert format_entry(entries[0]) == "(squashfs, read-only)"
 
 
 def test_image_mounts_are_absent_when_there_are_none():
@@ -230,7 +232,8 @@ def test_image_mounts_singular_wording_for_one_mount():
     entries = image_mounts(partitions=partitions)
 
     assert len(entries) == 1
-    assert format_entry(entries[0]) == "1 image mount (squashfs, read-only)"
+    assert entries[0].label == "1 image mount"
+    assert entries[0].note == "(squashfs, read-only)"
 
 
 def test_image_mounts_mixed_fstypes_sorted_alphabetically():
@@ -251,7 +254,8 @@ def test_image_mounts_mixed_fstypes_sorted_alphabetically():
     entries = image_mounts(partitions=partitions)
 
     assert len(entries) == 1
-    assert format_entry(entries[0]) == "9 image mounts (erofs, squashfs, read-only)"
+    assert entries[0].label == "9 image mounts"
+    assert entries[0].note == "(erofs, squashfs, read-only)"
 
 
 MOUNTS = """\
@@ -302,6 +306,32 @@ def test_remote_mounts_unreadable_is_unavailable_not_empty(tmp_path):
     assert len(entries) == 1
     assert entries[0].label == "remote mounts"
     assert entries[0].note == NOTE_UNAVAILABLE
+
+
+def test_smbfs_mounts_are_named_by_remote_and_never_measured_by_local(tmp_path):
+    """smbfs is a remote fstype alongside cifs/smb3/nfs/nfs4/fuse.sshfs."""
+    path = tmp_path / "mounts"
+    path.write_text("//nas/share /mnt/smb smbfs rw 0 0\n")
+
+    entries = remote_mounts(mounts_path=str(path))
+
+    assert [e.label for e in entries] == ["/mnt/smb"]
+    assert entries[0].note == NOTE_REMOTE
+
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-root", "/", "ext4"),
+        part("//nas/share", "/mnt/smb", "smbfs"),
+    ]
+    measured = []
+
+    def recording(mountpoint):
+        measured.append(mountpoint)
+        return usage(65 * GIB, 98 * GIB, 70.0)
+
+    fs_entries = local_filesystems(partitions=partitions, usage=recording)
+
+    assert measured == ["/"]
+    assert [e.label for e in fs_entries] == ["/"]
 
 
 LSBLK_TREE = {
@@ -406,6 +436,31 @@ def test_block_devices_excludes_lvm_members_parents_and_optical():
     assert labels == ["VG ubuntu-vg"]
     for excluded in ("sda", "sda3", "sr0", "sr1", "loop0"):
         assert excluded not in labels
+
+
+def test_block_devices_reports_full_slack_for_pv_with_no_logical_volumes():
+    """A PV given to LVM but with no LVs yet is entirely unallocated slack."""
+    tree = {
+        "blockdevices": [
+            {
+                "name": "sda3",
+                "type": "part",
+                "size": 2997315698688,
+                "fstype": "LVM2_member",
+                "mountpoints": [None],
+                "children": [],
+            }
+        ]
+    }
+
+    entries = block_devices(run=fake_lsblk(tree))
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.note == NOTE_UNALLOCATED
+    assert entry.total == 2997315698688
+    # No child to derive a VG name from, so the label falls back to the raw device name.
+    assert entry.label == "sda3"
 
 
 def test_block_devices_reports_a_stray_disk():

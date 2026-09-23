@@ -29,7 +29,7 @@ from harbor_console.system import format_bytes, format_usage
 #: `disk_usage` call. psutil's `all=False` already omits them on Linux (they are
 #: nodev filesystems), but the promise that nothing here blocks on a dead server
 #: is this module's own rather than a dependency's implementation detail.
-REMOTE_FSTYPES = frozenset({"cifs", "smb3", "nfs", "nfs4", "fuse.sshfs"})
+REMOTE_FSTYPES = frozenset({"cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.sshfs"})
 
 #: Read-only image mounts -- snaps and the like. Matched by fstype rather than
 #: by the read-only flag: `/boot/efi` reports `ro` among its options and is real
@@ -157,8 +157,8 @@ def image_mounts(
     mount_word = "mount" if count == 1 else "mounts"
     return [
         StorageEntry(
-            label="Image mounts",
-            note=f"{count} image {mount_word} ({fstype_str}, read-only)",
+            label=f"{count} image {mount_word}",
+            note=f"({fstype_str}, read-only)",
         )
     ]
 
@@ -358,7 +358,7 @@ def block_devices(
         name = node.get("name") or ""
         if not isinstance(size, int):
             continue
-        if fstype == "LVM2_member" and children:
+        if fstype == "LVM2_member":
             allocated = sum(c["size"] for c in children if isinstance(c.get("size"), int))
             group = next(
                 (vg for vg in (_vg_name(c.get("name") or "") for c in children) if vg),
