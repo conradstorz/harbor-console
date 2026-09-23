@@ -113,7 +113,6 @@ def collect_system_metrics() -> dict[str, str | float | int]:
         "hostname": socket.gethostname(),
         "uptime": format_uptime(uptime_seconds),
         "cpu_utilization": psutil.cpu_percent(interval=None),
-        "memory_utilization": memory.percent,
         # Used is total - available, the basis psutil's own `percent` uses, so
         # the bytes and the percentage on one line agree with each other.
         "memory_summary": format_usage(
