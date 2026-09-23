@@ -15,7 +15,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +44,7 @@ NOTE_UNAVAILABLE = "unavailable"
 NOTE_REMOTE = "remote -- not measured"
 NOTE_UNALLOCATED = "unallocated"
 NOTE_NO_FILESYSTEM = "no filesystem mounted"
+NOTE_PERMISSION_DENIED = "permission denied"
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ def format_entry(entry: StorageEntry) -> str:
 def local_filesystems(
     partitions: Callable[..., object] = psutil.disk_partitions,
     usage: Callable[[str], object] = psutil.disk_usage,
+    sizes: Mapping[str, int] | None = None,
 ) -> list[StorageEntry]:
     """Every mounted local filesystem, root first, then by mountpoint.
 
@@ -81,6 +84,15 @@ def local_filesystems(
     `unavailable` and the rows around it survive. Failing to enumerate at all
     yields one `unavailable` entry rather than an empty list -- nothing found
     and nothing looked at must not render alike (ADR 18).
+
+    `usage()` raising `PermissionError` is distinguished from any other
+    failure (`NOTE_PERMISSION_DENIED` vs `NOTE_UNAVAILABLE`), because it is
+    the one failure mode `sizes` -- typically `mounted_device_sizes()` --
+    can answer without privilege: a mount `os.statvfs` cannot read for this
+    user often still has a size `lsblk` already knows. When `sizes` has the
+    mountpoint, the entry keeps that size (the size-only render shape);
+    otherwise it stays note-only, exactly as any other unmeasurable mount
+    does.
     """
     try:
         found = list(partitions(all=False))
@@ -103,8 +115,22 @@ def local_filesystems(
                     percent=float(measured.percent),  # type: ignore[attr-defined]
                 )
             )
+        except PermissionError:
+            entries.append(
+                StorageEntry(
+                    label=mountpoint,
+                    total=(sizes.get(mountpoint) if sizes else None),
+                    note=NOTE_PERMISSION_DENIED,
+                )
+            )
         except Exception:
-            entries.append(StorageEntry(label=mountpoint, note=NOTE_UNAVAILABLE))
+            entries.append(
+                StorageEntry(
+                    label=mountpoint,
+                    total=(sizes.get(mountpoint) if sizes else None),
+                    note=NOTE_UNAVAILABLE,
+                )
+            )
     entries.sort(key=lambda e: (e.label != "/", e.label))
     return entries
 
@@ -205,6 +231,101 @@ def _walk(nodes: list) -> list[dict]:
     return flat
 
 
+#: A single, unkeyed 60-second cache for the last `_lsblk_nodes` read. Not
+#: keyed on `run` or `timeout` -- this project runs one host, one `lsblk`
+#: invocation shape, and block topology does not change at 1 Hz. Tests that
+#: fake `lsblk` and need a fresh read must call `_clear_lsblk_cache()` first;
+#: see `_lsblk_nodes`.
+_LSBLK_CACHE_TTL_SECONDS = 60.0
+_lsblk_cache: dict[str, object] = {"result": None, "timestamp": None}
+
+
+def _clear_lsblk_cache() -> None:
+    """Reset the lsblk read cache.
+
+    Tests that fake `lsblk` must call this before a call whose result should
+    reflect that fake rather than an earlier cached read -- the cache is not
+    keyed on `run` identity, so without a reset a stale result from an
+    earlier call is returned as-is, even one made with a different `run`.
+    """
+    _lsblk_cache["result"] = None
+    _lsblk_cache["timestamp"] = None
+
+
+def _read_lsblk_nodes(run: Callable[..., object], timeout: float) -> list[dict] | None:
+    """One uncached `lsblk` read, flattened. `None` on any failure to read it."""
+    try:
+        completed = run(
+            ["lsblk", "-J", "-b", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(completed, "returncode", 1) != 0:
+        return None
+    try:
+        tree = json.loads(getattr(completed, "stdout", "") or "")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(tree, dict) or not isinstance(tree.get("blockdevices"), list):
+        return None
+    return _walk(tree["blockdevices"])
+
+
+def _lsblk_nodes(run: Callable[..., object], timeout: float) -> list[dict] | None:
+    """The flat, walked `lsblk` block-device tree, cached for 60 seconds.
+
+    Returns `None` when `lsblk` could not be read at all -- missing binary,
+    non-zero exit, timeout, or output that is not the expected JSON shape
+    (see `_read_lsblk_nodes`). Both `block_devices` and
+    `mounted_device_sizes` read through here rather than duplicating the
+    subprocess call, so they share one cached read per TTL window.
+
+    The cache is a single module-level slot, not keyed on `run` or `timeout`
+    -- see `_clear_lsblk_cache`. Tests that fake `lsblk` must reset it first
+    if they need this call to actually invoke their fake.
+    """
+    now = time.monotonic()
+    timestamp = _lsblk_cache["timestamp"]
+    if timestamp is not None and now - timestamp < _LSBLK_CACHE_TTL_SECONDS:  # type: ignore[operator]
+        return _lsblk_cache["result"]  # type: ignore[return-value]
+
+    result = _read_lsblk_nodes(run, timeout)
+    _lsblk_cache["result"] = result
+    _lsblk_cache["timestamp"] = now
+    return result
+
+
+def mounted_device_sizes(
+    run: Callable[..., object] = subprocess.run,
+    timeout: float = LSBLK_TIMEOUT_SECONDS,
+) -> dict[str, int]:
+    """Mountpoint -> device size in bytes, from the same cached `lsblk` read.
+
+    A node can have multiple mountpoints; every non-null one maps to that
+    node's size. `{}` when `lsblk` could not be read, or when nothing in the
+    tree has both a mountpoint and a known size. This is how
+    `local_filesystems` can still report a size for a mount `disk_usage`
+    cannot read unprivileged: `lsblk` already knows the device's size.
+    """
+    nodes = _lsblk_nodes(run, timeout)
+    if nodes is None:
+        return {}
+
+    sizes: dict[str, int] = {}
+    for node in nodes:
+        size = node.get("size")
+        if not isinstance(size, int):
+            continue
+        for mountpoint in node.get("mountpoints") or []:
+            if mountpoint:
+                sizes[mountpoint] = size
+    return sizes
+
+
 def block_devices(
     run: Callable[..., object] = subprocess.run,
     timeout: float = LSBLK_TIMEOUT_SECONDS,
@@ -217,32 +338,20 @@ def block_devices(
     approximate by a few mebibytes of LVM metadata and is the only way to see,
     without privileges, whether a filesystem has room to grow.
 
-    Every failure is the same outage and yields no entries, the way
-    `get_docker_container_count()` yields `0`: a missing binary, a non-zero
-    exit, a timeout, or output that is not the JSON shape expected.
+    A missing or failing `lsblk` -- missing binary, non-zero exit, a timeout,
+    or output that is not the JSON shape expected -- yields one
+    `unavailable` sentinel entry rather than an empty list, the same rule
+    `local_filesystems` and `remote_mounts` already follow: nothing found and
+    nothing looked at must not render alike (ADR 18). `lsblk` running fine
+    and simply reporting nothing relevant still yields `[]`.
     """
-    try:
-        completed = run(
-            ["lsblk", "-J", "-b", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if getattr(completed, "returncode", 1) != 0:
-        return []
-    try:
-        tree = json.loads(getattr(completed, "stdout", "") or "")
-    except (TypeError, ValueError):
-        return []
-    if not isinstance(tree, dict) or not isinstance(tree.get("blockdevices"), list):
-        return []
+    nodes = _lsblk_nodes(run, timeout)
+    if nodes is None:
+        return [StorageEntry(label="block devices", note=NOTE_UNAVAILABLE)]
 
     slack: list[StorageEntry] = []
     stray: list[StorageEntry] = []
-    for node in _walk(tree["blockdevices"]):
+    for node in nodes:
         children = [c for c in (node.get("children") or []) if isinstance(c, dict)]
         fstype = node.get("fstype") or ""
         size = node.get("size")
@@ -274,7 +383,9 @@ def block_devices(
 
 
 def collect_storage(
-    filesystems: Callable[[], list[StorageEntry]] = local_filesystems,
+    filesystems: Callable[[], list[StorageEntry]] = lambda: local_filesystems(
+        sizes=mounted_device_sizes()
+    ),
     blocks: Callable[[], list[StorageEntry]] = block_devices,
     remote: Callable[[], list[StorageEntry]] = remote_mounts,
     images: Callable[[], list[StorageEntry]] = image_mounts,
@@ -283,6 +394,8 @@ def collect_storage(
 
     Measured filesystems first, because they are what anyone came to read; then
     the layer underneath them, then what is merely named, then the collapsed
-    image-mount line last.
+    image-mount line last. `filesystems`' default sources its size-only
+    fallback from `mounted_device_sizes()`, so a mount `disk_usage` cannot
+    read unprivileged can still report the size `lsblk` already knows.
     """
     return (*filesystems(), *blocks(), *remote(), *images())

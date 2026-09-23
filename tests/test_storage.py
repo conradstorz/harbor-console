@@ -2,20 +2,41 @@ import json
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 from harbor_console.storage import (
     LSBLK_TIMEOUT_SECONDS,
     NOTE_NO_FILESYSTEM,
+    NOTE_PERMISSION_DENIED,
     NOTE_REMOTE,
     NOTE_UNALLOCATED,
     NOTE_UNAVAILABLE,
     StorageEntry,
+    _clear_lsblk_cache,
     block_devices,
     collect_storage,
     format_entry,
     image_mounts,
     local_filesystems,
+    mounted_device_sizes,
     remote_mounts,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_lsblk_cache():
+    """Every test starts with an empty lsblk cache.
+
+    The cache is a single, unkeyed module-level slot (see
+    `storage._clear_lsblk_cache`'s docstring) -- without this, a `block_devices`
+    or `mounted_device_sizes` call in one test could silently reuse a fake
+    `lsblk` result cached by an earlier test in this file, since pytest runs a
+    file's tests in source order. Tests that specifically exercise caching
+    behavior make more than one call within their own body and reset (or not)
+    exactly where the test cares.
+    """
+    _clear_lsblk_cache()
+    yield
 
 
 def part(device, mountpoint, fstype, opts="rw,relatime"):
@@ -61,6 +82,7 @@ def test_local_filesystems_measures_every_mount_root_first():
 
 
 def test_local_filesystems_survives_one_unmeasurable_mount():
+    """A PermissionError with no known size is note-only, but with its own note."""
     partitions = lambda all=False: [
         part("/dev/mapper/vg-root", "/", "ext4"),
         part("/dev/sdz1", "/mnt/broken", "ext4"),
@@ -74,8 +96,68 @@ def test_local_filesystems_survives_one_unmeasurable_mount():
     entries = local_filesystems(partitions=partitions, usage=flaky)
 
     assert [e.label for e in entries] == ["/", "/mnt/broken"]
-    assert entries[1].note == NOTE_UNAVAILABLE
+    assert entries[1].note == NOTE_PERMISSION_DENIED
     assert entries[1].total is None
+
+
+def test_local_filesystems_permission_denied_with_known_size_is_size_only():
+    """The motivating case: /home/arm/media, unreadable unprivileged, sized by lsblk."""
+    partitions = lambda all=False: [part("/dev/mapper/vg-media", "/home/arm/media", "ext4")]
+
+    def denied(_mp):
+        raise PermissionError("Permission denied: '/home/arm/media'")
+
+    entries = local_filesystems(
+        partitions=partitions,
+        usage=denied,
+        sizes={"/home/arm/media": 2638829584384},
+    )
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.label == "/home/arm/media"
+    assert entry.total == 2638829584384
+    assert entry.used is None
+    assert entry.percent is None
+    assert entry.note == NOTE_PERMISSION_DENIED
+    assert format_entry(entry) == "2457.6 GiB permission denied"
+
+
+def test_local_filesystems_permission_denied_without_known_size_is_note_only():
+    partitions = lambda all=False: [part("/dev/mapper/vg-media", "/home/arm/media", "ext4")]
+
+    def denied(_mp):
+        raise PermissionError("nope")
+
+    entries = local_filesystems(
+        partitions=partitions,
+        usage=denied,
+        sizes={"/some/other/mount": 123},
+    )
+
+    assert len(entries) == 1
+    assert entries[0].total is None
+    assert entries[0].note == NOTE_PERMISSION_DENIED
+    assert format_entry(entries[0]) == NOTE_PERMISSION_DENIED
+
+
+def test_local_filesystems_non_permission_failure_with_known_size_stays_unavailable():
+    """A known size does not mask a real (non-permission) failure as healthy."""
+    partitions = lambda all=False: [part("/dev/mapper/vg-media", "/home/arm/media", "ext4")]
+
+    def broken(_mp):
+        raise OSError("stale NFS handle")
+
+    entries = local_filesystems(
+        partitions=partitions,
+        usage=broken,
+        sizes={"/home/arm/media": 2638829584384},
+    )
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.total == 2638829584384
+    assert entry.note == NOTE_UNAVAILABLE
 
 
 def test_local_filesystems_never_measures_a_remote_mount():
@@ -356,24 +438,103 @@ def test_block_devices_passes_an_explicit_timeout():
     assert kwargs["timeout"] == LSBLK_TIMEOUT_SECONDS
 
 
+_BLOCK_DEVICES_UNAVAILABLE = [StorageEntry(label="block devices", note=NOTE_UNAVAILABLE)]
+
+
 def test_block_devices_degrades_on_timeout():
     run = fake_lsblk(raises=subprocess.TimeoutExpired(cmd="lsblk", timeout=5.0))
 
-    assert block_devices(run=run) == []
+    assert block_devices(run=run) == _BLOCK_DEVICES_UNAVAILABLE
 
 
 def test_block_devices_degrades_when_lsblk_is_missing():
     run = fake_lsblk(raises=FileNotFoundError("lsblk"))
 
-    assert block_devices(run=run) == []
+    assert block_devices(run=run) == _BLOCK_DEVICES_UNAVAILABLE
 
 
 def test_block_devices_degrades_on_garbage_output():
-    assert block_devices(run=fake_lsblk(stdout="not json at all")) == []
+    assert block_devices(run=fake_lsblk(stdout="not json at all")) == _BLOCK_DEVICES_UNAVAILABLE
 
 
 def test_block_devices_degrades_on_nonzero_exit():
-    assert block_devices(run=fake_lsblk(LSBLK_TREE, returncode=1)) == []
+    assert block_devices(run=fake_lsblk(LSBLK_TREE, returncode=1)) == _BLOCK_DEVICES_UNAVAILABLE
+
+
+def test_block_devices_stays_empty_when_lsblk_runs_fine_but_finds_nothing():
+    """lsblk succeeding with no relevant entries is [] -- not the sentinel.
+
+    The sentinel means "could not look"; this is "looked, nothing there."
+    """
+    entries = block_devices(run=fake_lsblk({"blockdevices": []}))
+
+    assert entries == []
+
+
+def test_mounted_device_sizes_maps_every_mountpoint_to_its_devices_size():
+    sizes = mounted_device_sizes(run=fake_lsblk(LSBLK_TREE))
+
+    assert sizes["/home/arm/media"] == 2638829584384
+    assert sizes["/"] == 107374182400
+    assert sizes["/boot"] == 2147483648
+    assert sizes["/boot/efi"] == 1127219200
+    # A node whose only mountpoint is null contributes nothing.
+    assert "sda" not in sizes
+
+
+def test_mounted_device_sizes_empty_when_lsblk_times_out():
+    run = fake_lsblk(raises=subprocess.TimeoutExpired(cmd="lsblk", timeout=5.0))
+
+    assert mounted_device_sizes(run=run) == {}
+
+
+def test_mounted_device_sizes_empty_when_lsblk_is_missing():
+    run = fake_lsblk(raises=FileNotFoundError("lsblk"))
+
+    assert mounted_device_sizes(run=run) == {}
+
+
+def test_mounted_device_sizes_empty_on_garbage_output():
+    assert mounted_device_sizes(run=fake_lsblk(stdout="not json at all")) == {}
+
+
+def test_lsblk_cache_returns_stale_result_without_a_reset():
+    """Within the TTL, a second call reuses the first read -- even with a
+    different `run` -- because the cache is not keyed on `run` identity."""
+    run_a = fake_lsblk(LSBLK_TREE)
+    first = block_devices(run=run_a)
+
+    run_b = fake_lsblk({"blockdevices": []})
+    second = block_devices(run=run_b)
+
+    assert second == first
+    assert second != []
+    assert run_b.calls == []  # run_b's lsblk was never actually invoked
+
+
+def test_lsblk_cache_reset_returns_a_fresh_result():
+    run_a = fake_lsblk(LSBLK_TREE)
+    block_devices(run=run_a)
+
+    _clear_lsblk_cache()
+
+    run_b = fake_lsblk({"blockdevices": []})
+    second = block_devices(run=run_b)
+
+    assert second == []
+    assert len(run_b.calls) == 1
+
+
+def test_mounted_device_sizes_shares_the_block_devices_cache():
+    """Both readers go through the same cached `_lsblk_nodes` read."""
+    run_a = fake_lsblk(LSBLK_TREE)
+    block_devices(run=run_a)
+
+    run_b = fake_lsblk({"blockdevices": []})
+    sizes = mounted_device_sizes(run=run_b)
+
+    assert sizes["/home/arm/media"] == 2638829584384
+    assert run_b.calls == []
 
 
 def test_collect_storage_orders_filesystems_slack_stray_remote_then_images():
