@@ -20,6 +20,42 @@ def format_uptime(total_seconds: int) -> str:
     return f"{days}d {hours:02}:{minutes:02}:{seconds:02}"
 
 
+def format_bytes(n: int) -> str:
+    """Gibibytes with one decimal, as `free -h` counts them.
+
+    Returns the number alone, without a unit: a summary line names `GiB` once
+    for the pair rather than twice.
+    """
+    return f"{n / 1024**3:.1f}"
+
+
+def format_usage(used: int, total: int, percent: float) -> str:
+    """`used / total GiB (percent)` -- the shape both memory and swap take."""
+    return f"{format_bytes(used)} / {format_bytes(total)} GiB ({percent:.1f}%)"
+
+
+def get_swap_summary(
+    swap_memory: Callable[[], object] = psutil.swap_memory,
+) -> str:
+    """Swap usage, degrading rather than raising.
+
+    `psutil.swap_memory()` can fail outright on some platforms, and a
+    collector here never raises on a hostile environment. A host with no swap
+    says so rather than reading `0.0 / 0.0 GiB (0.0%)`, which looks like a bug
+    rather than a fact.
+    """
+    try:
+        swap = swap_memory()
+        total = int(swap.total)  # type: ignore[attr-defined]
+        used = int(swap.used)  # type: ignore[attr-defined]
+        percent = float(swap.percent)  # type: ignore[attr-defined]
+    except Exception:
+        return "unavailable"
+    if total == 0:
+        return "none configured"
+    return format_usage(used, total, percent)
+
+
 def get_ipv4_address() -> str:
     """Return primary IPv4 address for the host."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -66,12 +102,19 @@ def collect_system_metrics() -> dict[str, str | float | int]:
     """Collect all metrics required for Harbor Console MVP."""
     now = datetime.now()
     uptime_seconds = int(now.timestamp() - psutil.boot_time())
+    memory = psutil.virtual_memory()
 
     return {
         "hostname": socket.gethostname(),
         "uptime": format_uptime(uptime_seconds),
         "cpu_utilization": psutil.cpu_percent(interval=None),
-        "memory_utilization": psutil.virtual_memory().percent,
+        "memory_utilization": memory.percent,
+        # Used is total - available, the basis psutil's own `percent` uses, so
+        # the bytes and the percentage on one line agree with each other.
+        "memory_summary": format_usage(
+            memory.total - memory.available, memory.total, memory.percent
+        ),
+        "swap_summary": get_swap_summary(),
         "disk_utilization": psutil.disk_usage("/").percent,
         "ipv4_address": get_ipv4_address(),
         "docker_container_count": get_docker_container_count(),
