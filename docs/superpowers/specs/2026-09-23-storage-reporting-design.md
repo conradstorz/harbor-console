@@ -3,6 +3,17 @@
 Date: 2026-09-23
 Status: approved, not yet implemented
 
+**Amended 2026-09-23, after final review:** two findings changed shipped
+behavior from what this design first specified. A mount `local_filesystems`
+cannot `statvfs` unprivileged does not get a bare note -- it still reports a
+size when `lsblk` already knows it, because the note alone throws away a
+number the block layer can still supply (`NOTE_PERMISSION_DENIED`, below).
+And `lsblk` going silent gets its own sentinel row, `block devices` /
+`unavailable`, rather than an empty list -- the same ADR-18 rule this
+document already states for `disk_partitions` failing and for
+`/proc/mounts` being unreadable, which the first draft of this section
+missed for `lsblk` alone.
+
 ## The problem
 
 Both surfaces report storage as one number, from one filesystem:
@@ -94,7 +105,7 @@ The middle shape is why `total` and `used` are separately optional: volume-group
 slack and an unmounted disk both have a real size and no meaningful "used", and
 losing the size would throw away the only number that makes them worth a row.
 
-The five notes, each standing for a fact rather than a gap:
+The six notes, each standing for a fact rather than a gap:
 
 | `note` | Means |
 |---|---|
@@ -102,22 +113,30 @@ The five notes, each standing for a fact rather than a gap:
 | `unallocated` | Volume-group slack, derived from `lsblk` |
 | `no filesystem mounted` | A block device nothing is using |
 | `unavailable` | `disk_usage` failed on this one mount |
-| `8 snap mounts (squashfs, read-only)` | The collapsed image-mount line |
+| `permission denied` | `disk_usage` raised `PermissionError` on this mount -- the unprivileged `harbor` user cannot read it, as on `/home/arm/media` |
+| `(squashfs, read-only)` | The collapsed image-mount line -- fixed wording, or the sorted, comma-joined fstypes when mixed (`(erofs, squashfs, read-only)`) |
 
 The last one is the one compromise with "show everything, both surfaces".
 Eight rows of read-only 100%-full squashfs is noise that would push the real
 filesystems off a login console; one line keeps them visible and countable
 without pretending they are storage anyone can act on. It is a summary, not
 a filter -- the count is the evidence that nothing was dropped silently,
-which is the distinction ADR 18 turns on.
+which is the distinction ADR 18 turns on. The count itself lives in the
+label, not the note (`"8 image mounts"`), so the note stays fixed wording
+regardless of how many mounts it is counting.
+
+The `permission denied` note is the other case where the number and the
+reason travel separately: the row still carries a `total` when `lsblk`
+knows the device's size, even though `disk_usage` could not measure the
+filesystem on top of it.
 
 ### Functions
 
 ```python
-REMOTE_FSTYPES = frozenset({"cifs", "smb3", "nfs", "nfs4", "fuse.sshfs"})
+REMOTE_FSTYPES = frozenset({"cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.sshfs"})
 LSBLK_TIMEOUT_SECONDS = 5.0
 
-def local_filesystems(partitions=psutil.disk_partitions, usage=psutil.disk_usage) -> list[StorageEntry]
+def local_filesystems(partitions=psutil.disk_partitions, usage=psutil.disk_usage, sizes: Mapping[str, int] | None = None) -> list[StorageEntry]
 def remote_mounts(mounts_path="/proc/mounts") -> list[StorageEntry]
 def block_devices(run=subprocess.run, timeout=LSBLK_TIMEOUT_SECONDS) -> list[StorageEntry]
 def collect_storage(...) -> tuple[StorageEntry, ...]
@@ -143,10 +162,20 @@ collector and sleep.
   `/proc/mounts` named and unmeasured.
   Each `disk_usage` call is guarded on its own: one unreadable mount becomes
   `unavailable` and the other rows survive.
+  Its `sizes` parameter (typically `mounted_device_sizes()`, read from
+  `lsblk`) exists because `statvfs`/`disk_usage` needs privileges this
+  console deliberately does not have (ADR 5: it runs as the unprivileged
+  `harbor` user) -- but `lsblk`'s view of the block layer underneath a mount
+  is not privilege-gated. A `PermissionError` or any other `disk_usage`
+  failure consults `sizes` for that mountpoint before falling back to a
+  note-only entry, so a mount the console cannot measure can still report
+  the size the block layer knows. This is the mechanism behind the
+  `permission denied` note above.
 - **`remote_mounts`** reads `/proc/mounts` directly rather than
   `disk_partitions(all=True)` -- 76 entries of mostly kernel noise there,
   and the CIFS mounts are absent from the default list anyway. Matches on
-  fstype (`cifs`, `nfs`, `nfs4`, `smbfs`, `fuse.sshfs`). Never measured.
+  fstype (`cifs`, `smb3`, `smbfs`, `nfs`, `nfs4`, `fuse.sshfs`). Never
+  measured.
 - **`block_devices`** runs `lsblk -J -b -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS`
   under an explicit timeout, the way every other subprocess collector here
   does (`DOCKER_TIMEOUT_SECONDS` in `system.py`, and its pair in
@@ -165,9 +194,13 @@ collector and sleep.
 Collectors never raise on a hostile environment, per CLAUDE.md:
 
 - `lsblk` missing, failing, exceeding `LSBLK_TIMEOUT_SECONDS`, or returning
-  output that is not the expected JSON yields no block entries, the way
-  `get_docker_container_count()` yields `0` -- `TimeoutExpired`,
-  `FileNotFoundError` and `JSONDecodeError` all land in the same place.
+  output that is not the expected JSON yields one entry labelled
+  `block devices` with note `unavailable`, not an empty list --
+  `TimeoutExpired`, `FileNotFoundError` and `JSONDecodeError` all land in the
+  same place. This is the same ADR-18 rule stated below for
+  `disk_partitions` and `/proc/mounts`: nothing found and nothing looked at
+  must not render alike. `lsblk` running fine and simply reporting nothing
+  relevant still yields `[]`.
 - A single mount that cannot be measured yields `unavailable` for that row.
 - `/proc/mounts` unreadable yields one entry labelled `remote mounts` with
   note `unavailable`, not an empty list, for the same reason
