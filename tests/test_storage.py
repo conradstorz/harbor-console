@@ -10,6 +10,7 @@ from harbor_console.storage import (
     NOTE_UNAVAILABLE,
     StorageEntry,
     block_devices,
+    collect_storage,
     format_entry,
     image_mounts,
     local_filesystems,
@@ -373,3 +374,23 @@ def test_block_devices_degrades_on_garbage_output():
 
 def test_block_devices_degrades_on_nonzero_exit():
     assert block_devices(run=fake_lsblk(LSBLK_TREE, returncode=1)) == []
+
+
+def test_collect_storage_orders_filesystems_slack_stray_remote_then_images():
+    entries = collect_storage(
+        filesystems=lambda: [StorageEntry(label="/", used=1, total=2, percent=50.0)],
+        blocks=lambda: [
+            StorageEntry(label="VG vg0", total=3, note=NOTE_UNALLOCATED),
+            StorageEntry(label="sdb", total=4, note=NOTE_NO_FILESYSTEM),
+        ],
+        remote=lambda: [StorageEntry(label="/mnt/nas", note=NOTE_REMOTE)],
+        images=lambda: [StorageEntry(label="Image mounts", note="2 image mounts")],
+    )
+
+    assert [e.label for e in entries] == ["/", "VG vg0", "sdb", "/mnt/nas", "Image mounts"]
+    assert isinstance(entries, tuple)
+
+
+def test_collect_storage_defaults_touch_the_real_host_without_raising():
+    """The release criterion: a collector never raises on a hostile environment."""
+    assert isinstance(collect_storage(), tuple)

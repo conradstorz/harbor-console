@@ -271,3 +271,18 @@ def block_devices(
         ):
             stray.append(StorageEntry(label=name, total=size, note=NOTE_NO_FILESYSTEM))
     return slack + stray
+
+
+def collect_storage(
+    filesystems: Callable[[], list[StorageEntry]] = local_filesystems,
+    blocks: Callable[[], list[StorageEntry]] = block_devices,
+    remote: Callable[[], list[StorageEntry]] = remote_mounts,
+    images: Callable[[], list[StorageEntry]] = image_mounts,
+) -> tuple[StorageEntry, ...]:
+    """Every storage entry this host has, in display order.
+
+    Measured filesystems first, because they are what anyone came to read; then
+    the layer underneath them, then what is merely named, then the collapsed
+    image-mount line last.
+    """
+    return (*filesystems(), *blocks(), *remote(), *images())
