@@ -2,7 +2,7 @@ from datetime import datetime
 from html import escape
 from io import BytesIO
 
-from harbor_console import web
+from harbor_console import system, web
 from harbor_console.directory import (
     KIND_HTTP,
     KIND_INTERNAL,
@@ -19,7 +19,8 @@ METRICS = {
     "hostname": "hpz440",
     "uptime": "1d 00:00:00",
     "cpu_utilization": 1.0,
-    "memory_utilization": 2.0,
+    "memory_summary": "4.0 / 32.0 GiB (12.5%)",
+    "swap_summary": "0.0 / 8.0 GiB (0.0%)",
     "disk_utilization": 3.0,
     "ipv4_address": "10.0.0.7",
     "docker_container_count": 1,
@@ -43,6 +44,48 @@ def test_page_shows_host_metrics():
     assert "<h1>hpz440</h1>" in page
     assert "1d 00:00:00" in page
     assert "100.69.239.123" in page
+
+
+def test_host_table_shows_memory_with_its_scale():
+    page = web.render_page(snapshot()).decode()
+
+    assert "<tr><td>Memory</td><td>4.0 / 32.0 GiB (12.5%)</td></tr>" in page
+
+
+def test_host_table_shows_swap():
+    page = web.render_page(snapshot()).decode()
+
+    assert "<tr><td>Swap</td><td>0.0 / 8.0 GiB (0.0%)</td></tr>" in page
+
+
+def test_the_renderer_and_the_collector_agree_on_every_key(monkeypatch):
+    """The contract CLAUDE.md describes, enforced for the web surface too.
+
+    `test_ui.py` runs the real collector through `build_dashboard`, so a key
+    renamed in the collector but not the terminal renderer fails loudly.
+    Nothing did that for `render_page` -- its tests use hand-built fixtures,
+    so the same rename would stay green here and KeyError on the live page.
+
+    The two collectors that reach outside this process are stubbed -- one
+    shells out to `docker`, the other opens a socket -- because tests here use
+    neither.
+    """
+    monkeypatch.setattr(system, "get_docker_container_count", lambda: 0)
+    monkeypatch.setattr(system, "get_ipv4_address", lambda: "127.0.0.1")
+
+    web.render_page(snapshot(metrics=system.collect_system_metrics()))
+
+
+def test_the_tailnet_row_sits_between_ipv4_and_containers():
+    page = web.render_page(snapshot()).decode()
+
+    assert page.index("IPv4") < page.index("Tailnet") < page.index("Containers")
+
+
+def test_the_host_table_omits_the_tailnet_row_without_an_address():
+    page = web.render_page(snapshot(tailnet_address=None)).decode()
+
+    assert "Tailnet" not in page
 
 
 def test_http_row_links_its_route():

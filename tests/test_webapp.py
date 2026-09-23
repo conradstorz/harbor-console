@@ -2,7 +2,7 @@ import inspect
 from datetime import datetime
 from http.server import ThreadingHTTPServer
 
-from harbor_console import webapp
+from harbor_console import web, webapp
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
@@ -15,7 +15,8 @@ METRICS = {
     "hostname": "hpz440",
     "uptime": "1d 00:00:00",
     "cpu_utilization": 1.0,
-    "memory_utilization": 2.0,
+    "memory_summary": "4.0 / 32.0 GiB (12.5%)",
+    "swap_summary": "0.0 / 8.0 GiB (0.0%)",
     "disk_utilization": 3.0,
     "ipv4_address": "10.0.0.7",
     "docker_container_count": 1,
@@ -139,6 +140,12 @@ def test_starting_snapshot_has_looked_at_nothing():
     assert snapshot.rows == ()
     assert snapshot.metrics["hostname"] == "hpz440"
     assert snapshot.tailnet_address == "100.69.239.123"
+
+
+def test_the_starting_snapshot_has_every_key_the_page_renders():
+    snapshot = webapp.starting_snapshot("hpz440", NOW, tailnet_address="100.69.239.123")
+
+    web.render_page(snapshot)
 
 
 def test_probe_loop_publishes_a_snapshot_then_exits_cleanly():

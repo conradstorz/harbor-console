@@ -1,7 +1,7 @@
 # Memory display: a percentage with no scale, and no word about swap
 
 Date: 2026-09-22
-Status: approved, not yet implemented
+Status: implemented on `feat/memory-display` (PR #8); not yet merged or deployed
 
 ## The problem
 
