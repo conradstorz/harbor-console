@@ -51,11 +51,22 @@ The web surface is ten modules at the top level, and keeps the same split:
 - `web.py` — **renders** the HTML page from a snapshot and serves it over stdlib `http.server`. No collection, no probing, and no endpoint but the page itself.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
 
-Three behaviours of that service are load-bearing and easy to undo by accident:
+Four behaviours of that service are load-bearing and easy to undo by accident:
 
 - **The page binds the host's Tailscale address on fixed port 8100.** The port is a constant in `webapp.py`, not configuration: Traefik's file-provider route for `harbor.hpz440.ohr3023.org` points at it, and there is deliberately no flag, no environment variable and no file that moves it ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 - **`harbor-console-web` has one startup refusal, and only one: no tailnet address.** It happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The four refusals of the ledger era went with the ledger. (Port 8100 already in use fails the bind and exits the same way, but that is the environment rather than a second rule.)
 - **Traefik, Docker, or the host's own socket table being unreadable is a banner, never a refusal.** The page still renders from what it does have, says in the banner which evidence is missing, and withholds exactly the findings and row states that evidence supported -- a TCP or edge row whose listeners could not be read says `UNKNOWN`, not `DOWN`. A cycle that fails outright leaves the last good snapshot standing with the reason attached, and a successful cycle clears it.
+- **Both units set `ProtectHome=read-only`, not `ProtectHome=yes`.** The
+  storage collector reports the mounts the *service's* namespace has, not the
+  host's. `yes` replaces `/home` with an empty tmpfs, which on hpz440 silently
+  hid `/home/arm/media` -- 2.4 TiB, the largest filesystem on the machine and
+  the reason `storage.py` exists. Nothing failed; the row simply was not there,
+  because from inside the unit the volume was not mounted. `read-only` is the
+  weakest setting that still shows it, and all this process needs: it calls
+  `statvfs` and never writes to `/home`. `PrivateTmp=yes` stays, and its private
+  `/tmp` and `/var/tmp` do appear as rows -- they are real mounts the process
+  really has, and hiding them would be the kind of pre-emptive filter
+  [ADR 18](docs/adr/0018-show-the-full-listening-inventory.md) argues against.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
 
