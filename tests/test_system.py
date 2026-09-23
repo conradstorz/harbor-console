@@ -80,7 +80,7 @@ def test_format_usage_pairs_the_bytes_with_the_percent():
 
 
 def test_swap_summary_reports_used_of_total():
-    # percent is deliberately NOT total * used / 100 (which would be 25.0%
+    # percent is deliberately NOT used / total * 100 (which would be 25.0%
     # here): total * percent / 100 = 2.4 GiB, while swap.used = 2.0 GiB. That
     # divergence is what makes the assertion discriminate between reading
     # swap.used directly (correct) and recomputing it from the percentage
