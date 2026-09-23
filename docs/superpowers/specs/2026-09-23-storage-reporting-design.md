@@ -81,9 +81,18 @@ class StorageEntry:
     note: str            # "" when measured, else why not
 ```
 
-Numbers where they exist, a reason where they do not. A renderer calls the
-existing `format_usage(used, total, percent)` when `used is not None` and
-prints `note` otherwise; it never decides which case it is looking at.
+Numbers where they exist, a reason where they do not, in three shapes a
+renderer distinguishes without judgement of its own:
+
+| Fields set | Rendered as | Example |
+|---|---|---|
+| `used`, `total`, `percent` | `format_usage(...)`, the existing helper | `65.0 / 98.0 GiB (70.0%)` |
+| `total` only | size, then the note | `233.9 GiB unallocated` |
+| neither | the note alone | `remote -- not measured` |
+
+The middle shape is why `total` and `used` are separately optional: volume-group
+slack and an unmounted disk both have a real size and no meaningful "used", and
+losing the size would throw away the only number that makes them worth a row.
 
 The five notes, each standing for a fact rather than a gap:
 
@@ -116,7 +125,10 @@ Every source is injectable, so the tests see no real disk, no real
 collector and sleep.
 
 - **`local_filesystems`** reads `psutil.disk_partitions(all=False)` and
-  diverts squashfs and other read-only image mounts to the collapsed line.
+  diverts image mounts to the collapsed line, matched by fstype
+  (`squashfs`, `erofs`) rather than by the read-only flag -- a legitimately
+  read-only ext4 or vfat mount is storage someone may need to see, and on
+  hpz440 `/boot/efi` reports `ro` among its options.
   Each `disk_usage` call is guarded on its own: one unreadable mount becomes
   `unavailable` and the other rows survive.
 - **`remote_mounts`** reads `/proc/mounts` directly rather than
