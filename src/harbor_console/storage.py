@@ -167,3 +167,107 @@ def remote_mounts(mounts_path: str = "/proc/mounts") -> list[StorageEntry]:
             StorageEntry(label=mountpoint.replace("\\040", " "), note=NOTE_REMOTE)
         )
     return entries
+
+
+#: A device-mapper name escapes a literal hyphen as `--`, and separates the
+#: volume group from the logical volume with a single one: `ubuntu--vg-ubuntu--lv`
+#: is `ubuntu-vg` / `ubuntu-lv`.
+_DM_SEPARATOR = re.compile(r"(?<!-)-(?!-)")
+
+#: A device carrying one of these is in use by a layer above it, so it is not a
+#: stray even with nothing mounted on it.
+_MEMBER_FSTYPES = frozenset({"LVM2_member", "linux_raid_member"})
+
+#: Devices that can hold a filesystem at all. `loop` is a mounted image and
+#: `rom` is an optical drive -- neither is storage anyone allocates.
+_STRAY_TYPES = frozenset({"disk", "part"})
+
+
+def _mounted(node: dict) -> bool:
+    return any(mp for mp in node.get("mountpoints") or [])
+
+
+def _vg_name(dm_name: str) -> str | None:
+    """The volume group a logical volume belongs to, from its dm name."""
+    parts = _DM_SEPARATOR.split(dm_name, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    return parts[0].replace("--", "-")
+
+
+def _walk(nodes: list) -> list[dict]:
+    flat: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        flat.append(node)
+        flat.extend(_walk(node.get("children") or []))
+    return flat
+
+
+def block_devices(
+    run: Callable[..., object] = subprocess.run,
+    timeout: float = LSBLK_TIMEOUT_SECONDS,
+) -> list[StorageEntry]:
+    """Volume-group slack, then devices nothing has mounted.
+
+    Slack is derived rather than asked for: `vgs` needs root and this process
+    runs as the unprivileged `harbor` user (ADR 5), so the figure is the
+    physical volume's size minus the sum of its logical volumes. It is
+    approximate by a few mebibytes of LVM metadata and is the only way to see,
+    without privileges, whether a filesystem has room to grow.
+
+    Every failure is the same outage and yields no entries, the way
+    `get_docker_container_count()` yields `0`: a missing binary, a non-zero
+    exit, a timeout, or output that is not the JSON shape expected.
+    """
+    try:
+        completed = run(
+            ["lsblk", "-J", "-b", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if getattr(completed, "returncode", 1) != 0:
+        return []
+    try:
+        tree = json.loads(getattr(completed, "stdout", "") or "")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(tree, dict) or not isinstance(tree.get("blockdevices"), list):
+        return []
+
+    slack: list[StorageEntry] = []
+    stray: list[StorageEntry] = []
+    for node in _walk(tree["blockdevices"]):
+        children = [c for c in (node.get("children") or []) if isinstance(c, dict)]
+        fstype = node.get("fstype") or ""
+        size = node.get("size")
+        name = node.get("name") or ""
+        if not isinstance(size, int):
+            continue
+        if fstype == "LVM2_member" and children:
+            allocated = sum(c["size"] for c in children if isinstance(c.get("size"), int))
+            group = next(
+                (vg for vg in (_vg_name(c.get("name") or "") for c in children) if vg),
+                None,
+            )
+            slack.append(
+                StorageEntry(
+                    label=f"VG {group}" if group else name,
+                    total=max(size - allocated, 0),
+                    note=NOTE_UNALLOCATED,
+                )
+            )
+            continue
+        if (
+            node.get("type") in _STRAY_TYPES
+            and not children
+            and not _mounted(node)
+            and fstype not in _MEMBER_FSTYPES
+        ):
+            stray.append(StorageEntry(label=name, total=size, note=NOTE_NO_FILESYSTEM))
+    return slack + stray

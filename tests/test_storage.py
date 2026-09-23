@@ -1,9 +1,15 @@
+import json
+import subprocess
 from types import SimpleNamespace
 
 from harbor_console.storage import (
+    LSBLK_TIMEOUT_SECONDS,
+    NOTE_NO_FILESYSTEM,
     NOTE_REMOTE,
+    NOTE_UNALLOCATED,
     NOTE_UNAVAILABLE,
     StorageEntry,
+    block_devices,
     format_entry,
     image_mounts,
     local_filesystems,
@@ -213,3 +219,157 @@ def test_remote_mounts_unreadable_is_unavailable_not_empty(tmp_path):
     assert len(entries) == 1
     assert entries[0].label == "remote mounts"
     assert entries[0].note == NOTE_UNAVAILABLE
+
+
+LSBLK_TREE = {
+    "blockdevices": [
+        {
+            "name": "loop0",
+            "type": "loop",
+            "size": 66879488,
+            "fstype": "squashfs",
+            "mountpoints": ["/snap/core20/2866"],
+        },
+        {
+            "name": "loop1",
+            "type": "loop",
+            "size": 66883584,
+            "fstype": "squashfs",
+            "mountpoints": ["/snap/core20/2922"],
+        },
+        {
+            "name": "sda",
+            "type": "disk",
+            "size": 3000592982016,
+            "fstype": None,
+            "mountpoints": [None],
+            "children": [
+                {
+                    "name": "sda1",
+                    "type": "part",
+                    "size": 1127219200,
+                    "fstype": "vfat",
+                    "mountpoints": ["/boot/efi"],
+                },
+                {
+                    "name": "sda2",
+                    "type": "part",
+                    "size": 2147483648,
+                    "fstype": "ext4",
+                    "mountpoints": ["/boot"],
+                },
+                {
+                    "name": "sda3",
+                    "type": "part",
+                    "size": 2997315698688,
+                    "fstype": "LVM2_member",
+                    "mountpoints": [None],
+                    "children": [
+                        {
+                            "name": "ubuntu--vg-ubuntu--lv",
+                            "type": "lvm",
+                            "size": 107374182400,
+                            "fstype": "ext4",
+                            "mountpoints": ["/"],
+                        },
+                        {
+                            "name": "ubuntu--vg-media",
+                            "type": "lvm",
+                            "size": 2638829584384,
+                            "fstype": "ext4",
+                            "mountpoints": ["/home/arm/media"],
+                        },
+                    ],
+                },
+            ],
+        },
+        {"name": "sr0", "type": "rom", "size": 8046176256, "fstype": "udf", "mountpoints": [None]},
+        {"name": "sr1", "type": "rom", "size": 7909691392, "fstype": "udf", "mountpoints": [None]},
+    ]
+}
+
+
+def fake_lsblk(tree=None, stdout=None, returncode=0, raises=None):
+    """Stands in for subprocess.run; records the argv it was handed."""
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        if raises is not None:
+            raise raises
+        text = stdout if stdout is not None else json.dumps(tree or {})
+        return SimpleNamespace(stdout=text, returncode=returncode)
+
+    run.calls = calls
+    return run
+
+
+def test_block_devices_reports_volume_group_slack():
+    entries = block_devices(run=fake_lsblk(LSBLK_TREE))
+
+    slack = [e for e in entries if e.note == NOTE_UNALLOCATED]
+    assert len(slack) == 1
+    assert slack[0].label == "VG ubuntu-vg"
+    # 2997315698688 - (107374182400 + 2638829584384)
+    assert slack[0].total == 251111931904
+    assert slack[0].used is None
+    assert format_entry(slack[0]) == "233.9 GiB unallocated"
+
+
+def test_block_devices_excludes_lvm_members_parents_and_optical():
+    entries = block_devices(run=fake_lsblk(LSBLK_TREE))
+
+    labels = [e.label for e in entries]
+    assert labels == ["VG ubuntu-vg"]
+    for excluded in ("sda", "sda3", "sr0", "sr1", "loop0"):
+        assert excluded not in labels
+
+
+def test_block_devices_reports_a_stray_disk():
+    tree = {
+        "blockdevices": [
+            {
+                "name": "sdb",
+                "type": "disk",
+                "size": 2000398934016,
+                "fstype": None,
+                "mountpoints": [None],
+            }
+        ]
+    }
+
+    entries = block_devices(run=fake_lsblk(tree))
+
+    assert [e.label for e in entries] == ["sdb"]
+    assert entries[0].note == NOTE_NO_FILESYSTEM
+    assert entries[0].total == 2000398934016
+
+
+def test_block_devices_passes_an_explicit_timeout():
+    run = fake_lsblk(LSBLK_TREE)
+
+    block_devices(run=run)
+
+    args, kwargs = run.calls[0]
+    assert args[:2] == ["lsblk", "-J"]
+    assert kwargs["timeout"] == LSBLK_TIMEOUT_SECONDS
+
+
+def test_block_devices_degrades_on_timeout():
+    run = fake_lsblk(raises=subprocess.TimeoutExpired(cmd="lsblk", timeout=5.0))
+
+    assert block_devices(run=run) == []
+
+
+def test_block_devices_degrades_when_lsblk_is_missing():
+    run = fake_lsblk(raises=FileNotFoundError("lsblk"))
+
+    assert block_devices(run=run) == []
+
+
+def test_block_devices_degrades_on_garbage_output():
+    assert block_devices(run=fake_lsblk(stdout="not json at all")) == []
+
+
+def test_block_devices_degrades_on_nonzero_exit():
+    assert block_devices(run=fake_lsblk(LSBLK_TREE, returncode=1)) == []
