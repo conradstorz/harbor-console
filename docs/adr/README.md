@@ -29,6 +29,7 @@ the reasoning, including reasoning we later moved away from.
 | 0016 | [Close the `harbor` network's attack surface: gate Traefik's API, isolate Portainer, scope the ufw rule by address](0016-close-the-harbor-network-attack-surface.md) | Accepted |
 | 0017 | [Pin Traefik's default route after multi-homing it](0017-pin-traefiks-default-route-after-multi-homing-it.md) | Accepted |
 | 0018 | [Show the full listening inventory, not only what a rule anticipates](0018-show-the-full-listening-inventory.md) | Accepted |
+| 0019 | [Reserve a fixed `harbor` address for Traefik](0019-reserve-a-fixed-harbor-address-for-traefik.md) | Accepted |
 
 ## Adding a new ADR
 

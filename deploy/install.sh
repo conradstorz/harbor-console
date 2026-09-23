@@ -43,11 +43,24 @@ require_cmd openssl "Needed to generate the Traefik dashboard/API password (ADR 
 # carry a predictable one. A network created without it (by an older installer,
 # or by hand) would get a generated br-<id> name the rule cannot match, and the
 # edge would silently fail to reach the page. Check before anything is changed.
+# ADR 19: Traefik holds a reserved address on `harbor` so the ufw rule keeps
+# naming the right source after a reboot reshuffles Docker's dynamic
+# allocation. That address has to be inside the network's subnet, so the
+# subnet is fixed too -- an auto-assigned one could land anywhere.
+HARBOR_SUBNET='172.25.0.0/16'
+TRAEFIK_HARBOR_IP='172.25.255.254'
 if docker network inspect harbor >/dev/null 2>&1; then
   harbor_bridge=$(docker network inspect harbor -f '{{index .Options "com.docker.network.bridge.name"}}' 2>/dev/null || true)
+  harbor_subnet=$(docker network inspect harbor -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
+  harbor_problem=''
   if [[ "${harbor_bridge}" != "br-harbor" ]]; then
-    echo "Error: the 'harbor' Docker network exists without the fixed bridge name 'br-harbor' (found: '${harbor_bridge:-none}')." >&2
-    echo "  The ufw rule that lets the edge reach the status page names that interface, so the network has to be recreated:" >&2
+    harbor_problem="without the fixed bridge name 'br-harbor' (found: '${harbor_bridge:-none}')"
+  elif [[ "${harbor_subnet}" != "${HARBOR_SUBNET}" ]]; then
+    harbor_problem="on subnet '${harbor_subnet:-none}' rather than the fixed ${HARBOR_SUBNET} that Traefik's reserved address ${TRAEFIK_HARBOR_IP} belongs to (ADR 19)"
+  fi
+  if [[ -n "${harbor_problem}" ]]; then
+    echo "Error: the 'harbor' Docker network exists ${harbor_problem}." >&2
+    echo "  The ufw rule that lets the edge reach the status page depends on both, so the network has to be recreated:" >&2
     echo "    stop everything attached to it (e.g. cd /opt/harbor-console/deploy/traefik && docker compose down)," >&2
     echo "    then: docker network rm harbor" >&2
     echo "  and re-run this installer." >&2
@@ -154,7 +167,7 @@ echo "==> Preparing the edge (Traefik)"
 chmod 0600 /etc/traefik/env
 # The bridge name is fixed so the ufw rule below can name the interface; the
 # prerequisite check above refuses an existing network that lacks it.
-docker network inspect harbor >/dev/null 2>&1 || docker network create -o com.docker.network.bridge.name=br-harbor harbor
+docker network inspect harbor >/dev/null 2>&1 || docker network create --subnet "${HARBOR_SUBNET}" -o com.docker.network.bridge.name=br-harbor harbor
 # ADR 16: Portainer's read-write Docker socket lives on its own network, not
 # on `harbor` where every routed project container now sits. No fixed
 # bridge name needed here -- nothing scopes a host-facing rule to it, only
@@ -215,11 +228,48 @@ mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.ym
 # in: compose's own priority key left both networks at GwPriority 0 and
 # the default route on `admin`; this disconnect/reconnect is what actually
 # moves it.
+#
+# ADR 19: the same re-attach also asserts Traefik's address on `harbor`.
+# ADR 16 read that address instead of reserving it, on the premise that a
+# fixed subnet made it stable; it does not. Docker allocates from the subnet
+# in the order containers attach, so the 2026-09-23 reboot of hpz440 moved
+# Traefik from 172.25.0.2 to 172.25.0.6 -- same container, never recreated
+# -- while the ufw rule went on naming .2, by then held by another project.
+# Every request through the edge to the page was dropped and answered as a
+# gateway timeout, exactly as in the ADR 17 outage above, from a different
+# cause. `--ip` has to be passed here and not only declared as
+# `ipv4_address` in compose.yaml, because this reconnect creates the
+# endpoint Traefik actually uses and would otherwise re-request a dynamic
+# address, undoing the declaration on every run.
 harbor_gw_priority=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").GwPriority}}' 2>/dev/null || true)
-if [[ "${harbor_gw_priority}" != "1000" ]]; then
-  echo "==> Pinning Traefik's default route to the harbor network"
+harbor_ip=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").IPAddress}}' 2>/dev/null || true)
+# Reserving the address is a convention, not an IPAM guarantee: Docker's
+# dynamic allocation climbs from .2 and will not plausibly reach the top of a
+# /16, but nothing stops another container claiming .255.254 explicitly, and
+# `--aux-address` -- the one mechanism that would exclude it -- can only be
+# set when the network is created. So check who holds it before detaching
+# Traefik, because the disconnect below cannot be undone cheaply: a
+# `--ip` attach that loses the address fails, and (confirmed on hpz440)
+# leaves Traefik listed on `harbor` with an EMPTY address rather than
+# detached -- every route dead, and the ufw step further down then finds no
+# address either and writes no rule. Taking the dynamic address instead is
+# a bad day; taking no address is an outage.
+pin_ip=(--ip "${TRAEFIK_HARBOR_IP}")
+harbor_reserved_holder=$(docker network inspect harbor -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' 2>/dev/null | awk -F'[ /]' -v ip="${TRAEFIK_HARBOR_IP}" '$2 == ip { print $1 }' || true)
+if [[ -n "${harbor_reserved_holder}" && "${harbor_reserved_holder}" != "traefik" ]]; then
+  echo "warning: container '${harbor_reserved_holder}' holds ${TRAEFIK_HARBOR_IP}, the address reserved for Traefik on the harbor network (ADR 19). Leaving Traefik on a dynamic address, which works until the next restart moves it; move that container off ${TRAEFIK_HARBOR_IP} and re-run this installer to pin it properly." >&2
+  pin_ip=()
+fi
+if [[ "${harbor_gw_priority}" != "1000" || "${harbor_ip}" != "${TRAEFIK_HARBOR_IP}" ]]; then
+  echo "==> Pinning Traefik's default route and address (${pin_ip[1]:-dynamic}) on the harbor network"
   docker network disconnect harbor traefik
-  docker network connect --gw-priority 1000 harbor traefik
+  if ! docker network connect ${pin_ip[@]+"${pin_ip[@]}"} --gw-priority 1000 harbor traefik; then
+    echo "warning: could not attach Traefik to the harbor network at ${TRAEFIK_HARBOR_IP}; retrying with a dynamic address rather than leaving the edge unreachable." >&2
+    # Clear the addressless endpoint the failed attach leaves behind, or the
+    # retry fails too ("endpoint already exists").
+    docker network disconnect harbor traefik >/dev/null 2>&1 || true
+    docker network connect --gw-priority 1000 harbor traefik
+  fi
 fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
@@ -260,9 +310,19 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
     # leaving no rule in place at all until the next install.sh run.
     ufw --force delete "${rule_num}" >/dev/null
   done
+  # Still read from `docker inspect` rather than from TRAEFIK_HARBOR_IP
+  # directly: the rule should name the address Traefik really has, so that a
+  # pin which somehow did not take leaves a working page rather than a rule
+  # matching nothing. ADR 19's point is that the address stops moving, not
+  # that the rule stops looking -- but a rule that is right for the wrong
+  # reason would hide the pin having failed until the next reboot broke it
+  # again, so say so when the two disagree.
   traefik_harbor_ip=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").IPAddress}}' 2>/dev/null || true)
   if [[ -n "${traefik_harbor_ip}" ]]; then
     ufw allow in on br-harbor from "${traefik_harbor_ip}" to "${TAILNET_ADDRESS}" port 8100 proto tcp comment "${ufw_tag}" >/dev/null
+    if [[ "${traefik_harbor_ip}" != "${TRAEFIK_HARBOR_IP}" ]]; then
+      echo "warning: Traefik's address on the harbor network is ${traefik_harbor_ip}, not the reserved ${TRAEFIK_HARBOR_IP} (ADR 19). The rule just written matches it, so the page is reachable now, but the address is dynamic again and the next Docker or host restart can move it and break the edge's path to the page silently." >&2
+    fi
   else
     echo "warning: could not determine Traefik's address on the harbor network; the page will not be reachable through the edge until this is fixed and install.sh is re-run." >&2
   fi
