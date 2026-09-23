@@ -1,6 +1,7 @@
 from rich.console import Console
 
 import harbor_console.system as system
+from harbor_console.storage import StorageEntry
 from harbor_console.ui import build_dashboard
 
 METRICS = {
@@ -9,7 +10,6 @@ METRICS = {
     "cpu_utilization": 33.5,
     "memory_summary": "4.0 / 32.0 GiB (12.5%)",
     "swap_summary": "0.0 / 8.0 GiB (0.0%)",
-    "disk_utilization": 78.0,
     "ipv4_address": "10.0.0.7",
     # 17 rather than a single digit: a lone "3" would also match "33.5%".
     "docker_container_count": 17,
@@ -17,10 +17,10 @@ METRICS = {
 }
 
 
-def render(metrics):
+def render(metrics, storage=()):
     """The panel as text. Wide enough that no cell wraps."""
     console = Console(width=120, record=True)
-    console.print(build_dashboard(metrics))
+    console.print(build_dashboard(metrics, storage))
     return console.export_text()
 
 
@@ -30,7 +30,6 @@ def test_dashboard_shows_every_metric():
     assert "host-a" in page
     assert "0d 00:01:40" in page
     assert "33.5%" in page
-    assert "78.0%" in page
     assert "10.0.0.7" in page
     assert "17" in page
     assert "2026-08-01 00:00:00" in page
@@ -80,3 +79,16 @@ def test_the_renderer_and_the_collector_agree_on_every_key(monkeypatch):
     monkeypatch.setattr(system, "get_ipv4_address", lambda: "127.0.0.1")
 
     render(system.collect_system_metrics())
+
+
+def test_dashboard_shows_one_row_per_storage_entry():
+    storage = (
+        StorageEntry(label="/", used=65 * 1024**3, total=98 * 1024**3, percent=70.0),
+        StorageEntry(label="VG ubuntu-vg", total=251111931904, note="unallocated"),
+    )
+
+    page = render(METRICS, storage)
+
+    assert "65.0 / 98.0 GiB (70.0%)" in page
+    assert "233.9 GiB unallocated" in page
+    assert "Disk utilization" not in page

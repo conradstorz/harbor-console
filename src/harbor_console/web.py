@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
-from harbor_console.storage import StorageEntry, format_entry
+from harbor_console.storage import format_entry
 
 REFRESH_SECONDS = 30
 
@@ -84,7 +84,6 @@ def _host_table(snapshot: Snapshot) -> str:
         ("CPU", f"{float(snapshot.metrics['cpu_utilization']):.1f}%"),
         ("Memory", snapshot.metrics["memory_summary"]),
         ("Swap", snapshot.metrics["swap_summary"]),
-        ("Disk", f"{float(snapshot.metrics['disk_utilization']):.1f}%"),
         ("IPv4", snapshot.metrics["ipv4_address"]),
     ]
     # Placed here rather than inserted by index: a row added above would move

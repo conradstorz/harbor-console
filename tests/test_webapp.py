@@ -18,7 +18,6 @@ METRICS = {
     "cpu_utilization": 1.0,
     "memory_summary": "4.0 / 32.0 GiB (12.5%)",
     "swap_summary": "0.0 / 8.0 GiB (0.0%)",
-    "disk_utilization": 3.0,
     "ipv4_address": "10.0.0.7",
     "docker_container_count": 1,
     "current_datetime": "2026-09-02 14:02:11",

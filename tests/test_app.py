@@ -23,7 +23,7 @@ def test_run_updates_dashboard_and_exits_cleanly(monkeypatch):
         calls["count"] += 1
         return {"tick": calls["count"]}
 
-    def renderer(metrics):
+    def renderer(metrics, _storage):
         return f"render-{metrics['tick']}"
 
     def fake_sleep(_interval):
@@ -40,3 +40,26 @@ def test_run_updates_dashboard_and_exits_cleanly(monkeypatch):
 
     assert result == 0
     assert calls["count"] == 1
+
+
+def test_run_passes_storage_to_the_renderer(monkeypatch):
+    seen = {}
+
+    def renderer(metrics, storage):
+        seen["storage"] = storage
+        return "rendered"
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "Live", DummyLive)
+
+    result = app.run(
+        collector=lambda: {"tick": 1},
+        renderer=renderer,
+        sleep=fake_sleep,
+        storage_collector=lambda: ("entry",),
+    )
+
+    assert result == 0
+    assert seen["storage"] == ("entry",)

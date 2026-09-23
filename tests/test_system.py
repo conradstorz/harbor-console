@@ -28,7 +28,6 @@ def test_collect_system_metrics(monkeypatch):
     monkeypatch.setattr(system.psutil, "boot_time", lambda: 900.0)
     monkeypatch.setattr(system.psutil, "cpu_percent", lambda interval=None: 12.5)
     monkeypatch.setattr(system.psutil, "virtual_memory", lambda: memory)
-    monkeypatch.setattr(system.psutil, "disk_usage", lambda _path: SimpleNamespace(percent=78.0))
     monkeypatch.setattr(system.socket, "gethostname", lambda: "host-a")
     monkeypatch.setattr(system, "get_ipv4_address", lambda: "10.0.0.7")
     monkeypatch.setattr(system, "get_docker_container_count", lambda: 3)
@@ -42,11 +41,15 @@ def test_collect_system_metrics(monkeypatch):
         "cpu_utilization": 12.5,
         "memory_summary": "4.0 / 32.0 GiB (13.0%)",
         "swap_summary": "0.0 / 8.0 GiB (0.0%)",
-        "disk_utilization": 78.0,
         "ipv4_address": "10.0.0.7",
         "docker_container_count": 3,
         "current_datetime": "2026-08-01 00:00:00",
     }
+
+
+def test_metrics_no_longer_carry_a_disk_percentage():
+    """Storage is a list of its own now -- see storage.py and ADR 18's lesson."""
+    assert "disk_utilization" not in system.collect_system_metrics()
 
 
 def test_docker_count_gives_the_subprocess_a_timeout():

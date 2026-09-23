@@ -85,7 +85,6 @@ def starting_snapshot(host: str, now: datetime, tailnet_address: str | None = No
             "cpu_utilization": 0.0,
             "memory_summary": "collecting",
             "swap_summary": "collecting",
-            "disk_utilization": 0.0,
             "ipv4_address": "collecting",
             "docker_container_count": 0,
             "current_datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
