@@ -114,9 +114,12 @@ which is the distinction ADR 18 turns on.
 ### Functions
 
 ```python
+REMOTE_FSTYPES = frozenset({"cifs", "smb3", "nfs", "nfs4", "fuse.sshfs"})
+LSBLK_TIMEOUT_SECONDS = 5.0
+
 def local_filesystems(partitions=psutil.disk_partitions, usage=psutil.disk_usage) -> list[StorageEntry]
 def remote_mounts(mounts_path="/proc/mounts") -> list[StorageEntry]
-def block_devices(runner=_run_lsblk) -> list[StorageEntry]
+def block_devices(run=subprocess.run, timeout=LSBLK_TIMEOUT_SECONDS) -> list[StorageEntry]
 def collect_storage(...) -> tuple[StorageEntry, ...]
 ```
 
@@ -129,6 +132,15 @@ collector and sleep.
   (`squashfs`, `erofs`) rather than by the read-only flag -- a legitimately
   read-only ext4 or vfat mount is storage someone may need to see, and on
   hpz440 `/boot/efi` reports `ro` among its options.
+  It also drops any partition whose fstype is in `REMOTE_FSTYPES` *before*
+  calling `disk_usage` on it. psutil's `all=False` already omits those on
+  Linux -- they are `nodev` filesystems, and the two CIFS mounts are verified
+  absent from its output on hpz440 -- but that is an implementation detail of
+  a dependency, and the promise that nothing here can block on a dead server
+  should be this module's own. `remote_mounts` is then the single source of
+  remote rows, so a mount cannot appear twice: anything matched by
+  `REMOTE_FSTYPES` leaves `local_filesystems` unmeasured and comes back from
+  `/proc/mounts` named and unmeasured.
   Each `disk_usage` call is guarded on its own: one unreadable mount becomes
   `unavailable` and the other rows survive.
 - **`remote_mounts`** reads `/proc/mounts` directly rather than
@@ -136,7 +148,11 @@ collector and sleep.
   and the CIFS mounts are absent from the default list anyway. Matches on
   fstype (`cifs`, `nfs`, `nfs4`, `smbfs`, `fuse.sshfs`). Never measured.
 - **`block_devices`** runs `lsblk -J -b -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS`
-  and walks the tree twice: once for `LVM2_member` devices, emitting PV size
+  under an explicit timeout, the way every other subprocess collector here
+  does (`DOCKER_TIMEOUT_SECONDS` in `system.py`, and its pair in
+  `docker.py`). A stalled device or udev interaction is exactly the hazard
+  the CIFS rule above exists for, and an external command with no deadline
+  reintroduces it on both refresh paths. It walks the tree twice: once for `LVM2_member` devices, emitting PV size
   minus the sum of its LV children as slack; once for devices of type `disk`
   or `part` with no mountpoint, no children, no LVM or RAID membership, and
   `rom` excluded.
@@ -148,9 +164,16 @@ collector and sleep.
 
 Collectors never raise on a hostile environment, per CLAUDE.md:
 
-- `lsblk` missing or failing yields no block entries, the way
-  `get_docker_container_count()` yields `0`.
+- `lsblk` missing, failing, exceeding `LSBLK_TIMEOUT_SECONDS`, or returning
+  output that is not the expected JSON yields no block entries, the way
+  `get_docker_container_count()` yields `0` -- `TimeoutExpired`,
+  `FileNotFoundError` and `JSONDecodeError` all land in the same place.
 - A single mount that cannot be measured yields `unavailable` for that row.
+- `/proc/mounts` unreadable yields one entry labelled `remote mounts` with
+  note `unavailable`, not an empty list, for the same reason
+  `disk_partitions` failing does: nothing found and nothing looked at must
+  not render alike. A single malformed record inside a readable file is
+  skipped on its own, so one short line does not cost the mounts around it.
 - `disk_partitions` itself failing yields one entry labelled `storage` with
   note `unavailable` -- not an empty list. An empty list would be
   indistinguishable from a host with no storage, and ADR 18 is precisely
@@ -165,12 +188,24 @@ collector did not hand it.
 
 ### Wiring
 
-`app.run()` gains a `storage_collector` parameter beside `collector`,
-defaulting to the real implementation, and passes the entries to
-`build_dashboard(metrics, storage)`. `Snapshot` gains
-`storage: tuple[StorageEntry, ...]`; no `storage_available` flag, because the
-notes carry that in-band and every host has a root filesystem. `webapp`'s
-degraded stub drops `disk_utilization` along with the key.
+Both paths get the collector, not just the console:
+
+- `app.run()` gains a `storage_collector` parameter beside `collector`,
+  defaulting to the real implementation, and passes the entries to
+  `build_dashboard(metrics, storage)`.
+- `webapp.collect_snapshot()` gains a `storage=collect_storage` parameter
+  alongside its existing `collector`, `listeners`, `containers`, `routers`
+  and `prober`, and calls it once per cycle. `_default_prober` keeps taking
+  the default. Without this the web renderer would be handed an empty tuple
+  every cycle and its new Storage table would render blank while the console
+  showed the real thing -- the two surfaces are one core, and a field on
+  `Snapshot` that only one path populates is not wiring, it is a
+  discrepancy.
+- `Snapshot` gains `storage: tuple[StorageEntry, ...]`, defaulting to `()`
+  so `starting_snapshot()` stays honest about a cycle that has not run. No
+  `storage_available` flag: the notes carry that in-band and every host has a
+  root filesystem.
+- `webapp`'s degraded stub drops `disk_utilization` along with the key.
 
 ## Testing
 
@@ -187,7 +222,14 @@ TDD, one behaviour at a time. New `tests/test_storage.py` covers:
   optical drives
 - a stray disk with no mountpoint, and the exclusions: LVM members, parents
   with children, `rom`
-- `lsblk` absent, `lsblk` returning garbage, `disk_partitions` raising
+- `lsblk` absent, `lsblk` returning garbage, `lsblk` exceeding its timeout,
+  `disk_partitions` raising, `/proc/mounts` unreadable, and one malformed
+  `/proc/mounts` record among good ones
+- a remote fstype handed back by a fake `disk_partitions`, proving
+  `local_filesystems` drops it before measuring rather than relying on
+  psutil's default, and that it appears exactly once in `collect_storage`
+- `collect_snapshot` populating `Snapshot.storage` from an injected fake, so
+  the web path cannot silently render an empty table
 
 Updated: `test_system.py` (key removed), `test_ui.py`, `test_web.py`,
 `test_webapp.py`, `test_app.py`.
