@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Harbor Console is a lightweight operational console for a small fleet of Linux servers, with two surfaces over one core, plus the host's edge:
 
-- **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU/memory/disk, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
+- **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU/disk, memory and swap with their own scale, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
 - **`harbor-console-web`** (shipped) — a read-only status page served to the tailnet: the directory of every container that declares itself with compose labels, its state as Traefik and a probe through Traefik report it, and the findings where the declarations and the host disagree. Runs as its own systemd unit (`deploy/harbor-console-web.service`) on the host's Tailscale address, fixed port 8100 ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)), and is read at `harbor.hpz440.ohr3023.org` through the proxy.
 - **The edge** — Traefik, from `deploy/traefik/compose.yaml` in this repo, publishing the tailnet address's `:80` and `:443` and nothing else, with one wildcard certificate for `*.hpz440.ohr3023.org`. A container declares itself with labels and joins the `harbor` network; nothing generates those labels and there is no sync step ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 
