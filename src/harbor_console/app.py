@@ -7,12 +7,14 @@ from collections.abc import Callable
 
 from rich.live import Live
 
+from harbor_console.storage import StorageEntry, collect_storage
 from harbor_console.system import collect_system_metrics
 from harbor_console.ui import build_dashboard
 
 
 MetricsCollector = Callable[[], dict[str, str | float | int]]
-DashboardBuilder = Callable[[dict[str, str | float | int]], object]
+StorageCollector = Callable[[], tuple[StorageEntry, ...]]
+DashboardBuilder = Callable[[dict[str, str | float | int], tuple[StorageEntry, ...]], object]
 
 
 def run(
@@ -20,14 +22,16 @@ def run(
     collector: MetricsCollector = collect_system_metrics,
     renderer: DashboardBuilder = build_dashboard,
     sleep: Callable[[float], None] = time.sleep,
+    storage_collector: StorageCollector = collect_storage,
 ) -> int:
     """Run the Harbor Console refresh loop."""
     try:
-        initial_metrics = collector()
-        with Live(renderer(initial_metrics), refresh_per_second=4, screen=True) as live:
+        with Live(
+            renderer(collector(), storage_collector()), refresh_per_second=4, screen=True
+        ) as live:
             while True:
                 sleep(refresh_interval)
-                live.update(renderer(collector()))
+                live.update(renderer(collector(), storage_collector()))
     except KeyboardInterrupt:
         return 0
 

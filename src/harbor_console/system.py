@@ -119,7 +119,6 @@ def collect_system_metrics() -> dict[str, str | float | int]:
             memory.total - memory.available, memory.total, memory.percent
         ),
         "swap_summary": get_swap_summary(),
-        "disk_utilization": psutil.disk_usage("/").percent,
         "ipv4_address": get_ipv4_address(),
         "docker_container_count": get_docker_container_count(),
         "current_datetime": now.strftime("%Y-%m-%d %H:%M:%S"),

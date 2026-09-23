@@ -13,6 +13,7 @@ from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
 from harbor_console.inventory import Entry
 from harbor_console.probe import Health
+from harbor_console.storage import StorageEntry
 
 
 @dataclass(frozen=True)
@@ -46,3 +47,7 @@ class Snapshot:
     probed: bool = False
     #: The tailnet address this process bound. None only outside `webapp.main`.
     tailnet_address: str | None = None
+    #: Every filesystem, volume-group slack, stray device and named-but-
+    #: unmeasured network mount. Empty until the first cycle runs, which
+    #: `probed` is what distinguishes.
+    storage: tuple[StorageEntry, ...] = ()

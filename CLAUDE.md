@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Harbor Console is a lightweight operational console for a small fleet of Linux servers, with two surfaces over one core, plus the host's edge:
 
-- **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU/disk, memory and swap with their own scale, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
+- **`harbor-console`** (shipped, v0.1.0) — a terminal dashboard that replaces the default Linux login console with an at-a-glance server health view (hostname, uptime, CPU, storage — one row per local filesystem, plus volume-group slack, stray devices, remote mounts and an image-mount summary — memory and swap with their own scale, IPv4, Docker container count, clock). Refreshes once per second, exits cleanly on Ctrl+C.
 - **`harbor-console-web`** (shipped) — a read-only status page served to the tailnet: the directory of every container that declares itself with compose labels, its state as Traefik and a probe through Traefik report it, and the findings where the declarations and the host disagree. Runs as its own systemd unit (`deploy/harbor-console-web.service`) on the host's Tailscale address, fixed port 8100 ([ADR 7](docs/adr/0007-bind-tailscale-address-only.md)), and is read at `harbor.hpz440.ohr3023.org` through the proxy.
 - **The edge** — Traefik, from `deploy/traefik/compose.yaml` in this repo, publishing the tailnet address's `:80` and `:443` and nothing else, with one wildcard certificate for `*.hpz440.ohr3023.org`. A container declares itself with labels and joins the `harbor` network; nothing generates those labels and there is no sync step ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 
@@ -34,6 +34,7 @@ Strict separation by responsibility — collect, render, coordinate — one job 
 Existing (implemented):
 
 - `system.py` — **collects** metrics only. `collect_system_metrics()` returns a flat `dict[str, str | float | int]`. No rendering.
+- `storage.py` — **collects** what this host's storage holds, from two sources: `psutil` for every mounted local filesystem, `lsblk` for the block layer underneath it — the volume-group slack `df` cannot see, and devices nothing has mounted. An entry carries numbers where they exist and a reason where they do not, so a renderer never has to decide which case it is looking at; a network mount is named from `/proc/mounts` but never measured, because `statvfs` on a dead CIFS mount blocks, and blocking is fatal to a 1 Hz refresh loop and to the web prober alike. Shared by both surfaces — `app.py` imports it exactly like `system.py`, and `webapp.py` imports it exactly like the web-surface collectors below.
 - `ui.py` — **renders** only. `build_dashboard(metrics)` turns the metrics dict into a `rich` renderable. No business logic, no metric collection.
 - `app.py` — **coordinates** the refresh loop (`rich.live.Live`). No collection or rendering logic of its own.
 
@@ -81,7 +82,9 @@ Every routed container also needs `networks: [harbor]` and the top-level `networ
 
 ### Graceful degradation
 
-Collectors never raise on a hostile environment: `get_docker_container_count()` returns `0` when the `docker` binary is missing or errors; `get_ipv4_address()` falls back to `127.0.0.1`; `docker.py` and `traefik.py` return their own sentinels rather than an exception or a silent empty list. New collectors should follow suit — the dashboard "never crashes during normal operation" is a release criterion.
+Collectors never raise on a hostile environment: `get_docker_container_count()` returns `0` when the `docker` binary is missing or errors; `get_ipv4_address()` falls back to `127.0.0.1`; `docker.py` and `traefik.py` return their own sentinels rather than an exception or a silent empty list. `storage.py`'s `local_filesystems`, `remote_mounts`, and `block_devices` each emit their own sentinel entry the same way — `NOTE_UNAVAILABLE`, or `NOTE_PERMISSION_DENIED` for a mount that exists but the process cannot read (the running `User=harbor` cannot read `/home/arm/media` on the one host this ships to, a normal condition here, not a hostile one) — rather than raising or silently dropping a row, the same "absence of evidence is never a finding" rule ADR 18 states for the listening inventory. New collectors should follow suit — the dashboard "never crashes during normal operation" is a release criterion.
+
+A `NOTE_PERMISSION_DENIED` row still usually carries a size, and that fallback is the part most likely to get silently refactored away by someone who sees the note but not why a number sits next to it: `local_filesystems` takes a `sizes` mapping, and `collect_storage`'s default wires it to `mounted_device_sizes()`, which reads the same `lsblk` output `block_devices` does. The console runs unprivileged (ADR 5) and cannot `statvfs` a locked-down mount, but `lsblk`'s view of the block layer underneath is not privilege-gated, so a mount `disk_usage` refuses can usually still report the size the block layer already knows.
 
 One deliberate exception, where failing loudly is the point:
 
