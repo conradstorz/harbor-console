@@ -1,11 +1,13 @@
 from types import SimpleNamespace
 
 from harbor_console.storage import (
+    NOTE_REMOTE,
     NOTE_UNAVAILABLE,
     StorageEntry,
     format_entry,
     image_mounts,
     local_filesystems,
+    remote_mounts,
 )
 
 
@@ -161,3 +163,53 @@ def test_image_mounts_mixed_fstypes_sorted_alphabetically():
 
     assert len(entries) == 1
     assert format_entry(entries[0]) == "9 image mounts (erofs, squashfs, read-only)"
+
+
+MOUNTS = """\
+/dev/mapper/vg-root / ext4 rw,relatime 0 0
+//nas/photo /mnt/nas/photos cifs rw,relatime,vers=3.1.1 0 0
+//nas/Photos-Organized /mnt/nas/organized cifs rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid 0 0
+nas:/export /mnt/nfs nfs4 rw 0 0
+"""
+
+
+def test_remote_mounts_names_network_mounts_and_nothing_else(tmp_path):
+    path = tmp_path / "mounts"
+    path.write_text(MOUNTS)
+
+    entries = remote_mounts(mounts_path=str(path))
+
+    assert [e.label for e in entries] == [
+        "/mnt/nas/photos",
+        "/mnt/nas/organized",
+        "/mnt/nfs",
+    ]
+    assert all(e.note == NOTE_REMOTE for e in entries)
+    assert all(e.total is None and e.used is None for e in entries)
+
+
+def test_remote_mounts_unescapes_octal_spaces(tmp_path):
+    path = tmp_path / "mounts"
+    path.write_text("//nas/share /mnt/my\\040photos cifs rw 0 0\n")
+
+    entries = remote_mounts(mounts_path=str(path))
+
+    assert [e.label for e in entries] == ["/mnt/my photos"]
+
+
+def test_remote_mounts_skips_one_malformed_record_and_keeps_the_rest(tmp_path):
+    path = tmp_path / "mounts"
+    path.write_text("garbage\n//nas/photo /mnt/nas/photos cifs rw 0 0\n\n")
+
+    entries = remote_mounts(mounts_path=str(path))
+
+    assert [e.label for e in entries] == ["/mnt/nas/photos"]
+
+
+def test_remote_mounts_unreadable_is_unavailable_not_empty(tmp_path):
+    entries = remote_mounts(mounts_path=str(tmp_path / "absent"))
+
+    assert len(entries) == 1
+    assert entries[0].label == "remote mounts"
+    assert entries[0].note == NOTE_UNAVAILABLE

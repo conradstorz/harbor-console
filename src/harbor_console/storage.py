@@ -135,3 +135,35 @@ def image_mounts(
             note=f"{count} image {mount_word} ({fstype_str}, read-only)",
         )
     ]
+
+
+def remote_mounts(mounts_path: str = "/proc/mounts") -> list[StorageEntry]:
+    """Network mounts, named from /proc/mounts and never measured.
+
+    Read directly rather than through `disk_partitions(all=True)`, which on
+    hpz440 answers 76 entries of mostly kernel noise. Enumerating is safe;
+    measuring is what hangs on a dead server.
+
+    An unreadable file yields one `unavailable` entry rather than an empty list,
+    for the same reason `local_filesystems` does. A single malformed record
+    inside a readable file is skipped on its own, so one short line does not
+    cost the mounts around it.
+    """
+    try:
+        text = Path(mounts_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [StorageEntry(label="remote mounts", note=NOTE_UNAVAILABLE)]
+
+    entries: list[StorageEntry] = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        mountpoint, fstype = fields[1], fields[2]
+        if fstype not in REMOTE_FSTYPES:
+            continue
+        # /proc/mounts escapes a space in a path as \040.
+        entries.append(
+            StorageEntry(label=mountpoint.replace("\\040", " "), note=NOTE_REMOTE)
+        )
+    return entries
