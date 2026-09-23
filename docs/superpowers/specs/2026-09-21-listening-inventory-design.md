@@ -1,7 +1,9 @@
 # Listening inventory: show every port, not only the ones a rule anticipates
 
 Date: 2026-09-21
-Status: approved, not yet implemented
+Status: implemented. Shipped on `feat/listening-inventory`, merged in 49dafbd,
+deployed to hpz440 on 2026-09-22 and verified against `ss -tuln`. See [ADR
+18](../../adr/0018-show-the-full-listening-inventory.md).
 
 ## The problem
 
