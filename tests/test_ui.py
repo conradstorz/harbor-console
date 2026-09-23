@@ -11,7 +11,8 @@ METRICS = {
     "swap_summary": "0.0 / 8.0 GiB (0.0%)",
     "disk_utilization": 78.0,
     "ipv4_address": "10.0.0.7",
-    "docker_container_count": 3,
+    # 17 rather than a single digit: a lone "3" would also match "33.5%".
+    "docker_container_count": 17,
     "current_datetime": "2026-08-01 00:00:00",
 }
 
@@ -31,6 +32,7 @@ def test_dashboard_shows_every_metric():
     assert "33.5%" in page
     assert "78.0%" in page
     assert "10.0.0.7" in page
+    assert "17" in page
     assert "2026-08-01 00:00:00" in page
 
 
