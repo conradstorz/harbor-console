@@ -246,6 +246,14 @@ def test_storage_before_the_first_cycle_says_so_rather_than_showing_empty():
     assert "Nothing has been collected yet" in page
 
 
+def test_storage_probed_but_empty_says_no_storage_could_be_read():
+    """Distinct from the "not probed yet" case above: here a cycle ran and
+    came back with nothing to report."""
+    page = web.render_page(snapshot(probed=True, storage=())).decode()
+
+    assert "No storage could be read." in page
+
+
 def test_page_auto_refreshes():
     assert 'http-equiv="refresh" content="30"' in web.render_page(snapshot()).decode()
 

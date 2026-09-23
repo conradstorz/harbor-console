@@ -47,8 +47,37 @@ def test_collect_system_metrics(monkeypatch):
     }
 
 
-def test_metrics_no_longer_carry_a_disk_percentage():
-    """Storage is a list of its own now -- see storage.py and ADR 18's lesson."""
+def _patch_all_real_collectors(monkeypatch):
+    """Stand in for every collector `collect_system_metrics` calls that
+    touches the real host: two shell out or open a socket, and the rest are
+    stubbed alongside them so no test here depends on the live machine.
+    Mirrors `test_collect_system_metrics`'s patch list.
+    """
+    fake_now = SimpleNamespace(
+        timestamp=lambda: 1_000.0,
+        strftime=lambda _fmt: "2026-08-01 00:00:00",
+    )
+    memory = SimpleNamespace(percent=13.0, total=32 * 1024**3, available=28 * 1024**3)
+
+    monkeypatch.setattr(system, "datetime", SimpleNamespace(now=lambda: fake_now))
+    monkeypatch.setattr(system.psutil, "boot_time", lambda: 900.0)
+    monkeypatch.setattr(system.psutil, "cpu_percent", lambda interval=None: 12.5)
+    monkeypatch.setattr(system.psutil, "virtual_memory", lambda: memory)
+    monkeypatch.setattr(system.socket, "gethostname", lambda: "host-a")
+    monkeypatch.setattr(system, "get_ipv4_address", lambda: "10.0.0.7")
+    monkeypatch.setattr(system, "get_docker_container_count", lambda: 3)
+    monkeypatch.setattr(system, "get_swap_summary", lambda: "0.0 / 8.0 GiB (0.0%)")
+
+
+def test_metrics_no_longer_carry_a_disk_percentage(monkeypatch):
+    """Storage is a list of its own now -- see storage.py and ADR 18's lesson.
+
+    Every real collector call site is patched (see `_patch_all_real_collectors`)
+    so this no longer forks a real `docker ps` or opens a real UDP socket to
+    prove a negative about the dict's keys.
+    """
+    _patch_all_real_collectors(monkeypatch)
+
     assert "disk_utilization" not in system.collect_system_metrics()
 
 

@@ -92,3 +92,12 @@ def test_dashboard_shows_one_row_per_storage_entry():
     assert "65.0 / 98.0 GiB (70.0%)" in page
     assert "233.9 GiB unallocated" in page
     assert "Disk utilization" not in page
+    # "VG ubuntu-vg" is unambiguous, so a plain substring check proves its
+    # label survived the render.
+    assert "VG ubuntu-vg" in page
+    # A bare "/" is too ambiguous for a substring check -- it's also the
+    # separator inside "65.0 / 98.0 GiB (70.0%)" and part of the panel's own
+    # border characters. Pin it to its own cell instead: the exported text
+    # renders each row as "│ <label>   <value>", so the token right after
+    # the panel's left border is the label column.
+    assert any(line.split()[1:2] == ["/"] for line in page.splitlines())

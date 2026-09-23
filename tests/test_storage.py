@@ -607,6 +607,37 @@ def test_collect_storage_orders_filesystems_slack_stray_remote_then_images():
     assert isinstance(entries, tuple)
 
 
+def test_collect_storage_names_a_remote_mount_exactly_once(tmp_path):
+    """A CIFS mount must come through `collect_storage` named, not measured,
+    and not both -- the design document's promise that combines what
+    `test_local_filesystems_never_measures_a_remote_mount` and
+    `test_remote_mounts_names_network_mounts_and_nothing_else` each prove on
+    their own half of the pipeline.
+    """
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-root", "/", "ext4"),
+        part("//nas/photo", "/mnt/nas/photos", "cifs"),
+    ]
+    mounts_path = tmp_path / "mounts"
+    mounts_path.write_text("//nas/photo /mnt/nas/photos cifs rw,relatime,vers=3.1.1 0 0\n")
+
+    entries = collect_storage(
+        filesystems=lambda: local_filesystems(partitions=partitions),
+        remote=lambda: remote_mounts(mounts_path=str(mounts_path)),
+        blocks=lambda: [],
+        images=lambda: [],
+    )
+
+    matches = [e for e in entries if e.label == "/mnt/nas/photos"]
+    assert len(matches) == 1
+    assert matches[0].note == NOTE_REMOTE
+
+
 def test_collect_storage_defaults_touch_the_real_host_without_raising():
-    """The release criterion: a collector never raises on a hostile environment."""
+    """The release criterion: a collector never raises on a hostile environment.
+
+    Deliberately exercises the real machine -- do not rewrite this to use
+    fakes; that is `test_collect_storage_names_a_remote_mount_exactly_once`'s
+    job.
+    """
     assert isinstance(collect_storage(), tuple)
