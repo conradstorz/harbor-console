@@ -43,14 +43,19 @@ def get_swap_summary(
     collector here never raises on a hostile environment. A host with no swap
     says so rather than reading `0.0 / 0.0 GiB (0.0%)`, which looks like a bug
     rather than a fact.
+
+    The guard covers only the call to `swap_memory()` -- the platform failure
+    it exists for. A missing or renamed attribute on the object it returns is
+    a bug in this code, not a platform limitation, and should surface as one
+    rather than being swallowed and reported as "unavailable".
     """
     try:
         swap = swap_memory()
-        total = int(swap.total)  # type: ignore[attr-defined]
-        used = int(swap.used)  # type: ignore[attr-defined]
-        percent = float(swap.percent)  # type: ignore[attr-defined]
     except Exception:
         return "unavailable"
+    total = int(swap.total)  # type: ignore[attr-defined]
+    used = int(swap.used)  # type: ignore[attr-defined]
+    percent = float(swap.percent)  # type: ignore[attr-defined]
     if total == 0:
         return "none configured"
     return format_usage(used, total, percent)
