@@ -80,14 +80,17 @@ def _host_table(snapshot: Snapshot) -> str:
     rows = [
         ("Uptime", snapshot.metrics["uptime"]),
         ("CPU", f"{float(snapshot.metrics['cpu_utilization']):.1f}%"),
-        ("Memory", f"{float(snapshot.metrics['memory_utilization']):.1f}%"),
+        ("Memory", snapshot.metrics["memory_summary"]),
+        ("Swap", snapshot.metrics["swap_summary"]),
         ("Disk", f"{float(snapshot.metrics['disk_utilization']):.1f}%"),
         ("IPv4", snapshot.metrics["ipv4_address"]),
-        ("Containers", snapshot.metrics["docker_container_count"]),
-        ("Time", snapshot.metrics["current_datetime"]),
     ]
+    # Placed here rather than inserted by index: a row added above would move
+    # it silently, and this is the address the whole page is served on.
     if snapshot.tailnet_address is not None:
-        rows.insert(5, ("Tailnet", snapshot.tailnet_address))
+        rows.append(("Tailnet", snapshot.tailnet_address))
+    rows.append(("Containers", snapshot.metrics["docker_container_count"]))
+    rows.append(("Time", snapshot.metrics["current_datetime"]))
     cells = "".join(
         f"<tr><td>{escape(label)}</td><td>{escape(str(value))}</td></tr>"
         for label, value in rows

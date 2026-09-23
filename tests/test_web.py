@@ -19,7 +19,8 @@ METRICS = {
     "hostname": "hpz440",
     "uptime": "1d 00:00:00",
     "cpu_utilization": 1.0,
-    "memory_utilization": 2.0,
+    "memory_summary": "4.0 / 32.0 GiB (12.5%)",
+    "swap_summary": "0.0 / 8.0 GiB (0.0%)",
     "disk_utilization": 3.0,
     "ipv4_address": "10.0.0.7",
     "docker_container_count": 1,
@@ -43,6 +44,31 @@ def test_page_shows_host_metrics():
     assert "<h1>hpz440</h1>" in page
     assert "1d 00:00:00" in page
     assert "100.69.239.123" in page
+
+
+def test_host_table_shows_memory_with_its_scale():
+    page = web.render_page(snapshot()).decode()
+
+    assert "4.0 / 32.0 GiB (12.5%)" in page
+
+
+def test_host_table_shows_swap():
+    page = web.render_page(snapshot()).decode()
+
+    assert "Swap" in page
+    assert "0.0 / 8.0 GiB (0.0%)" in page
+
+
+def test_the_tailnet_row_sits_between_ipv4_and_containers():
+    page = web.render_page(snapshot()).decode()
+
+    assert page.index("IPv4") < page.index("Tailnet") < page.index("Containers")
+
+
+def test_the_host_table_omits_the_tailnet_row_without_an_address():
+    page = web.render_page(snapshot(tailnet_address=None)).decode()
+
+    assert "Tailnet" not in page
 
 
 def test_http_row_links_its_route():
