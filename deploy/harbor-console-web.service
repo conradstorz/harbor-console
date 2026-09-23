@@ -16,7 +16,14 @@ SupplementaryGroups=docker
 # what binds 80/443 and holds CAP_NET_BIND_SERVICE).
 CapabilityBoundingSet=
 NoNewPrivileges=yes
-ProtectHome=yes
+# read-only, not yes: `yes` replaces /home with an empty tmpfs inside this
+# unit's mount namespace, and the storage collector reports the mounts the
+# *service* sees. On hpz440 that silently hid /home/arm/media -- 2.4 TiB, the
+# largest filesystem on the host and the reason the collector exists -- because
+# the volume simply was not mounted from the process's point of view. Nothing
+# failed and no row appeared. read-only keeps /home unwritable, which is all
+# this process ever needed: it reads statvfs and never writes there.
+ProtectHome=read-only
 PrivateTmp=yes
 StandardOutput=journal
 StandardError=journal
