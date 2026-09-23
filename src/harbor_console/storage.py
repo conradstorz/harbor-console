@@ -85,14 +85,15 @@ def local_filesystems(
     yields one `unavailable` entry rather than an empty list -- nothing found
     and nothing looked at must not render alike (ADR 18).
 
-    `usage()` raising `PermissionError` is distinguished from any other
-    failure (`NOTE_PERMISSION_DENIED` vs `NOTE_UNAVAILABLE`), because it is
-    the one failure mode `sizes` -- typically `mounted_device_sizes()` --
-    can answer without privilege: a mount `os.statvfs` cannot read for this
-    user often still has a size `lsblk` already knows. When `sizes` has the
-    mountpoint, the entry keeps that size (the size-only render shape);
-    otherwise it stays note-only, exactly as any other unmeasurable mount
-    does.
+    Either failure branch consults `sizes` -- typically `mounted_device_sizes()`
+    -- for a size-only render when it has the mountpoint (the size-only render
+    shape); otherwise the entry stays note-only. Only the note text differs:
+    `usage()` raising `PermissionError` gets `NOTE_PERMISSION_DENIED` rather
+    than `NOTE_UNAVAILABLE`, because it is the specific, expected case here --
+    the unprivileged `harbor` user on `/home/arm/media` -- and a mount
+    `os.statvfs` cannot read for this user often still has a size `lsblk`
+    already knows. Any other failure still gets `NOTE_UNAVAILABLE`, with a
+    size too if `sizes` has one.
     """
     try:
         found = list(partitions(all=False))
@@ -231,11 +232,12 @@ def _walk(nodes: list) -> list[dict]:
     return flat
 
 
-#: A single, unkeyed 60-second cache for the last `_lsblk_nodes` read. Not
-#: keyed on `run` or `timeout` -- this project runs one host, one `lsblk`
-#: invocation shape, and block topology does not change at 1 Hz. Tests that
-#: fake `lsblk` and need a fresh read must call `_clear_lsblk_cache()` first;
-#: see `_lsblk_nodes`.
+#: A single, unkeyed 60-second cache for the last successful `_lsblk_nodes`
+#: read. Not keyed on `run` or `timeout` -- this project runs one host, one
+#: `lsblk` invocation shape, and block topology does not change at 1 Hz. A
+#: failed read is never stored here -- see `_lsblk_nodes`. Tests that fake
+#: `lsblk` and need a fresh read must call `_clear_lsblk_cache()` first; see
+#: `_lsblk_nodes`.
 _LSBLK_CACHE_TTL_SECONDS = 60.0
 _lsblk_cache: dict[str, object] = {"result": None, "timestamp": None}
 
@@ -280,13 +282,18 @@ def _lsblk_nodes(run: Callable[..., object], timeout: float) -> list[dict] | Non
 
     Returns `None` when `lsblk` could not be read at all -- missing binary,
     non-zero exit, timeout, or output that is not the expected JSON shape
-    (see `_read_lsblk_nodes`). Both `block_devices` and
-    `mounted_device_sizes` read through here rather than duplicating the
-    subprocess call, so they share one cached read per TTL window.
+    (see `_read_lsblk_nodes`). Only a successful read is cached; a failed one
+    is not stored and does not start the TTL, so a transient `lsblk` failure
+    costs at most the one call it happened on -- the very next call retries
+    for real rather than replaying the failure for the rest of the window.
+    Both `block_devices` and `mounted_device_sizes` read through here rather
+    than duplicating the subprocess call, so they share one cached read per
+    TTL window.
 
     The cache is a single module-level slot, not keyed on `run` or `timeout`
     -- see `_clear_lsblk_cache`. Tests that fake `lsblk` must reset it first
-    if they need this call to actually invoke their fake.
+    if they need this call to actually invoke their fake after a prior
+    successful read.
     """
     now = time.monotonic()
     timestamp = _lsblk_cache["timestamp"]
@@ -294,8 +301,9 @@ def _lsblk_nodes(run: Callable[..., object], timeout: float) -> list[dict] | Non
         return _lsblk_cache["result"]  # type: ignore[return-value]
 
     result = _read_lsblk_nodes(run, timeout)
-    _lsblk_cache["result"] = result
-    _lsblk_cache["timestamp"] = now
+    if result is not None:
+        _lsblk_cache["result"] = result
+        _lsblk_cache["timestamp"] = now
     return result
 
 
@@ -310,6 +318,15 @@ def mounted_device_sizes(
     tree has both a mountpoint and a known size. This is how
     `local_filesystems` can still report a size for a mount `disk_usage`
     cannot read unprivileged: `lsblk` already knows the device's size.
+
+    That size is the *device or logical volume*'s size, not the filesystem's
+    -- `lsblk`'s view, not `statvfs`'s. A size-only row this feeds (e.g.
+    `/home/arm/media`) therefore sits a few percent above what `disk_usage`
+    would report for that same mount, and on a different basis than every
+    measured row in the table: device/LV size versus filesystem-reported
+    size, which nets out overhead like the ext4 journal and reserved blocks.
+    The `permission denied` note is currently the only hint that a row is
+    different in kind this way.
     """
     nodes = _lsblk_nodes(run, timeout)
     if nodes is None:
@@ -344,6 +361,13 @@ def block_devices(
     `local_filesystems` and `remote_mounts` already follow: nothing found and
     nothing looked at must not render alike (ADR 18). `lsblk` running fine
     and simply reporting nothing relevant still yields `[]`.
+
+    `run` and `timeout` are silently inert on a cache hit: `_lsblk_nodes`
+    reads through a shared 60-second cache (see `_clear_lsblk_cache`), and on
+    a hit `_read_lsblk_nodes` is never called, so an injected fake `run` or a
+    custom `timeout` passed here can be ignored without warning and the
+    caller gets another caller's cached read instead. A test that fakes
+    `run` and finds it was never invoked is hitting exactly this.
     """
     nodes = _lsblk_nodes(run, timeout)
     if nodes is None:

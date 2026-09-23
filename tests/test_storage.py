@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import harbor_console.storage as storage
 from harbor_console.storage import (
     LSBLK_TIMEOUT_SECONDS,
     NOTE_NO_FILESYSTEM,
@@ -580,6 +581,21 @@ def test_lsblk_cache_reset_returns_a_fresh_result():
     assert len(run_b.calls) == 1
 
 
+def test_lsblk_failed_read_is_not_cached():
+    """A transient lsblk failure must not poison the cache for the full TTL --
+    the next call (even immediately after, no _clear_lsblk_cache) should retry
+    lsblk for real rather than replaying the cached failure."""
+    run_a = fake_lsblk(raises=FileNotFoundError("lsblk"))
+    first = block_devices(run=run_a)
+    assert first == _BLOCK_DEVICES_UNAVAILABLE
+
+    run_b = fake_lsblk(LSBLK_TREE)
+    second = block_devices(run=run_b)
+
+    assert second != _BLOCK_DEVICES_UNAVAILABLE
+    assert len(run_b.calls) == 1  # run_b's lsblk actually ran -- not a cached failure
+
+
 def test_mounted_device_sizes_shares_the_block_devices_cache():
     """Both readers go through the same cached `_lsblk_nodes` read."""
     run_a = fake_lsblk(LSBLK_TREE)
@@ -641,3 +657,25 @@ def test_collect_storage_defaults_touch_the_real_host_without_raising():
     job.
     """
     assert isinstance(collect_storage(), tuple)
+
+
+def test_collect_storage_default_filesystems_wiring_passes_lsblk_sizes(monkeypatch):
+    """Pins collect_storage's default filesystems= lambda to actually forward
+    mounted_device_sizes() into local_filesystems(sizes=...). Every other test
+    in this file injects sizes= by hand, so this is the only test that would
+    catch that argument silently dropping from the default wiring -- the exact
+    defect the permission-denied-with-known-size fix was for."""
+    known_sizes = {"/home/arm/media": 2638829584384}
+    monkeypatch.setattr(storage, "mounted_device_sizes", lambda *a, **kw: known_sizes)
+
+    captured = {}
+
+    def spy_local_filesystems(*, sizes=None, **kwargs):
+        captured["sizes"] = sizes
+        return []
+
+    monkeypatch.setattr(storage, "local_filesystems", spy_local_filesystems)
+
+    storage.collect_storage(blocks=lambda: [], remote=lambda: [], images=lambda: [])
+
+    assert captured["sizes"] == known_sizes
