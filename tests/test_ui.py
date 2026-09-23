@@ -6,7 +6,7 @@ from harbor_console.ui import build_dashboard
 METRICS = {
     "hostname": "host-a",
     "uptime": "0d 00:01:40",
-    "cpu_utilization": 12.5,
+    "cpu_utilization": 33.5,
     "memory_summary": "4.0 / 32.0 GiB (12.5%)",
     "swap_summary": "0.0 / 8.0 GiB (0.0%)",
     "disk_utilization": 78.0,
@@ -28,7 +28,7 @@ def test_dashboard_shows_every_metric():
 
     assert "host-a" in page
     assert "0d 00:01:40" in page
-    assert "12.5%" in page
+    assert "33.5%" in page
     assert "78.0%" in page
     assert "10.0.0.7" in page
     assert "2026-08-01 00:00:00" in page
