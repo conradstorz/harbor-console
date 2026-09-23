@@ -63,10 +63,17 @@ Four behaviours of that service are load-bearing and easy to undo by accident:
   the reason `storage.py` exists. Nothing failed; the row simply was not there,
   because from inside the unit the volume was not mounted. `read-only` is the
   weakest setting that still shows it, and all this process needs: it calls
-  `statvfs` and never writes to `/home`. `PrivateTmp=yes` stays, and its private
-  `/tmp` and `/var/tmp` do appear as rows -- they are real mounts the process
-  really has, and hiding them would be the kind of pre-emptive filter
-  [ADR 18](docs/adr/0018-show-the-full-listening-inventory.md) argues against.
+  `statvfs` and never writes to `/home`. `PrivateTmp=yes` stays; its private
+  `/tmp` and `/var/tmp` are real mounts the process really has, but they are
+  bind views of the same root volume as `/`, `/home` and `/root` -- five
+  mountpoints for one device, and the kernel can even list one of them twice.
+  `local_filesystems` groups by backing device and keeps one row per volume,
+  at its shortest mountpoint, so `/tmp` and `/var/tmp` collapse into the `/`
+  row instead of repeating it. That is not the kind of pre-emptive filter
+  [ADR 18](docs/adr/0018-show-the-full-listening-inventory.md) argues
+  against -- every distinct volume still gets exactly one row; what is gone
+  is repeated views of bytes already counted, not a mount dropped because of
+  what it is.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
 

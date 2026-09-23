@@ -14,6 +14,21 @@ document already states for `disk_partitions` failing and for
 `/proc/mounts` being unreadable, which the first draft of this section
 missed for `lsblk` alone.
 
+**Amended 2026-09-23, after a production defect:** deployed behavior
+disagreed with this design in a third way. `harbor-console-web`'s systemd
+unit runs with `ProtectHome=read-only` and `PrivateTmp=yes`, so the
+*service's* mount namespace -- not the host's -- has the root volume bound
+at `/`, `/home`, `/root`, `/tmp` and `/var/tmp`, and the kernel even lists
+one of those binds twice. `local_filesystems` reported one row per mount, so
+the status page showed the root volume's usage five times and
+`/home/arm/media` twice -- worse than useless on a console whose job is the
+at-a-glance verdict. `local_filesystems` now groups partitions by backing
+`device` and keeps one row per volume, at its shortest mountpoint (ties
+broken alphabetically), deduplicating before `usage()` is called rather than
+after. This is not the pre-emptive filter ADR 18 warns about: every distinct
+volume still gets exactly one row, and none is dropped because of what it
+is -- only repeated views of bytes already counted disappear.
+
 ## The problem
 
 Both surfaces report storage as one number, from one filesystem:
