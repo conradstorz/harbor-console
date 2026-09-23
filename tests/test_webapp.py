@@ -8,6 +8,7 @@ from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
+from harbor_console.storage import StorageEntry
 from harbor_console.tailnet import TailnetUnavailable
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router
 
@@ -45,6 +46,22 @@ def collect(**overrides):
     )
     kwargs.update(overrides)
     return webapp.collect_snapshot(**kwargs)
+
+
+def test_collect_snapshot_populates_storage_from_the_injected_collector():
+    entry = StorageEntry(label="/", used=1, total=2, percent=50.0)
+
+    snapshot = collect(storage=lambda: (entry,))
+
+    assert snapshot.storage == (entry,)
+
+
+def test_collect_snapshot_defaults_to_the_real_storage_collector():
+    """The web path must not be the one surface left with an empty table."""
+    assert (
+        inspect.signature(webapp.collect_snapshot).parameters["storage"].default
+        is webapp.collect_storage
+    )
 
 
 def test_collect_snapshot_gathers_every_source():

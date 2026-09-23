@@ -14,6 +14,7 @@ from harbor_console.directory import (
 from harbor_console.inventory import REACH_ANY, REACH_LOOPBACK, REACH_TAILNET, Entry
 from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Snapshot
+from harbor_console.storage import StorageEntry
 
 METRICS = {
     "hostname": "hpz440",
@@ -159,7 +160,7 @@ def test_page_does_not_call_an_unprobed_host_clean():
 
     assert "No findings" not in page
     assert "No services are declared" not in page
-    assert page.lower().count("nothing has been collected yet") == 3
+    assert page.lower().count("nothing has been collected yet") == 4
 
 
 def test_page_notes_when_docker_could_not_be_read():
@@ -203,16 +204,47 @@ def test_banner_does_not_claim_a_last_good_page_before_the_first_cycle():
 def test_page_escapes_every_field_that_originates_outside_this_project():
     evil = Row("<b>n</b>", KIND_HTTP, "https://x/?a=<s>", "<i>c</i>", "<u>d</u>", "UP")
     finding = Finding("<k>", "<d>")
-    socket = Entry("<p>", "<a>", 1, REACH_ANY, "<c>")
+    # Not "<p>": the storage section emits a legitimate literal <p> tag when
+    # its list is empty, which would make that assertion vacuously true.
+    socket = Entry("<z>", "<a>", 1, REACH_ANY, "<c>")
+    disk = StorageEntry(label="<w>", note="<x>")
     metrics = dict(METRICS, hostname="<h>")
 
     page = web.render_page(
-        snapshot(rows=(evil,), findings=(finding,), inventory=(socket,), metrics=metrics)
+        snapshot(
+            rows=(evil,), findings=(finding,), inventory=(socket,), storage=(disk,), metrics=metrics
+        )
     ).decode()
 
-    for raw in ("<b>n</b>", "<s>", "<i>c</i>", "<u>d</u>", "<k>", "<d>", "<h>", "<p>", "<a>", "<c>"):
+    for raw in (
+        "<b>n</b>", "<s>", "<i>c</i>", "<u>d</u>", "<k>", "<d>", "<h>",
+        "<z>", "<a>", "<c>", "<w>", "<x>",
+    ):
         assert raw not in page
         assert escape(raw) in page
+
+
+STORAGE = (
+    StorageEntry(label="/", used=65 * 1024**3, total=98 * 1024**3, percent=70.0),
+    StorageEntry(label="VG ubuntu-vg", total=251111931904, note="unallocated"),
+    StorageEntry(label="/mnt/nas/photos", note="remote -- not measured"),
+)
+
+
+def test_page_shows_every_storage_entry():
+    page = web.render_page(snapshot(storage=STORAGE)).decode()
+
+    assert "Storage" in page
+    assert "65.0 / 98.0 GiB (70.0%)" in page
+    assert "233.9 GiB unallocated" in page
+    assert escape("/mnt/nas/photos") in page
+    assert escape("remote -- not measured") in page
+
+
+def test_storage_before_the_first_cycle_says_so_rather_than_showing_empty():
+    page = web.render_page(snapshot(probed=False, storage=())).decode()
+
+    assert "Nothing has been collected yet" in page
 
 
 def test_page_auto_refreshes():

@@ -35,6 +35,7 @@ from harbor_console.inventory import build_inventory
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener, listening_sockets
 from harbor_console.probe import Health, probe
 from harbor_console.snapshot import Snapshot
+from harbor_console.storage import StorageEntry, collect_storage
 from harbor_console.system import collect_system_metrics
 from harbor_console.tailnet import TailnetUnavailable, tailscale_address
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, traefik_routers
@@ -120,6 +121,7 @@ def collect_snapshot(
     containers: Callable[[], tuple[Container, ...]] = running_containers,
     routers: Callable[[], tuple[Router, ...]] = traefik_routers,
     prober: Callable[[str], Health] = probe,
+    storage: Callable[[], tuple[StorageEntry, ...]] = collect_storage,
     tailnet_address: str | None = None,
     own_port: int | None = WEB_PORT,
 ) -> Snapshot:
@@ -157,6 +159,7 @@ def collect_snapshot(
         collection_error=None,
         probed=True,
         tailnet_address=tailnet_address,
+        storage=storage(),
     )
 
 

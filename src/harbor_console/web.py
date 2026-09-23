@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
+from harbor_console.storage import StorageEntry, format_entry
 
 REFRESH_SECONDS = 30
 
@@ -64,6 +65,7 @@ def render_page(snapshot: Snapshot) -> bytes:
             "reported, and tcp and edge rows show UNKNOWN rather than a state.</p>"
         )
     parts.append(_host_table(snapshot))
+    parts.append(_storage_section(snapshot))
     parts.append(_directory_table(snapshot))
     parts.append(_findings_section(snapshot))
     parts.append(_inventory_section(snapshot))
@@ -96,6 +98,26 @@ def _host_table(snapshot: Snapshot) -> str:
         for label, value in rows
     )
     return f"<h2>Host</h2><table>{cells}</table>"
+
+
+def _storage_section(snapshot: Snapshot) -> str:
+    """Every filesystem, and the layers around them.
+
+    One row per entry, including the ones with no usage to report: what is
+    merely named is still the answer to "what storage does this host have".
+    """
+    if not snapshot.probed:
+        return (
+            "<h2>Storage</h2><p>Nothing has been collected yet: the first cycle "
+            "has not finished.</p>"
+        )
+    if not snapshot.storage:
+        return "<h2>Storage</h2><p>No storage could be read.</p>"
+    rows = "".join(
+        f"<tr><td>{escape(entry.label)}</td><td>{escape(format_entry(entry))}</td></tr>"
+        for entry in snapshot.storage
+    )
+    return "<h2>Storage</h2><table>" + rows + "</table>"
 
 
 def _target_cell(row: Row) -> str:
