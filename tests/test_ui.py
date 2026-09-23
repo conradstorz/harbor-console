@@ -49,6 +49,19 @@ def test_dashboard_shows_swap_on_its_own_row():
     assert "0.0 / 8.0 GiB (0.0%)" in page
 
 
+def test_dashboard_pairs_each_label_with_its_own_value():
+    """Pins which value sits beside which label.
+
+    The two "appears somewhere in the page" tests above would both still pass
+    if the Memory and Swap rows had their values swapped -- a host at 85%
+    memory would render `0.0 / 8.0 GiB (0.0%)` beside "Memory" and look idle.
+    """
+    lines = render(METRICS).splitlines()
+
+    assert any("Memory" in line and "4.0 / 32.0 GiB (12.5%)" in line for line in lines)
+    assert any("Swap" in line and "0.0 / 8.0 GiB (0.0%)" in line for line in lines)
+
+
 def test_dashboard_reports_a_host_with_no_swap():
     page = render(dict(METRICS, swap_summary="none configured"))
 

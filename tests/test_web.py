@@ -49,14 +49,13 @@ def test_page_shows_host_metrics():
 def test_host_table_shows_memory_with_its_scale():
     page = web.render_page(snapshot()).decode()
 
-    assert "4.0 / 32.0 GiB (12.5%)" in page
+    assert "<tr><td>Memory</td><td>4.0 / 32.0 GiB (12.5%)</td></tr>" in page
 
 
 def test_host_table_shows_swap():
     page = web.render_page(snapshot()).decode()
 
-    assert "Swap" in page
-    assert "0.0 / 8.0 GiB (0.0%)" in page
+    assert "<tr><td>Swap</td><td>0.0 / 8.0 GiB (0.0%)</td></tr>" in page
 
 
 def test_the_tailnet_row_sits_between_ipv4_and_containers():
