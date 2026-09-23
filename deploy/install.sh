@@ -243,10 +243,33 @@ mv -f "${TRAEFIK_DIR}/dynamic/.harbor.yml.tmp" "${TRAEFIK_DIR}/dynamic/harbor.ym
 # address, undoing the declaration on every run.
 harbor_gw_priority=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").GwPriority}}' 2>/dev/null || true)
 harbor_ip=$(docker inspect traefik -f '{{(index .NetworkSettings.Networks "harbor").IPAddress}}' 2>/dev/null || true)
+# Reserving the address is a convention, not an IPAM guarantee: Docker's
+# dynamic allocation climbs from .2 and will not plausibly reach the top of a
+# /16, but nothing stops another container claiming .255.254 explicitly, and
+# `--aux-address` -- the one mechanism that would exclude it -- can only be
+# set when the network is created. So check who holds it before detaching
+# Traefik, because the disconnect below cannot be undone cheaply: a
+# `--ip` attach that loses the address fails, and (confirmed on hpz440)
+# leaves Traefik listed on `harbor` with an EMPTY address rather than
+# detached -- every route dead, and the ufw step further down then finds no
+# address either and writes no rule. Taking the dynamic address instead is
+# a bad day; taking no address is an outage.
+pin_ip=(--ip "${TRAEFIK_HARBOR_IP}")
+harbor_reserved_holder=$(docker network inspect harbor -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' 2>/dev/null | awk -F'[ /]' -v ip="${TRAEFIK_HARBOR_IP}" '$2 == ip { print $1 }' || true)
+if [[ -n "${harbor_reserved_holder}" && "${harbor_reserved_holder}" != "traefik" ]]; then
+  echo "warning: container '${harbor_reserved_holder}' holds ${TRAEFIK_HARBOR_IP}, the address reserved for Traefik on the harbor network (ADR 19). Leaving Traefik on a dynamic address, which works until the next restart moves it; move that container off ${TRAEFIK_HARBOR_IP} and re-run this installer to pin it properly." >&2
+  pin_ip=()
+fi
 if [[ "${harbor_gw_priority}" != "1000" || "${harbor_ip}" != "${TRAEFIK_HARBOR_IP}" ]]; then
-  echo "==> Pinning Traefik's default route and address (${TRAEFIK_HARBOR_IP}) on the harbor network"
+  echo "==> Pinning Traefik's default route and address (${pin_ip[1]:-dynamic}) on the harbor network"
   docker network disconnect harbor traefik
-  docker network connect --ip "${TRAEFIK_HARBOR_IP}" --gw-priority 1000 harbor traefik
+  if ! docker network connect ${pin_ip[@]+"${pin_ip[@]}"} --gw-priority 1000 harbor traefik; then
+    echo "warning: could not attach Traefik to the harbor network at ${TRAEFIK_HARBOR_IP}; retrying with a dynamic address rather than leaving the edge unreachable." >&2
+    # Clear the addressless endpoint the failed attach leaves behind, or the
+    # retry fails too ("endpoint already exists").
+    docker network disconnect harbor traefik >/dev/null 2>&1 || true
+    docker network connect --gw-priority 1000 harbor traefik
+  fi
 fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then

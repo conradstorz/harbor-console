@@ -67,8 +67,12 @@ We will stop reading Traefik's `harbor` address and start reserving it.
 
 - **`172.25.255.254` is Traefik's address on `harbor`.** It sits at the top
   of the `/16`, far above the addresses Docker hands out sequentially from
-  `.2`, so ordinary container churn cannot take it while Traefik is
-  detached.
+  `.2`, so dynamic allocation will not reach it. That is a convention, not
+  an IPAM guarantee: nothing stops another container claiming it
+  explicitly, and `--aux-address`, the one mechanism that would exclude it
+  from the pool, can only be set when the network is created -- which
+  `harbor` already was, with every project on it. The reservation is
+  therefore defended by the two steps below rather than by Docker.
 - **`deploy/traefik/compose.yaml` declares it** as `ipv4_address` under the
   service's `harbor` network. `harbor`'s IPAM already carries an explicit
   `172.25.0.0/16` subnet, so static assignment on it is available.
@@ -80,6 +84,17 @@ We will stop reading Traefik's `harbor` address and start reserving it.
   rather than hard-coding the constant in a second place. The rule should
   match the address Traefik really has; the point of this ADR is that the
   address stops moving, not that the rule stops looking.
+- **The pin never trades an outage for an address.** `install.sh` checks who
+  holds the reserved address before it detaches Traefik, and falls back to a
+  dynamic attach with a warning when another container does. If the `--ip`
+  attach fails anyway -- the same conflict arriving in the gap between the
+  check and the attach -- it clears the endpoint and retries dynamically.
+  Both paths are necessary because the disconnect cannot be cheaply undone:
+  a `--ip` attach that loses the address leaves Traefik listed on `harbor`
+  with an *empty* address rather than detached, which takes every route
+  down and, further along, leaves the ufw step with no address to name and
+  no rule written. A dynamic address is the failure this ADR set out to
+  fix; no address is an outage.
 - **`install.sh` warns when Traefik's actual `harbor` address is not the
   reserved one.** The rule it writes will be correct either way, so
   without the warning a failed pin leaves a working page and an invariant
@@ -103,12 +118,23 @@ We will stop reading Traefik's `harbor` address and start reserving it.
   finding for that is a real gap and deliberately not in this ADR; it needs
   the page to probe its own route, which is a wider change than a reserved
   address.
-- The mechanism was checked on hpz440 before this went in, on a throwaway
-  container rather than on the live edge: `docker run --network harbor --ip
-  172.25.255.254` took the reserved address, and a `docker network
-  disconnect` followed by `docker network connect --ip 172.25.255.254
-  --gw-priority 1000` -- the exact call `install.sh` now makes -- brought it
-  back with both the address and the priority intact (Engine 28.3.3).
+- The mechanism was checked on hpz440 before this went in, on throwaway
+  containers rather than on the live edge (Engine 28.3.3): the reserved
+  address is taken by `docker run --network harbor --ip 172.25.255.254`, and
+  a `docker network disconnect` followed by `docker network connect --ip
+  172.25.255.254 --gw-priority 1000` -- the exact call `install.sh` makes --
+  brings it back with both the address and the priority intact. Both
+  degraded paths were exercised the same way: with a second container
+  holding the address, the preflight warns and attaches dynamically, and
+  with the preflight suppressed to simulate the race, the attach fails with
+  `Address already in use` and the retry recovers to a dynamic address with
+  `GwPriority: 1000` -- never to the addressless endpoint that the failed
+  attach leaves behind.
+- Docker's own conflict behaviour is the sharp edge here and is worth
+  restating: a failed `--ip` attach is not a no-op. It leaves the container
+  attached to the network with no address at all, and a plain retry then
+  fails with "endpoint already exists" unless the endpoint is disconnected
+  first.
 - Options rejected:
   - **Widening the rule back to `br-harbor` or to the subnet.** Fixes the
     reboot and reopens ADR 16's third finding: every container on `harbor`

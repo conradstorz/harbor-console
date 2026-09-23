@@ -68,11 +68,13 @@ services:
         # address the rule named and answered every routed request to the
         # page with a gateway timeout until install.sh ran again. .255.254
         # sits at the top of the /16, clear of the addresses Docker hands
-        # out sequentially from .2, so nothing can hold it while Traefik is
-        # detached. install.sh asserts it with `docker network connect
-        # --ip` for the same reason it asserts `priority` there: its own
-        # reconnect is what creates this endpoint, and would re-request a
-        # dynamic address without the flag.
+        # out sequentially from .2 -- a convention, not an IPAM
+        # reservation, so install.sh checks who holds it before pinning and
+        # degrades to a dynamic address rather than leaving the edge down.
+        # It asserts the address with `docker network connect --ip` for the
+        # same reason it asserts `priority` there: its own reconnect is
+        # what creates this endpoint, and would re-request a dynamic
+        # address without the flag.
         ipv4_address: 172.25.255.254
       # ADR 16: Portainer moved off `harbor` onto its own network so no
       # project container can reach its read-write Docker socket over the
