@@ -30,6 +30,8 @@ tr.detail td { padding-left: 2rem; opacity: 0.75; }
 .unaccounted { font-weight: 700; }
 .banner { border: 1px solid; padding: 0.5rem 0.75rem; margin-bottom: 1.5rem; }
 .stamp { opacity: 0.7; }
+.resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 48rem) { .resource-grid { grid-template-columns: 1fr; } }
 """
 
 
@@ -37,6 +39,7 @@ def render_page(snapshot: Snapshot) -> bytes:
     """Render the whole status page as one self-contained document."""
     parts = [
         "<!doctype html><html><head><meta charset=\"utf-8\">",
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f"<meta http-equiv=\"refresh\" content=\"{REFRESH_SECONDS}\">",
         "<title>Harbor Console</title>",
         f"<style>{_STYLE}</style></head><body>",
@@ -64,8 +67,12 @@ def render_page(snapshot: Snapshot) -> bytes:
             "the inventory below is missing, undeclared tailnet listeners are not "
             "reported, and tcp and edge rows show UNKNOWN rather than a state.</p>"
         )
-    parts.append(_host_table(snapshot))
-    parts.append(_storage_section(snapshot))
+    parts.append(
+        '<div class="resource-grid">'
+        f'<div class="host-section">{_host_table(snapshot)}</div>'
+        f'<div class="storage-section">{_storage_section(snapshot)}</div>'
+        "</div>"
+    )
     parts.append(_directory_table(snapshot))
     parts.append(_findings_section(snapshot))
     parts.append(_inventory_section(snapshot))

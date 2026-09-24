@@ -46,6 +46,15 @@ def test_page_shows_host_metrics():
     assert "100.69.239.123" in page
 
 
+def test_cpu_memory_and_storage_share_a_two_column_layout():
+    page = web.render_page(snapshot(storage=STORAGE)).decode()
+
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in page
+    assert '<div class="resource-grid"><div class="host-section">' in page
+    assert '<div class="storage-section"><h2>Storage</h2>' in page
+    assert ".resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }" in page
+
+
 def test_host_table_shows_memory_with_its_scale():
     page = web.render_page(snapshot()).decode()
 
