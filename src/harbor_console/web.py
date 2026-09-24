@@ -39,6 +39,7 @@ def render_page(snapshot: Snapshot) -> bytes:
     """Render the whole status page as one self-contained document."""
     parts = [
         "<!doctype html><html><head><meta charset=\"utf-8\">",
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f"<meta http-equiv=\"refresh\" content=\"{REFRESH_SECONDS}\">",
         "<title>Harbor Console</title>",
         f"<style>{_STYLE}</style></head><body>",
