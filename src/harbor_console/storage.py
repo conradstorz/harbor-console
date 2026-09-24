@@ -78,12 +78,26 @@ def local_filesystems(
     usage: Callable[[str], object] = psutil.disk_usage,
     sizes: Mapping[str, int] | None = None,
 ) -> list[StorageEntry]:
-    """Every mounted local filesystem, root first, then by mountpoint.
+    """Every distinct local *volume*, root first, then by mountpoint.
 
     Each `usage` call is guarded on its own: one unreadable mount becomes
     `unavailable` and the rows around it survive. Failing to enumerate at all
     yields one `unavailable` entry rather than an empty list -- nothing found
     and nothing looked at must not render alike (ADR 18).
+
+    One row per distinct backing `device`, not one per mount. A systemd unit
+    running with `ProtectHome=read-only` and `PrivateTmp=yes` sees the same
+    volume bind-mounted at `/`, `/home`, `/root`, `/tmp` and `/var/tmp` -- and
+    the kernel can list one of those binds twice -- so a naive one-row-per-
+    mount render repeats the same bytes several times over on the deployed
+    host. Partitions are grouped by `device` and only the shortest mountpoint
+    survives per device (ties broken alphabetically, for a deterministic
+    choice); the grouping happens before `usage()` is ever called, so a
+    volume is measured once, not once per mount. This is not the kind of
+    pre-emptive filter ADR 18 warns about -- that warning is about dropping
+    evidence before anyone can look at it. Every distinct filesystem still
+    gets exactly one row; what collapses here is repeated *views* of one
+    already-counted device, never a device dropped because of what it is.
 
     Either failure branch consults `sizes` -- typically `mounted_device_sizes()`
     -- for a size-only render when it has the mountpoint (the size-only render
@@ -100,11 +114,23 @@ def local_filesystems(
     except Exception:
         return [StorageEntry(label="storage", note=NOTE_UNAVAILABLE)]
 
-    entries: list[StorageEntry] = []
+    chosen: dict[str, object] = {}
     for p in found:
         fstype = getattr(p, "fstype", "")
         if fstype in REMOTE_FSTYPES or fstype in IMAGE_FSTYPES:
             continue
+        device = getattr(p, "device", "")
+        mountpoint = getattr(p, "mountpoint", "")
+        current = chosen.get(device)
+        if current is None:
+            chosen[device] = p
+            continue
+        current_mountpoint = getattr(current, "mountpoint", "")
+        if (len(mountpoint), mountpoint) < (len(current_mountpoint), current_mountpoint):
+            chosen[device] = p
+
+    entries: list[StorageEntry] = []
+    for p in chosen.values():
         mountpoint = getattr(p, "mountpoint", "")
         try:
             measured = usage(mountpoint)

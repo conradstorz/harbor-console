@@ -190,6 +190,117 @@ def test_local_filesystems_reports_unavailable_when_it_cannot_enumerate():
     assert entries[0].note == NOTE_UNAVAILABLE
 
 
+def test_local_filesystems_collapses_bind_mounts_to_the_shortest_mountpoint():
+    """The deployed defect: one device, several bind-mounted views under it.
+
+    `ProtectHome=read-only`/`PrivateTmp=yes` puts the same root volume at `/`,
+    `/home`, `/root`, `/tmp` and `/var/tmp` in the service's mount namespace.
+    Only `/` -- the shortest -- should survive.
+    """
+    partitions = lambda all=False: [
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/home", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/root", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/tmp", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/var/tmp", "ext4"),
+    ]
+
+    entries = local_filesystems(
+        partitions=partitions, usage=lambda _mp: usage(65 * GIB, 98 * GIB, 70.0)
+    )
+
+    assert [e.label for e in entries] == ["/"]
+
+
+def test_local_filesystems_collapses_exact_duplicate_mounts():
+    """The kernel can list the very same device/mountpoint pair twice."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+    ]
+
+    entries = local_filesystems(
+        partitions=partitions, usage=lambda _mp: usage(1 * GIB, 2 * GIB, 50.0)
+    )
+
+    assert [e.label for e in entries] == ["/home/arm/media"]
+
+
+def test_local_filesystems_breaks_a_mountpoint_length_tie_alphabetically():
+    """Two equal-length mountpoints for one device: pick deterministically."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/vg-x", "/mnt/bb", "ext4"),
+        part("/dev/mapper/vg-x", "/mnt/aa", "ext4"),
+    ]
+
+    entries = local_filesystems(
+        partitions=partitions, usage=lambda _mp: usage(1 * GIB, 2 * GIB, 50.0)
+    )
+
+    assert [e.label for e in entries] == ["/mnt/aa"]
+
+
+def test_local_filesystems_keeps_every_distinct_device():
+    """Deduplication is per-device, so unrelated volumes all still get a row."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/home", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/", "ext4"),
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+    ]
+
+    entries = local_filesystems(
+        partitions=partitions, usage=lambda _mp: usage(65 * GIB, 98 * GIB, 70.0)
+    )
+
+    assert [e.label for e in entries] == ["/", "/home/arm/media"]
+
+
+def test_local_filesystems_measures_once_per_surviving_volume():
+    """The dedupe must happen before `usage()` is called, not after."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/home", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/root", "ext4"),
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+    ]
+    calls: list[str] = []
+
+    def recording(mountpoint):
+        calls.append(mountpoint)
+        return usage(65 * GIB, 98 * GIB, 70.0)
+
+    entries = local_filesystems(partitions=partitions, usage=recording)
+
+    assert calls == ["/", "/home/arm/media"]
+    assert [e.label for e in entries] == ["/", "/home/arm/media"]
+
+
+def test_local_filesystems_permission_denied_survives_dedupe():
+    """The motivating size-only row must still find its size after grouping."""
+    partitions = lambda all=False: [
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/home", "ext4"),
+        part("/dev/mapper/ubuntu--vg-ubuntu--lv", "/", "ext4"),
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+        part("/dev/mapper/vg-media", "/home/arm/media", "ext4"),
+    ]
+
+    def selective(mountpoint):
+        if mountpoint == "/home/arm/media":
+            raise PermissionError("Permission denied: '/home/arm/media'")
+        return usage(65 * GIB, 98 * GIB, 70.0)
+
+    entries = local_filesystems(
+        partitions=partitions,
+        usage=selective,
+        sizes={"/home/arm/media": 2638829584384},
+    )
+
+    media = next(e for e in entries if e.label == "/home/arm/media")
+    assert media.total == 2638829584384
+    assert media.note == NOTE_PERMISSION_DENIED
+    assert format_entry(media) == "2457.6 GiB permission denied"
+
+
 def test_image_mounts_collapse_to_one_counted_line():
     partitions = lambda all=False: [
         part("/dev/mapper/vg-root", "/", "ext4"),
