@@ -36,6 +36,8 @@ def test_run_updates_dashboard_and_exits_cleanly(monkeypatch):
         collector=collector,
         renderer=renderer,
         sleep=fake_sleep,
+        storage_collector=lambda: (),
+        gpu_collector=lambda: (),
     )
 
     assert result == 0
@@ -59,6 +61,7 @@ def test_run_passes_storage_to_the_renderer(monkeypatch):
         renderer=renderer,
         sleep=fake_sleep,
         storage_collector=lambda: ("entry",),
+        gpu_collector=lambda: (),
     )
 
     assert result == 0
