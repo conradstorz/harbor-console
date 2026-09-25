@@ -1,7 +1,7 @@
 # GPU monitoring: one row per card, from sysfs
 
 Date: 2026-09-25
-Status: approved, not yet implemented
+Status: implemented 2026-09-25
 
 ## The problem
 
