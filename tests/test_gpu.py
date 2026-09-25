@@ -163,6 +163,30 @@ def test_collect_drops_only_the_field_that_is_malformed(tmp_path):
     assert entry.temp_c == 41.0
 
 
+def test_collect_picks_the_lowest_numbered_hwmon_not_the_lexically_first(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon10__temp1_input="11000", hwmon__hwmon2__temp1_input="55000")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.temp_c == 55.0
+
+
+def test_collect_keeps_a_card_whose_device_directory_is_missing(tmp_path):
+    (tmp_path / "card0").mkdir()
+
+    assert collect_gpus(tmp_path) == (GpuEntry(label="GPU card0"),)
+
+
+def test_collect_ignores_a_hwmon_that_is_a_file(tmp_path):
+    card(tmp_path, "card0")
+    (tmp_path / "card0" / "device" / "hwmon").write_text("x")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.temp_c is None
+    assert entry.driver == "radeon"
+
+
 def test_collect_reports_unavailable_when_the_root_cannot_be_listed(tmp_path):
     assert collect_gpus(tmp_path / "missing") == (GpuEntry(label="GPU", note=NOTE_UNAVAILABLE),)
 

@@ -117,9 +117,13 @@ def test_dashboard_shows_one_row_per_gpu():
 
 
 def test_dashboard_says_none_detected_when_there_are_no_gpus():
-    lines = render(METRICS).splitlines()
+    storage = (StorageEntry(label="VG ubuntu-vg", total=251111931904, note="unallocated"),)
+
+    page = render(METRICS, storage)
+    lines = page.splitlines()
 
     assert any(line.split()[1:2] == ["GPU"] and "none detected" in line for line in lines)
+    assert page.index("VG ubuntu-vg") < page.index("none detected") < page.index("IPv4 address")
 
 
 def test_dashboard_puts_gpu_rows_between_storage_and_ipv4():

@@ -454,14 +454,14 @@ def test_gpu_section_sits_in_the_resource_grid_after_storage():
     assert page.index('class="gpu-section"') < page.index("<h2>Directory</h2>")
 
 
-def test_gpu_before_the_first_cycle_says_so_rather_than_none_detected():
+def test_gpu_before_the_first_cycle_says_so_rather_than_no_gpu_detected():
     page = web.render_page(snapshot(probed=False, gpus=())).decode()
 
     assert "<h2>GPU</h2><p>Nothing has been collected yet" in page
-    assert "none detected" not in page
+    assert "No GPU detected" not in page
 
 
-def test_gpu_probed_but_empty_says_none_detected():
+def test_gpu_probed_but_empty_says_no_gpu_detected():
     page = web.render_page(snapshot(probed=True, gpus=())).decode()
 
     assert "<h2>GPU</h2><p>No GPU detected.</p>" in page

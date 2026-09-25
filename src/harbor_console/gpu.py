@@ -88,6 +88,12 @@ def _driver(device: Path) -> str:
     return ""
 
 
+def _hwmon_order(path: Path) -> tuple[int, str]:
+    """`hwmon2` before `hwmon10`: numeric where there is a number, name otherwise."""
+    match = re.search(r"(\d+)$", path.name)
+    return (int(match.group(1)) if match else -1, path.name)
+
+
 def _temperature(device: Path) -> float | None:
     """The first hwmon `temp1_input` under the device, in degrees Celsius.
 
@@ -95,7 +101,7 @@ def _temperature(device: Path) -> float | None:
     device with no `hwmon` directory simply has no temperature.
     """
     try:
-        sensors = sorted((device / "hwmon").iterdir())
+        sensors = sorted((device / "hwmon").iterdir(), key=_hwmon_order)
     except OSError:
         return None
     for sensor in sensors:
@@ -127,8 +133,9 @@ def collect_gpus(drm_root: str | Path = "/sys/class/drm") -> tuple[GpuEntry, ...
     (ADR 18). A root with no cards yields an empty tuple; the renderers own
     the "none detected" wording.
     """
+    root = Path(drm_root)
     try:
-        names = [p.name for p in Path(drm_root).iterdir()]
+        names = [p.name for p in root.iterdir()]
     except OSError:
         return (GpuEntry(label="GPU", note=NOTE_UNAVAILABLE),)
 
@@ -138,4 +145,4 @@ def collect_gpus(drm_root: str | Path = "/sys/class/drm") -> tuple[GpuEntry, ...
         if match:
             cards.append((int(match.group(1)), name))
     cards.sort()
-    return tuple(_card_entry(Path(drm_root) / name) for _, name in cards)
+    return tuple(_card_entry(root / name) for _, name in cards)
