@@ -13,7 +13,7 @@ utilization or VRAM counters. What sysfs does expose, at design time:
 
 | Path under `/sys/class/drm/card0/device` | Value | Exposed by |
 |---|---|---|
-| `driver` (symlink) | `radeon` | every DRM driver |
+| `uevent` (`DRIVER=radeon` line) | `radeon` | every PCI device |
 | `vendor`, `device` | `0x1002`, `0x6610` | every PCI device |
 | `hwmon/hwmon2/temp1_input` | `35000` (millidegrees) | `radeon`, `amdgpu`, `nouveau`, `i915` on some parts |
 | `gpu_busy_percent` | absent | `amdgpu` only |
@@ -56,14 +56,15 @@ def format_gpu(entry: GpuEntry) -> str: ...
   `card0-DP-1` and the other connector nodes, `renderD128` and `version` are
   not. Cards sort by number.
 - Per card, each read is guarded on its own and yields `None` when the file
-  is missing, unreadable or not a number: `device/driver` (symlink
-  basename), `device/gpu_busy_percent` (int), `device/mem_info_vram_used`
+  is missing, unreadable or not a number: the `DRIVER=` line of
+  `device/uevent` (a regular file, read in preference to the `device/driver`
+  symlink so a test tree needs no symlinks), `device/gpu_busy_percent` (int), `device/mem_info_vram_used`
   and `device/mem_info_vram_total` (int bytes), and the first
   `device/hwmon/hwmon*/temp1_input` found (int millidegrees, divided by
   1000). One bad file never costs the card its row or the other cards
   theirs.
-- Label is `GPU card<N> (<driver>)`, or `GPU card<N>` when the driver
-  symlink cannot be read.
+- Label is `GPU card<N> (<driver>)`, or `GPU card<N>` when `uevent` has no
+  `DRIVER=` line or cannot be read.
 - `drm_root` cannot be listed: return one entry, `GpuEntry(label="GPU",
   note=NOTE_UNAVAILABLE)`. Nothing found and nothing looked at must not
   render alike (ADR 18).
@@ -76,7 +77,8 @@ def format_gpu(entry: GpuEntry) -> str: ...
   `VRAM 1.2 / 8.0 GiB (15.0%)` (via `system.format_usage`, percent computed
   here since sysfs does not give one; a `vram_total` of 0 or a missing
   partner leaves VRAM out), `35 °C`. On today's hpz440 that is `35 °C`.
-- No field present and no note: `no metrics exposed by radeon`.
+- No field present and no note: `no metrics exposed by radeon`, or
+  `no metrics exposed` when the driver is unknown.
 - A note: the note alone.
 
 ### Wiring
@@ -109,7 +111,8 @@ storage, with the same three states storage has: not yet probed, empty
 - connector nodes and `renderD128` alongside `card0` yield one entry.
 - two cards sort `card0`, `card1`.
 - a card with no readable metric files renders `no metrics exposed by
-  <driver>`; with the driver symlink also missing, the label is bare.
+  <driver>`; with `uevent` also missing, the label is bare and the note reads
+  `no metrics exposed`.
 - a `temp1_input` holding `garbage` leaves `temp_c` `None` and keeps the
   row.
 - `drm_root` that does not exist yields the single `unavailable` entry.
