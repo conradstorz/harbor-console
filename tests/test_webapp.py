@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer
 from harbor_console import web, webapp
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
+from harbor_console.gpu import GpuEntry
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
@@ -392,3 +393,18 @@ def test_the_inventory_is_unknown_when_docker_is_unavailable():
     )
 
     assert snapshot.inventory[0].accounted == "unknown"
+
+
+def test_collect_snapshot_populates_gpus_from_the_injected_collector():
+    entry = GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0)
+
+    snapshot = collect(gpus=lambda: (entry,))
+
+    assert snapshot.gpus == (entry,)
+
+
+def test_collect_snapshot_defaults_to_the_real_gpu_collector():
+    assert (
+        inspect.signature(webapp.collect_snapshot).parameters["gpus"].default
+        is webapp.collect_gpus
+    )
