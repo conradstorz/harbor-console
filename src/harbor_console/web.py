@@ -14,6 +14,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler
 
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
+from harbor_console.gpu import format_gpu
 from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
 from harbor_console.storage import format_entry
@@ -71,6 +72,7 @@ def render_page(snapshot: Snapshot) -> bytes:
         '<div class="resource-grid">'
         f'<div class="host-section">{_host_table(snapshot)}</div>'
         f'<div class="storage-section">{_storage_section(snapshot)}</div>'
+        f'<div class="gpu-section">{_gpu_section(snapshot)}</div>'
         "</div>"
     )
     parts.append(_directory_table(snapshot))
@@ -124,6 +126,27 @@ def _storage_section(snapshot: Snapshot) -> str:
         for entry in snapshot.storage
     )
     return "<h2>Storage</h2><table>" + rows + "</table>"
+
+
+def _gpu_section(snapshot: Snapshot) -> str:
+    """One row per card, whatever its driver exposed.
+
+    The three states storage has: not yet collected, collected and empty,
+    rows. "No GPU detected" is a fact about the host, so it is said outright
+    rather than left as a blank cell.
+    """
+    if not snapshot.probed:
+        return (
+            "<h2>GPU</h2><p>Nothing has been collected yet: the first cycle "
+            "has not finished.</p>"
+        )
+    if not snapshot.gpus:
+        return "<h2>GPU</h2><p>No GPU detected.</p>"
+    rows = "".join(
+        f"<tr><td>{escape(entry.label)}</td><td>{escape(format_gpu(entry))}</td></tr>"
+        for entry in snapshot.gpus
+    )
+    return "<h2>GPU</h2><table>" + rows + "</table>"
 
 
 def _target_cell(row: Row) -> str:

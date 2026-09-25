@@ -11,6 +11,7 @@ from harbor_console.directory import (
     Finding,
     Row,
 )
+from harbor_console.gpu import GpuEntry
 from harbor_console.inventory import REACH_ANY, REACH_LOOPBACK, REACH_TAILNET, Entry
 from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Snapshot
@@ -168,7 +169,7 @@ def test_page_does_not_call_an_unprobed_host_clean():
 
     assert "No findings" not in page
     assert "No services are declared" not in page
-    assert page.lower().count("nothing has been collected yet") == 4
+    assert page.lower().count("nothing has been collected yet") == 5
 
 
 def test_page_notes_when_docker_could_not_be_read():
@@ -216,11 +217,12 @@ def test_page_escapes_every_field_that_originates_outside_this_project():
     # its list is empty, which would make that assertion vacuously true.
     socket = Entry("<z>", "<a>", 1, REACH_ANY, "<c>")
     disk = StorageEntry(label="<w>", note="<x>")
+    gpu = GpuEntry(label="<g>", note="<h>")
     metrics = dict(METRICS, hostname="<h>")
 
     page = web.render_page(
         snapshot(
-            rows=(evil,), findings=(finding,), inventory=(socket,), storage=(disk,), metrics=metrics
+            rows=(evil,), findings=(finding,), inventory=(socket,), storage=(disk,), gpus=(gpu,), metrics=metrics
         )
     ).decode()
 
@@ -230,6 +232,8 @@ def test_page_escapes_every_field_that_originates_outside_this_project():
     ):
         assert raw not in page
         assert escape(raw) in page
+    assert "<g>" not in page
+    assert "<h>" not in page
 
 
 STORAGE = (
@@ -418,3 +422,46 @@ def _get(handler_cls, path, method="GET"):
         key, _, value = line.partition(b": ")
         headers[key.decode("latin-1")] = value.decode("latin-1")
     return status, headers, body
+
+
+GPUS = (
+    GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0),
+    GpuEntry(
+        label="GPU card1 (amdgpu)",
+        driver="amdgpu",
+        busy_percent=12,
+        vram_used=1024**3,
+        vram_total=8 * 1024**3,
+        temp_c=54.0,
+    ),
+)
+
+
+def test_page_shows_every_gpu_entry():
+    page = web.render_page(snapshot(gpus=GPUS)).decode()
+
+    assert '<div class="gpu-section"><h2>GPU</h2>' in page
+    assert "GPU card0 (radeon)" in page
+    assert "35 °C" in page
+    assert "GPU card1 (amdgpu)" in page
+    assert "busy 12% · VRAM 1.0 / 8.0 GiB (12.5%) · 54 °C" in page
+
+
+def test_gpu_section_sits_in_the_resource_grid_after_storage():
+    page = web.render_page(snapshot(gpus=GPUS)).decode()
+
+    assert page.index('class="storage-section"') < page.index('class="gpu-section"')
+    assert page.index('class="gpu-section"') < page.index("<h2>Directory</h2>")
+
+
+def test_gpu_before_the_first_cycle_says_so_rather_than_none_detected():
+    page = web.render_page(snapshot(probed=False, gpus=())).decode()
+
+    assert "<h2>GPU</h2><p>Nothing has been collected yet" in page
+    assert "none detected" not in page
+
+
+def test_gpu_probed_but_empty_says_none_detected():
+    page = web.render_page(snapshot(probed=True, gpus=())).decode()
+
+    assert "<h2>GPU</h2><p>No GPU detected.</p>" in page
