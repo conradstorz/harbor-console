@@ -1,6 +1,7 @@
 from rich.console import Console
 
 import harbor_console.system as system
+from harbor_console.gpu import GpuEntry
 from harbor_console.storage import StorageEntry
 from harbor_console.ui import build_dashboard
 
@@ -17,10 +18,10 @@ METRICS = {
 }
 
 
-def render(metrics, storage=()):
+def render(metrics, storage=(), gpus=()):
     """The panel as text. Wide enough that no cell wraps."""
     console = Console(width=120, record=True)
-    console.print(build_dashboard(metrics, storage))
+    console.print(build_dashboard(metrics, storage, gpus))
     return console.export_text()
 
 
@@ -101,3 +102,34 @@ def test_dashboard_shows_one_row_per_storage_entry():
     # renders each row as "│ <label>   <value>", so the token right after
     # the panel's left border is the label column.
     assert any(line.split()[1:2] == ["/"] for line in page.splitlines())
+
+
+def test_dashboard_shows_one_row_per_gpu():
+    gpus = (
+        GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0),
+        GpuEntry(label="GPU card1 (amdgpu)", driver="amdgpu", busy_percent=7),
+    )
+
+    lines = render(METRICS, (), gpus).splitlines()
+
+    assert any("GPU card0 (radeon)" in line and "35 °C" in line for line in lines)
+    assert any("GPU card1 (amdgpu)" in line and "busy 7%" in line for line in lines)
+
+
+def test_dashboard_says_none_detected_when_there_are_no_gpus():
+    storage = (StorageEntry(label="VG ubuntu-vg", total=251111931904, note="unallocated"),)
+
+    page = render(METRICS, storage)
+    lines = page.splitlines()
+
+    assert any(line.split()[1:2] == ["GPU"] and "none detected" in line for line in lines)
+    assert page.index("VG ubuntu-vg") < page.index("none detected") < page.index("IPv4 address")
+
+
+def test_dashboard_puts_gpu_rows_between_storage_and_ipv4():
+    storage = (StorageEntry(label="VG ubuntu-vg", total=251111931904, note="unallocated"),)
+    gpus = (GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0),)
+
+    page = render(METRICS, storage, gpus)
+
+    assert page.index("VG ubuntu-vg") < page.index("GPU card0") < page.index("IPv4 address")

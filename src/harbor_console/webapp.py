@@ -31,6 +31,7 @@ from harbor_console.directory import (
     route_url,
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
+from harbor_console.gpu import GpuEntry, collect_gpus
 from harbor_console.inventory import build_inventory
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener, listening_sockets
 from harbor_console.probe import Health, probe
@@ -121,6 +122,7 @@ def collect_snapshot(
     routers: Callable[[], tuple[Router, ...]] = traefik_routers,
     prober: Callable[[str], Health] = probe,
     storage: Callable[[], tuple[StorageEntry, ...]] = collect_storage,
+    gpus: Callable[[], tuple[GpuEntry, ...]] = collect_gpus,
     tailnet_address: str | None = None,
     own_port: int | None = WEB_PORT,
 ) -> Snapshot:
@@ -159,6 +161,7 @@ def collect_snapshot(
         probed=True,
         tailnet_address=tailnet_address,
         storage=storage(),
+        gpus=gpus(),
     )
 
 

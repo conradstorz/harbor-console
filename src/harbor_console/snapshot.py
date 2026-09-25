@@ -11,6 +11,7 @@ from datetime import datetime
 
 from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
+from harbor_console.gpu import GpuEntry
 from harbor_console.inventory import Entry
 from harbor_console.probe import Health
 from harbor_console.storage import StorageEntry
@@ -51,3 +52,6 @@ class Snapshot:
     #: unmeasured network mount. Empty until the first cycle runs, which
     #: `probed` is what distinguishes.
     storage: tuple[StorageEntry, ...] = ()
+    #: One entry per DRM card. Empty is a host with no GPU; `probed` is what
+    #: distinguishes that from a cycle that has not run.
+    gpus: tuple[GpuEntry, ...] = ()
