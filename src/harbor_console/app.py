@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from rich.live import Live
 
+from harbor_console.gpu import GpuEntry, collect_gpus
 from harbor_console.storage import StorageEntry, collect_storage
 from harbor_console.system import collect_system_metrics
 from harbor_console.ui import build_dashboard
@@ -14,7 +15,10 @@ from harbor_console.ui import build_dashboard
 
 MetricsCollector = Callable[[], dict[str, str | float | int]]
 StorageCollector = Callable[[], tuple[StorageEntry, ...]]
-DashboardBuilder = Callable[[dict[str, str | float | int], tuple[StorageEntry, ...]], object]
+GpuCollector = Callable[[], tuple[GpuEntry, ...]]
+DashboardBuilder = Callable[
+    [dict[str, str | float | int], tuple[StorageEntry, ...], tuple[GpuEntry, ...]], object
+]
 
 
 def run(
@@ -23,15 +27,18 @@ def run(
     renderer: DashboardBuilder = build_dashboard,
     sleep: Callable[[float], None] = time.sleep,
     storage_collector: StorageCollector = collect_storage,
+    gpu_collector: GpuCollector = collect_gpus,
 ) -> int:
     """Run the Harbor Console refresh loop."""
+
+    def frame() -> object:
+        return renderer(collector(), storage_collector(), gpu_collector())
+
     try:
-        with Live(
-            renderer(collector(), storage_collector()), refresh_per_second=4, screen=True
-        ) as live:
+        with Live(frame(), refresh_per_second=4, screen=True) as live:
             while True:
                 sleep(refresh_interval)
-                live.update(renderer(collector(), storage_collector()))
+                live.update(frame())
     except KeyboardInterrupt:
         return 0
 
