@@ -60,3 +60,82 @@ def format_gpu(entry: GpuEntry) -> str:
     if entry.driver:
         return f"no metrics exposed by {entry.driver}"
     return "no metrics exposed"
+
+
+def _read_int(path: Path) -> int | None:
+    """One sysfs number, or `None` for a file that is missing, unreadable or
+    not a number. Guarded per file: one bad value costs only itself."""
+    try:
+        return int(path.read_text(encoding="ascii", errors="replace").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _driver(device: Path) -> str:
+    """The `DRIVER=` line of `device/uevent`, or "" when there is none.
+
+    `uevent` is a regular file where `device/driver` is a symlink; the same
+    name, without needing a test tree to hold a link.
+    """
+    try:
+        text = (device / "uevent").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "DRIVER":
+            return value.strip()
+    return ""
+
+
+def _temperature(device: Path) -> float | None:
+    """The first hwmon `temp1_input` under the device, in degrees Celsius.
+
+    sysfs reports millidegrees. Guarded on the listing and on the read, so a
+    device with no `hwmon` directory simply has no temperature.
+    """
+    try:
+        sensors = sorted((device / "hwmon").iterdir())
+    except OSError:
+        return None
+    for sensor in sensors:
+        millidegrees = _read_int(sensor / "temp1_input")
+        if millidegrees is not None:
+            return millidegrees / 1000.0
+    return None
+
+
+def _card_entry(node: Path) -> GpuEntry:
+    device = node / "device"
+    driver = _driver(device)
+    label = f"GPU {node.name} ({driver})" if driver else f"GPU {node.name}"
+    return GpuEntry(
+        label=label,
+        driver=driver,
+        busy_percent=_read_int(device / "gpu_busy_percent"),
+        vram_used=_read_int(device / "mem_info_vram_used"),
+        vram_total=_read_int(device / "mem_info_vram_total"),
+        temp_c=_temperature(device),
+    )
+
+
+def collect_gpus(drm_root: str | Path = "/sys/class/drm") -> tuple[GpuEntry, ...]:
+    """One entry per card under `drm_root`, in card-number order.
+
+    A root that cannot be listed yields one `unavailable` entry rather than an
+    empty tuple -- nothing found and nothing looked at must not render alike
+    (ADR 18). A root with no cards yields an empty tuple; the renderers own
+    the "none detected" wording.
+    """
+    try:
+        names = [p.name for p in Path(drm_root).iterdir()]
+    except OSError:
+        return (GpuEntry(label="GPU", note=NOTE_UNAVAILABLE),)
+
+    cards: list[tuple[int, str]] = []
+    for name in names:
+        match = _CARD.match(name)
+        if match:
+            cards.append((int(match.group(1)), name))
+    cards.sort()
+    return tuple(_card_entry(Path(drm_root) / name) for _, name in cards)
