@@ -1,6 +1,9 @@
 [Unit]
 Description=Harbor Console dashboard
-After=systemd-user-sessions.service
+# console-setup.service sets the 32x16 font (ADR 20) and is otherwise
+# unordered against this unit; without this the first frame after boot can
+# render at the 8x16 geometry and snap a second later.
+After=systemd-user-sessions.service console-setup.service
 Conflicts=getty@tty1.service
 StartLimitIntervalSec=0
 

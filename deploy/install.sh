@@ -152,6 +152,63 @@ systemctl daemon-reload
 echo "==> Masking getty@tty1 (disables the login prompt on tty1 only)"
 systemctl mask getty@tty1.service
 
+# ADR 20: the dashboard is read from across a room. The largest kernel
+# console font is 32x16 (2x Ubuntu's 8x16 default); 1280x720 on a 1080p
+# panel supplies the other 1.5x, so a glyph covers 24x48 physical pixels --
+# 3x in both axes -- and the console is 80x22 cells against a 19-row
+# dashboard. Font applies now on every VT; the mode needs a reboot, which
+# this script never performs.
+echo "==> Sizing the console (ADR 20)"
+CONSOLE_SETUP=/etc/default/console-setup
+CONSOLE_SETUP_BACKUP=/etc/default/console-setup.pre-harbor
+GRUB_DROPIN=/etc/default/grub.d/harbor-console.cfg
+CONSOLE_VIDEO_MODE=1280x720
+console_reboot_needed=0
+if [[ -f "${CONSOLE_SETUP}" ]]; then
+  # Once: a re-run must not overwrite the original with an edited copy.
+  if [[ ! -f "${CONSOLE_SETUP_BACKUP}" ]]; then
+    cp -p "${CONSOLE_SETUP}" "${CONSOLE_SETUP_BACKUP}"
+  fi
+  for kv in 'FONTFACE="Terminus"' 'FONTSIZE="32x16"'; do
+    key=${kv%%=*}
+    if grep -q "^${key}=" "${CONSOLE_SETUP}"; then
+      sed -i "s/^${key}=.*/${kv}/" "${CONSOLE_SETUP}"
+    else
+      echo "${kv}" >> "${CONSOLE_SETUP}"
+    fi
+  done
+  # --save caches the font console-setup applies at boot; --force because
+  # this script's stdin is an SSH session, not a VT, and setupcon otherwise
+  # declines to touch the consoles.
+  if command -v setupcon >/dev/null 2>&1; then
+    setupcon --save --force || echo "warning: setupcon failed; the console font is unchanged until console-setup next runs." >&2
+  else
+    echo "warning: setupcon not found; ${CONSOLE_SETUP} was updated but the font is unchanged until console-setup runs." >&2
+  fi
+else
+  echo "warning: ${CONSOLE_SETUP} not found (not console-setup?); console font left as is." >&2
+fi
+if command -v update-grub >/dev/null 2>&1; then
+  mkdir -p "$(dirname "${GRUB_DROPIN}")"
+  grub_dropin_new=$(mktemp)
+  cat > "${grub_dropin_new}" <<EOF_GRUB
+# Harbor Console (ADR 20): ${CONSOLE_VIDEO_MODE} with a 32x16 console font gives 3x
+# glyphs on a 1080p monitor. Removed by deploy/uninstall.sh.
+GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} video=${CONSOLE_VIDEO_MODE}"
+EOF_GRUB
+  # Regenerate grub.cfg only when the drop-in is new or changed.
+  if ! cmp -s "${grub_dropin_new}" "${GRUB_DROPIN}"; then
+    install -m 0644 "${grub_dropin_new}" "${GRUB_DROPIN}"
+    update-grub
+  fi
+  rm -f "${grub_dropin_new}"
+else
+  echo "warning: update-grub not found; add 'video=${CONSOLE_VIDEO_MODE}' to the kernel command line by hand for 3x text (ADR 20)." >&2
+fi
+if ! grep -qw "video=${CONSOLE_VIDEO_MODE}" /proc/cmdline; then
+  console_reboot_needed=1
+fi
+
 # enable, then restart -- not `enable --now`, which starts a stopped unit but
 # leaves a running one on the old code. This script is the update path.
 for unit in "${UNIT_NAMES[@]}"; do
@@ -335,6 +392,9 @@ echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
 echo "The status page is https://harbor.hpz440.ohr3023.org/ (direct: http://${TAILNET_ADDRESS}:8100/)."
 echo "Admin logins remain on tty2-tty6 (Ctrl+Alt+F2 ... F6) and via SSH."
+if [[ ${console_reboot_needed} -eq 1 ]]; then
+  echo "Reboot to switch the console to ${CONSOLE_VIDEO_MODE}; until then the text is 2x, not 3x."
+fi
 echo
 for unit in "${UNIT_NAMES[@]}"; do
   systemctl status "${unit}" --no-pager || true
