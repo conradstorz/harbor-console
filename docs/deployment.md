@@ -79,6 +79,13 @@ The installer is idempotent — re-run it any time to update.
 - Installs `/etc/systemd/system/harbor-console.service` **and**
   `/etc/systemd/system/harbor-console-web.service`.
 - Masks `getty@tty1.service` (removes the login prompt on **tty1 only**).
+- Sizes the console for the monitor ([ADR 20](adr/0020-size-the-console-for-the-room.md)):
+  backs up `/etc/default/console-setup` once to `console-setup.pre-harbor`,
+  sets the font to Terminus 32x16 on **every** VT (applied immediately), and
+  writes `/etc/default/grub.d/harbor-console.cfg` adding `video=1280x720` to
+  the kernel command line. **The mode needs one reboot**; until then the text
+  is 2x, not 3x, and the installer ends with a line saying so. It never
+  reboots on its own.
 - Enables and restarts **both** units, then prints `systemctl status` for each.
 
 ## The edge (Traefik)
@@ -141,6 +148,11 @@ re-renders Traefik's configuration and brings it up, and restarts both services
 so the new code takes effect. Note: `/opt/harbor-console` is a copy, not a git
 clone — pull updates in your checkout, then re-run the installer.
 
+The first run after the console-sizing change (ADR 20) prints
+`Reboot to switch the console to 1280x720; until then the text is 2x, not 3x.`
+Reboot when convenient; later runs stay quiet once the kernel has the
+parameter.
+
 ## Uninstall
 
 ```bash
@@ -149,7 +161,11 @@ sudo deploy/uninstall.sh --purge  # also removes /opt/harbor-console and the har
 ```
 
 Both units are disabled, stopped and removed, Traefik is brought down, and
-`getty@tty1` is unmasked and started. The `harbor` network and the
+`getty@tty1` is unmasked and started. The console font goes back at once:
+`/etc/default/console-setup.pre-harbor` is moved back over
+`/etc/default/console-setup` and re-applied. The GRUB drop-in is removed and
+`update-grub` run, but the running kernel keeps `1280x720` **until the next
+reboot**. The `harbor` network and the
 `letsencrypt` volume are left in place — other projects join that network, and
 re-issuing the certificate is not free. So are `/etc/traefik/env` (it holds the
 Cloudflare token; remove it by hand if the host is being retired) and the
@@ -207,6 +223,16 @@ sudo ss -ltnp | grep -E ':(80|443) '
 - Nothing on the monitor: confirm the unit is active and `getty@tty1` is
   masked (`systemctl is-enabled getty@tty1`); switch to the console with
   Ctrl+Alt+F1.
+- Text is large but not filling the screen (2x, wide strip): the host has not
+  rebooted since the installer added `video=1280x720`. Check with
+  `grep -o 'video=[^ ]*' /proc/cmdline` (empty means not yet) and
+  `cat /sys/class/graphics/fb0/virtual_size` (`1280,720` once it has).
+- Text is still small after the install: `grep FONT /etc/default/console-setup`
+  should show `Terminus` and `32x16`; if it does, `sudo setupcon --save --force`
+  re-applies it. `journalctl -u console-setup -b` shows what ran at boot.
+- The bottom rows (IPv4, container count, clock) are missing: the dashboard has
+  outgrown the 22-row console and `rich` crops it. Step the font down to
+  Terminus 28x14 in `deploy/install.sh` (91x25 cells), per ADR 20.
 - `status=203/EXEC` / `Permission denied` executing `.venv/bin/harbor-console`:
   the venv's Python points somewhere the `harbor` user can't reach (e.g. a
   `uv`-managed interpreter under `/root`, which `ProtectHome=yes` also hides). Re-run
@@ -283,7 +309,9 @@ access-control criterion that needs a live host to verify.
    `systemd-analyze verify /etc/systemd/system/harbor-console.service`
    and `systemd-analyze verify /etc/systemd/system/harbor-console-web.service`
    → no output, exit 0 for each.
-2. Reboot → the dashboard appears on the attached monitor (tty1).
+2. Reboot → the dashboard appears on the attached monitor (tty1), fills it
+   at 3x text with all rows visible, and `cat /sys/class/graphics/fb0/virtual_size`
+   reads `1280,720`.
 3. Confirm the Docker container count is correct (not stuck at 0) — verifies the
    `harbor` user's `docker`-group access.
 4. `sudo systemctl kill harbor-console` → the dashboard returns within ~2s.
@@ -366,7 +394,9 @@ time curl -sS -o /dev/null https://harbor.hpz440.ohr3023.org/
 
 ### 11. Removal
 
-`sudo deploy/uninstall.sh` → the login prompt returns on tty1, both
-`systemctl is-active harbor-console` and
-`systemctl is-active harbor-console-web` report `inactive`, and
-`docker ps` no longer lists `traefik`.
+`sudo deploy/uninstall.sh` → the login prompt returns on tty1 in the small
+default font, both `systemctl is-active harbor-console` and
+`systemctl is-active harbor-console-web` report `inactive`,
+`docker ps` no longer lists `traefik`, `/etc/default/grub.d/harbor-console.cfg`
+is gone, and `grep FONT /etc/default/console-setup` shows the pre-install
+values. The screen stays 1280x720 until the next reboot.
