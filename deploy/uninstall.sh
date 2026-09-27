@@ -65,6 +65,8 @@ if [[ -f "${CONSOLE_SETUP_BACKUP}" ]]; then
   mv -f "${CONSOLE_SETUP_BACKUP}" "${CONSOLE_SETUP}"
   if command -v setupcon >/dev/null 2>&1; then
     setupcon --save --force || echo "warning: setupcon failed; the font is restored at the next boot." >&2
+  else
+    echo "warning: setupcon not found; ${CONSOLE_SETUP} was restored but the font is unchanged until console-setup runs." >&2
   fi
 else
   echo "warning: ${CONSOLE_SETUP_BACKUP} not found; leaving ${CONSOLE_SETUP} as it is rather than guessing what the host had." >&2
