@@ -18,10 +18,11 @@ Two facts bound the solution:
 - The kernel console cannot draw a glyph taller than 32 pixels, and the
   largest font Ubuntu ships is Terminus 32x16 -- exactly 2x the current
   8x16. No font alone reaches 3x.
-- A framebuffer mode is a 3x lever the font is not. At 1280x720, a 32x16
-  glyph covers 48x24 physical pixels on a 1080p panel: 3x in both axes,
-  and 80x22 cells. The monitor on DP-1 advertises 1280x720 (checked at
-  design time in `/sys/class/drm/card0-DP-1/modes`).
+- A framebuffer mode is a 3x lever the font is not. At 1280x720, a
+  Terminus 32x16 glyph (16 pixels wide, 32 tall) covers 24 by 48 physical
+  pixels on a 1080p panel: 3x the 8-by-16 default in both axes, and 80x22
+  cells. The monitor on DP-1 advertises 1280x720 (checked at design time
+  in `/sys/class/drm/card0-DP-1/modes`).
 
 The `rich` renderer needs no change: `Console` reads the tty's size on
 every frame, so an 80-column console gets an 80-column panel. The Terminus
@@ -84,9 +85,11 @@ and runs `update-grub` only when the file was created or its content
 changed, so an unchanged re-run does not regenerate the GRUB config.
 `video=1280x720` with no connector prefix is the DRM default for every
 connector, so it follows the monitor if it moves from DP-1 to the DVI
-port. A monitor that does not advertise the mode makes DRM ignore the
-option and keep its preferred mode, which is the failure that leaves the
-console readable at 2x rather than blank.
+port. A monitor that does not advertise 1280x720 does not make DRM fall
+back: the kernel synthesizes timings for the requested mode, which the
+monitor may or may not sync to. Check the connector's mode list in
+`/sys/class/drm/*/modes` before shipping this to another host; hpz440's
+DP-1 advertises it.
 
 The mode takes effect at the next boot. `install.sh` never reboots. After
 writing the drop-in it checks `/proc/cmdline` for `video=1280x720` and,
@@ -120,10 +123,12 @@ After restoring the `getty@tty1` login prompt:
 | Framebuffer | 1920x1080 | 1280x720 |
 | Font | Fixed 8x16 | Terminus 32x16 |
 | Cells | 240x67 | 80x22 |
-| Glyph on the panel | 8x16 px | 24x48 px (3x) |
+| Glyph on the panel (w by h) | 8 by 16 px | 24 by 48 px (3x) |
 | Dashboard | 19 of 67 rows | 19 of 22 rows |
 
-Three spare rows. The dashboard grows one row per local filesystem, remote
+Three spare rows. That is today's count, not a bound: at 80 columns a long
+mountpoint label with a long note wraps its value onto a second row, so
+one entry can cost two. The dashboard grows one row per local filesystem, remote
 mount, volume group with slack, stray device and GPU, so a host with three
 more of those than hpz440 has today overflows, and `rich`'s alternate
 screen crops the bottom rows -- IPv4, container count and clock -- with no
@@ -147,8 +152,10 @@ scripts are verified on the host, as every install.sh change has been:
 4. The dashboard fills the monitor at 3x, all 19 rows present, clock
    ticking.
 5. Re-run `install.sh`: no `update-grub` run, no reboot notice, no change.
-6. `uninstall.sh` on a scratch host or VM, or reading: drop-in gone,
-   `console-setup` byte-identical to the backup, font back at 8x16
+6. `uninstall.sh` on a scratch host or VM, or reading: copy
+   `/etc/default/console-setup.pre-harbor` aside first, then after the run
+   the drop-in is gone, `/etc/default/console-setup` is byte-identical to
+   that copy, the backup itself is consumed, and the font is back at 8x16
    without a reboot.
 
 ## Out of scope

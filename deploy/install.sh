@@ -154,8 +154,8 @@ systemctl mask getty@tty1.service
 
 # ADR 20: the dashboard is read from across a room. The largest kernel
 # console font is 32x16 (2x Ubuntu's 8x16 default); 1280x720 on a 1080p
-# panel supplies the other 1.5x, so a glyph covers 24x48 physical pixels --
-# 3x in both axes -- and the console is 80x22 cells against a 19-row
+# panel supplies the other 1.5x, so a glyph (16 wide, 32 tall) covers 24 by 48
+# physical pixels -- 3x in both axes -- and the console is 80x22 cells against a 19-row
 # dashboard. Font applies now on every VT; the mode needs a reboot, which
 # this script never performs.
 echo "==> Sizing the console (ADR 20)"
@@ -164,6 +164,7 @@ CONSOLE_SETUP_BACKUP=/etc/default/console-setup.pre-harbor
 GRUB_DROPIN=/etc/default/grub.d/harbor-console.cfg
 CONSOLE_VIDEO_MODE=1280x720
 console_reboot_needed=0
+grub_dropin_installed=0
 if [[ -f "${CONSOLE_SETUP}" ]]; then
   # Once: a re-run must not overwrite the original with an edited copy.
   if [[ ! -f "${CONSOLE_SETUP_BACKUP}" ]]; then
@@ -199,13 +200,23 @@ EOF_GRUB
   # Regenerate grub.cfg only when the drop-in is new or changed.
   if ! cmp -s "${grub_dropin_new}" "${GRUB_DROPIN}"; then
     install -m 0644 "${grub_dropin_new}" "${GRUB_DROPIN}"
-    update-grub
+    # Guarded: the getty is already masked above, so an abort here under
+    # set -e would leave tty1 with no login prompt and no dashboard.
+    if update-grub; then
+      grub_dropin_installed=1
+    else
+      # Remove the drop-in so the next run's cmp sees a change and retries.
+      rm -f "${GRUB_DROPIN}"
+      echo "warning: update-grub failed; the console mode is unchanged. Re-run install.sh." >&2
+    fi
+  else
+    grub_dropin_installed=1
   fi
   rm -f "${grub_dropin_new}"
 else
   echo "warning: update-grub not found; add 'video=${CONSOLE_VIDEO_MODE}' to the kernel command line by hand for 3x text (ADR 20)." >&2
 fi
-if ! grep -qw "video=${CONSOLE_VIDEO_MODE}" /proc/cmdline; then
+if [[ ${grub_dropin_installed} -eq 1 ]] && ! grep -qw "video=${CONSOLE_VIDEO_MODE}" /proc/cmdline; then
   console_reboot_needed=1
 fi
 
