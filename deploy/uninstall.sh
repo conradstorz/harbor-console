@@ -46,6 +46,32 @@ echo "==> Restoring the login prompt on tty1"
 systemctl unmask getty@tty1.service 2>/dev/null || true
 systemctl start getty@tty1.service 2>/dev/null || true
 
+# ADR 20 reversal. The running kernel keeps the 1280x720 mode until reboot;
+# the font goes back at once.
+echo "==> Restoring the console font and mode (ADR 20)"
+CONSOLE_SETUP=/etc/default/console-setup
+CONSOLE_SETUP_BACKUP=/etc/default/console-setup.pre-harbor
+GRUB_DROPIN=/etc/default/grub.d/harbor-console.cfg
+if [[ -f "${GRUB_DROPIN}" ]]; then
+  rm -f "${GRUB_DROPIN}"
+  if command -v update-grub >/dev/null 2>&1; then
+    update-grub || echo "warning: update-grub failed; run it by hand to drop video=1280x720 from the kernel command line." >&2
+  else
+    echo "warning: update-grub not found; remove 'video=1280x720' from the kernel command line by hand." >&2
+  fi
+  echo "The console returns to its native mode at the next reboot."
+fi
+if [[ -f "${CONSOLE_SETUP_BACKUP}" ]]; then
+  mv -f "${CONSOLE_SETUP_BACKUP}" "${CONSOLE_SETUP}"
+  if command -v setupcon >/dev/null 2>&1; then
+    setupcon --save --force || echo "warning: setupcon failed; the font is restored at the next boot." >&2
+  else
+    echo "warning: setupcon not found; ${CONSOLE_SETUP} was restored but the font is unchanged until console-setup runs." >&2
+  fi
+else
+  echo "warning: ${CONSOLE_SETUP_BACKUP} not found; leaving ${CONSOLE_SETUP} as it is rather than guessing what the host had." >&2
+fi
+
 if [[ ${PURGE} -eq 1 ]]; then
   echo "==> Purging ${INSTALL_DIR}"
   rm -rf "${INSTALL_DIR}"

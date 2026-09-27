@@ -30,6 +30,7 @@ the reasoning, including reasoning we later moved away from.
 | 0017 | [Pin Traefik's default route after multi-homing it](0017-pin-traefiks-default-route-after-multi-homing-it.md) | Accepted |
 | 0018 | [Show the full listening inventory, not only what a rule anticipates](0018-show-the-full-listening-inventory.md) | Accepted |
 | 0019 | [Reserve a fixed `harbor` address for Traefik](0019-reserve-a-fixed-harbor-address-for-traefik.md) | Accepted |
+| 0020 | [Size the console for the room: Terminus 32x16 at 1280x720](0020-size-the-console-for-the-room.md) | Accepted |
 
 ## Adding a new ADR
 
