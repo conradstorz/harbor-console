@@ -1,7 +1,7 @@
 # Console text size: 3x glyphs on the tty1 monitor
 
 Date: 2026-09-26
-Status: proposed
+Status: implemented 2026-09-26
 
 ## The problem
 
