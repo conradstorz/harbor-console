@@ -34,7 +34,7 @@ def build_dashboard(
     else:
         table.add_row("GPU", "none detected")
     table.add_row("IPv4 address", str(metrics["ipv4_address"]))
-    table.add_row("Docker container count", str(metrics["docker_container_count"]))
+    table.add_row("Docker containers", str(metrics["docker_container_count"]))
     table.add_row("Current date/time", str(metrics["current_datetime"]))
 
     return Panel(table, title="Harbor Console", border_style="white")

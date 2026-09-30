@@ -442,9 +442,9 @@ def test_page_shows_every_gpu_entry():
 
     assert '<div class="gpu-section"><h2>GPU</h2>' in page
     assert "GPU card0 (radeon)" in page
-    assert "35 °C" in page
+    assert "35°C" in page
     assert "GPU card1 (amdgpu)" in page
-    assert "busy 12% · VRAM 1.0 / 8.0 GiB (12.5%) · 54 °C" in page
+    assert "busy 12% · 1.0/8 GiB · 54°C" in page
 
 
 def test_gpu_section_sits_in_the_resource_grid_after_storage():

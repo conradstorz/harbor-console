@@ -13,13 +13,70 @@ def test_format_joins_every_present_field_in_order():
         temp_c=54.0,
     )
 
-    assert format_gpu(entry) == "busy 12% · VRAM 1.0 / 8.0 GiB (12.5%) · 54 °C"
+    assert format_gpu(entry) == "busy 12% · 1.0/8 GiB · 54°C"
+
+
+def test_format_keeps_a_fractional_vram_total():
+    entry = GpuEntry(label="g", driver="amdgpu", vram_used=512 * 1024**2, vram_total=1536 * 1024**2)
+
+    assert format_gpu(entry) == "0.5/1.5 GiB"
+
+
+def test_format_fits_the_fullest_row_in_the_console_value_column():
+    """80 columns minus the panel border, padding and this row's own label
+    leaves 54 for the value; a GPU row that wraps eats one of the three rows
+    of headroom the console has (ADR 20)."""
+    entry = GpuEntry(
+        label="GPU card1 (RTX 3060)",
+        driver="nvidia",
+        busy_percent=100,
+        vram_used=int(11.9 * 1024**3),
+        vram_total=12 * 1024**3,
+        temp_c=100.0,
+        power_w=170.0,
+        power_limit_w=170.0,
+        fan_percent=100,
+    )
+
+    assert len(format_gpu(entry)) <= 54
+
+
+def test_format_appends_power_against_its_limit_then_fan():
+    entry = GpuEntry(
+        label="GPU card1 (RTX 3060)",
+        driver="nvidia",
+        busy_percent=100,
+        vram_used=10734 * 1024**2,
+        vram_total=12 * 1024**3,
+        temp_c=83.0,
+        power_w=167.38,
+        power_limit_w=170.0,
+        fan_percent=88,
+    )
+
+    assert format_gpu(entry) == (
+        "busy 100% · 10.5/12 GiB · 83°C · 167/170 W · fan 88%"
+    )
+
+
+def test_format_shows_power_alone_when_the_limit_is_unknown():
+    assert format_gpu(GpuEntry(label="g", driver="nvidia", power_w=12.4)) == "12 W"
+
+
+def test_format_shows_nothing_for_a_limit_without_a_draw():
+    assert format_gpu(GpuEntry(label="g", driver="nvidia", power_limit_w=170.0)) == (
+        "no metrics exposed by nvidia"
+    )
+
+
+def test_format_shows_a_fan_alone():
+    assert format_gpu(GpuEntry(label="g", driver="radeon", fan_percent=35)) == "fan 35%"
 
 
 def test_format_shows_only_what_the_driver_exposed():
     entry = GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0)
 
-    assert format_gpu(entry) == "35 °C"
+    assert format_gpu(entry) == "35°C"
 
 
 def test_format_omits_vram_when_only_half_of_the_pair_is_known():
@@ -72,6 +129,37 @@ def test_collect_reads_a_radeon_card_with_only_a_temperature(tmp_path):
     (entry,) = collect_gpus(tmp_path)
 
     assert entry == GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0)
+
+
+def test_collect_reads_a_radeon_fan_as_a_percentage_of_pwm1_max(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon2__pwm1="64\n", hwmon__hwmon2__pwm1_max="255\n")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.fan_percent == 25
+
+
+def test_collect_assumes_the_usual_pwm_range_when_pwm1_max_is_missing(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon2__pwm1="255\n")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.fan_percent == 100
+
+
+def test_collect_reads_the_fan_from_the_same_hwmon_as_the_temperature(tmp_path):
+    card(
+        tmp_path,
+        "card0",
+        hwmon__hwmon10__temp1_input="11000",
+        hwmon__hwmon10__pwm1="255",
+        hwmon__hwmon2__temp1_input="55000",
+        hwmon__hwmon2__pwm1="0",
+    )
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert (entry.temp_c, entry.fan_percent) == (55.0, 0)
 
 
 def test_collect_reads_every_amdgpu_metric(tmp_path):
@@ -171,6 +259,28 @@ def test_collect_picks_the_lowest_numbered_hwmon_not_the_lexically_first(tmp_pat
     assert entry.temp_c == 55.0
 
 
+def test_collect_skips_a_hwmon_that_has_neither_temperature_nor_fan(tmp_path):
+    card(
+        tmp_path,
+        "card0",
+        hwmon__hwmon2__name="other",
+        hwmon__hwmon10__temp1_input="41000",
+        hwmon__hwmon10__pwm1="128",
+    )
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert (entry.temp_c, entry.fan_percent) == (41.0, 50)
+
+
+def test_collect_takes_a_hwmon_with_only_a_fan_when_no_hwmon_has_a_temperature(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon2__name="other", hwmon__hwmon3__pwm1="255")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert (entry.temp_c, entry.fan_percent) == (None, 100)
+
+
 def test_collect_keeps_a_card_whose_device_directory_is_missing(tmp_path):
     (tmp_path / "card0").mkdir()
 
@@ -230,21 +340,48 @@ def test_collect_fills_an_nvidia_card_from_nvml_by_bus_id(tmp_path):
 
     nvidia_card(tmp_path, "card1", bus_id="0000:02:00.0")
     nvml = FakeNvmlMetrics(
-        NvmlMetrics(busy_percent=7, vram_used=5 * 1024**3, vram_total=12 * 1024**3, temp_c=48.0)
+        NvmlMetrics(
+            name="NVIDIA GeForce RTX 3060",
+            busy_percent=7,
+            vram_used=5 * 1024**3,
+            vram_total=12 * 1024**3,
+            temp_c=48.0,
+            power_w=30.2,
+            power_limit_w=170.0,
+            fan_percent=0,
+        )
     )
 
     (entry,) = collect_gpus(tmp_path, nvml=nvml)
 
     assert nvml.asked == ["0000:02:00.0"]
     assert entry == GpuEntry(
-        label="GPU card1 (nvidia)",
+        label="GPU card1 (RTX 3060)",
         driver="nvidia",
         busy_percent=7,
         vram_used=5 * 1024**3,
         vram_total=12 * 1024**3,
         temp_c=48.0,
+        power_w=30.2,
+        power_limit_w=170.0,
+        fan_percent=0,
     )
-    assert format_gpu(entry) == "busy 7% · VRAM 5.0 / 12.0 GiB (41.7%) · 48 °C"
+    assert format_gpu(entry) == "busy 7% · 5.0/12 GiB · 48°C · 30/170 W · fan 0%"
+
+
+def test_collect_labels_an_nvidia_card_by_its_short_name(tmp_path):
+    from harbor_console.nvml import NvmlMetrics
+
+    nvidia_card(tmp_path, "card1")
+
+    (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(NvmlMetrics(name="NVIDIA GeForce RTX 3060")))
+    assert entry.label == "GPU card1 (RTX 3060)"
+
+    (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(NvmlMetrics(name="Quadro P400")))
+    assert entry.label == "GPU card1 (Quadro P400)"
+
+    (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(NvmlMetrics(name="")))
+    assert entry.label == "GPU card1 (nvidia)"
 
 
 def test_collect_does_not_ask_nvml_about_other_drivers(tmp_path):
