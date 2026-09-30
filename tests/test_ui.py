@@ -112,7 +112,7 @@ def test_dashboard_shows_one_row_per_gpu():
 
     lines = render(METRICS, (), gpus).splitlines()
 
-    assert any("GPU card0 (radeon)" in line and "35 °C" in line for line in lines)
+    assert any("GPU card0 (radeon)" in line and "35°C" in line for line in lines)
     assert any("GPU card1 (amdgpu)" in line and "busy 7%" in line for line in lines)
 
 
@@ -133,3 +133,28 @@ def test_dashboard_puts_gpu_rows_between_storage_and_ipv4():
     page = render(METRICS, storage, gpus)
 
     assert page.index("VG ubuntu-vg") < page.index("GPU card0") < page.index("IPv4 address")
+
+
+def test_dashboard_keeps_the_fullest_gpu_row_on_one_line_at_80_columns():
+    """The console is 80 cells wide (ADR 20); a wrapped GPU row would eat one
+    of its three rows of headroom."""
+    gpus = (
+        GpuEntry(
+            label="GPU card1 (RTX 3060)",
+            driver="nvidia",
+            busy_percent=100,
+            vram_used=int(11.9 * 1024**3),
+            vram_total=12 * 1024**3,
+            temp_c=100.0,
+            power_w=170.0,
+            power_limit_w=170.0,
+            fan_percent=100,
+        ),
+    )
+
+    console = Console(width=80, record=True)
+    console.print(build_dashboard(METRICS, (), gpus))
+    lines = console.export_text().splitlines()
+
+    assert any("GPU card1 (RTX 3060)" in line and "fan 100%" in line for line in lines)
+    assert any("Docker containers" in line and "17" in line for line in lines)

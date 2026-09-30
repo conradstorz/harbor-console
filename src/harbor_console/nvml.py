@@ -23,6 +23,8 @@ LIBRARY = "libnvidia-ml.so.1"
 
 _SUCCESS = 0
 _TEMPERATURE_GPU = 0
+#: NVML_DEVICE_NAME_V2_BUFFER_SIZE.
+_NAME_BUFFER = 96
 
 
 class _Utilization(ctypes.Structure):
@@ -41,10 +43,15 @@ class _Memory(ctypes.Structure):
 class NvmlMetrics:
     """What NVML said about one card; each field `None` where it would not."""
 
+    name: str = ""
     busy_percent: int | None = None
     vram_used: int | None = None
     vram_total: int | None = None
     temp_c: float | None = None
+    #: Watts; NVML reports milliwatts and both are converted here.
+    power_w: float | None = None
+    power_limit_w: float | None = None
+    fan_percent: int | None = None
 
 
 def _call(lib: Any, name: str, *args: Any) -> bool:
@@ -65,6 +72,12 @@ def query(lib: Any, bus_id: str) -> NvmlMetrics | None:
         return None
 
     metrics = NvmlMetrics()
+    name = ctypes.create_string_buffer(_NAME_BUFFER)
+    if _call(lib, "nvmlDeviceGetName", handle, name, _NAME_BUFFER):
+        try:
+            metrics = replace(metrics, name=name.value.decode("ascii").strip())
+        except UnicodeDecodeError:
+            pass
     util = _Utilization()
     if _call(lib, "nvmlDeviceGetUtilizationRates", handle, ctypes.pointer(util)):
         metrics = replace(metrics, busy_percent=int(util.gpu))
@@ -74,6 +87,14 @@ def query(lib: Any, bus_id: str) -> NvmlMetrics | None:
     temp = ctypes.c_uint()
     if _call(lib, "nvmlDeviceGetTemperature", handle, _TEMPERATURE_GPU, ctypes.pointer(temp)):
         metrics = replace(metrics, temp_c=float(temp.value))
+    milliwatts = ctypes.c_uint()
+    if _call(lib, "nvmlDeviceGetPowerUsage", handle, ctypes.pointer(milliwatts)):
+        metrics = replace(metrics, power_w=milliwatts.value / 1000.0)
+    if _call(lib, "nvmlDeviceGetPowerManagementLimit", handle, ctypes.pointer(milliwatts)):
+        metrics = replace(metrics, power_limit_w=milliwatts.value / 1000.0)
+    fan = ctypes.c_uint()
+    if _call(lib, "nvmlDeviceGetFanSpeed", handle, ctypes.pointer(fan)):
+        metrics = replace(metrics, fan_percent=int(fan.value))
     return metrics
 
 

@@ -20,7 +20,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harbor_console.nvml import NvmlMetrics, nvml_metrics
-from harbor_console.system import format_usage
 
 NOTE_UNAVAILABLE = "unavailable"
 
@@ -30,6 +29,15 @@ _CARD = re.compile(r"^card(\d+)$")
 
 #: The one driver whose metrics live behind NVML rather than in sysfs.
 _NVIDIA = "nvidia"
+
+#: Marketing prefixes NVML puts before the model; the label has 80 columns to
+#: share with the metrics, and "RTX 3060" says what "NVIDIA GeForce RTX 3060"
+#: says.
+_NAME_PREFIXES = ("NVIDIA ", "GeForce ")
+
+#: hwmon `pwm1` runs 0..`pwm1_max`, and `pwm1_max` is 255 wherever it is
+#: absent.
+_PWM_MAX_DEFAULT = 255
 
 NvmlQuery = Callable[[str], NvmlMetrics | None]
 
@@ -45,6 +53,10 @@ class GpuEntry:
     vram_used: int | None = None
     vram_total: int | None = None
     temp_c: float | None = None
+    #: Watts. Draw renders alone; a limit renders only against a draw.
+    power_w: float | None = None
+    power_limit_w: float | None = None
+    fan_percent: int | None = None
     note: str = ""
 
 
@@ -53,6 +65,13 @@ def format_gpu(entry: GpuEntry) -> str:
 
     Present fields joined in a fixed order; nothing present names the driver
     that stayed silent, so a bare row still says why; a note stands alone.
+
+    Denser than the memory and storage rows on purpose: the console gives a
+    value 54 cells (ADR 20), and a full NVIDIA row -- busy, VRAM, heat, power
+    against its limit, fan -- has to fit in one line or it eats a row of the
+    three the dashboard has to spare. VRAM is `used/total GiB` with no word
+    and no percentage; a GPU row has only one memory, and the pair already
+    says how full it is.
     """
     if entry.note:
         return entry.note
@@ -60,15 +79,28 @@ def format_gpu(entry: GpuEntry) -> str:
     if entry.busy_percent is not None:
         parts.append(f"busy {entry.busy_percent}%")
     if entry.vram_used is not None and entry.vram_total:
-        percent = 100.0 * entry.vram_used / entry.vram_total
-        parts.append(f"VRAM {format_usage(entry.vram_used, entry.vram_total, percent)}")
+        parts.append(f"{_gib(entry.vram_used)}/{_gib(entry.vram_total, whole=True)} GiB")
     if entry.temp_c is not None:
-        parts.append(f"{entry.temp_c:.0f} °C")
+        parts.append(f"{entry.temp_c:.0f}°C")
+    if entry.power_w is not None:
+        if entry.power_limit_w is not None:
+            parts.append(f"{entry.power_w:.0f}/{entry.power_limit_w:.0f} W")
+        else:
+            parts.append(f"{entry.power_w:.0f} W")
+    if entry.fan_percent is not None:
+        parts.append(f"fan {entry.fan_percent}%")
     if parts:
         return " · ".join(parts)
     if entry.driver:
         return f"no metrics exposed by {entry.driver}"
     return "no metrics exposed"
+
+
+def _gib(size: int, whole: bool = False) -> str:
+    """Bytes as GiB to one decimal; `whole` drops a `.0`, since a card's
+    total is a round number and the row has no cells to spare."""
+    text = f"{size / 1024**3:.1f}"
+    return text.removesuffix(".0") if whole else text
 
 
 def _read_int(path: Path) -> int | None:
@@ -105,35 +137,58 @@ def _hwmon_order(path: Path) -> tuple[int, str]:
     return (int(match.group(1)) if match else -1, path.name)
 
 
-def _temperature(device: Path) -> float | None:
-    """The first hwmon `temp1_input` under the device, in degrees Celsius.
+def _hwmon(device: Path) -> Path | None:
+    """The lowest-numbered hwmon directory under the device, or `None`.
 
-    sysfs reports millidegrees. Guarded on the listing and on the read, so a
-    device with no `hwmon` directory simply has no temperature.
+    Guarded on the listing, so a device with no `hwmon` directory simply has
+    no sensors.
     """
     try:
         sensors = sorted((device / "hwmon").iterdir(), key=_hwmon_order)
     except OSError:
         return None
-    for sensor in sensors:
-        millidegrees = _read_int(sensor / "temp1_input")
-        if millidegrees is not None:
-            return millidegrees / 1000.0
-    return None
+    return sensors[0] if sensors else None
+
+
+def _temperature(sensor: Path | None) -> float | None:
+    """`temp1_input` in degrees Celsius; sysfs reports millidegrees."""
+    if sensor is None:
+        return None
+    millidegrees = _read_int(sensor / "temp1_input")
+    return None if millidegrees is None else millidegrees / 1000.0
+
+
+def _fan_percent(sensor: Path | None) -> int | None:
+    """`pwm1` as a percentage of `pwm1_max`: the duty the driver commands,
+    which is what a card without a tachometer can say about its fan."""
+    if sensor is None:
+        return None
+    pwm = _read_int(sensor / "pwm1")
+    if pwm is None:
+        return None
+    pwm_max = _read_int(sensor / "pwm1_max") or _PWM_MAX_DEFAULT
+    return round(100 * pwm / pwm_max)
+
+
+def _short_name(name: str) -> str:
+    for prefix in _NAME_PREFIXES:
+        name = name.removeprefix(prefix)
+    return name
 
 
 def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
     device = node / "device"
     uevent = _uevent(device)
     driver = uevent.get("DRIVER", "")
-    label = f"GPU {node.name} ({driver})" if driver else f"GPU {node.name}"
+    sensor = _hwmon(device)
     entry = GpuEntry(
-        label=label,
+        label=_label(node.name, driver),
         driver=driver,
         busy_percent=_read_int(device / "gpu_busy_percent"),
         vram_used=_read_int(device / "mem_info_vram_used"),
         vram_total=_read_int(device / "mem_info_vram_total"),
-        temp_c=_temperature(device),
+        temp_c=_temperature(sensor),
+        fan_percent=_fan_percent(sensor),
     )
     bus_id = uevent.get("PCI_SLOT_NAME")
     if driver != _NVIDIA or not bus_id:
@@ -141,7 +196,14 @@ def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
     metrics = nvml(bus_id)
     if metrics is None:
         return entry
-    return replace(entry, **vars(metrics))
+    fields = {k: v for k, v in vars(metrics).items() if k != "name"}
+    return replace(entry, label=_label(node.name, _short_name(metrics.name) or driver), **fields)
+
+
+def _label(card: str, detail: str) -> str:
+    """`GPU card1 (RTX 3060)`: the model where NVML names one, the driver
+    otherwise, bare when even that is unknown."""
+    return f"GPU {card} ({detail})" if detail else f"GPU {card}"
 
 
 def collect_gpus(
