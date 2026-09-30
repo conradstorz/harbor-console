@@ -4,7 +4,9 @@ Collects only. One entry per `/sys/class/drm/card<N>`, every metric optional:
 a driver exposes what it exposes, and the entry carries a number where one
 exists and nothing where none does, so a renderer never decides which driver
 it is looking at. On hpz440 the `radeon` driver exposes a temperature and
-nothing else; `amdgpu` adds busy percent and VRAM.
+nothing else; `amdgpu` adds busy percent and VRAM; the proprietary `nvidia`
+driver exposes nothing at all through sysfs, so a card it drives is filled
+from NVML instead (`nvml.py`), matched by the PCI bus ID `uevent` names.
 
 Reads files and runs no subprocess, so nothing here can hang and nothing
 needs a timeout.
@@ -13,9 +15,11 @@ needs a timeout.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from harbor_console.nvml import NvmlMetrics, nvml_metrics
 from harbor_console.system import format_usage
 
 NOTE_UNAVAILABLE = "unavailable"
@@ -23,6 +27,11 @@ NOTE_UNAVAILABLE = "unavailable"
 #: `card0` is a card; `card0-DP-1` is one of its connectors, `renderD128` a
 #: render node, `version` a file. Only the first is a GPU.
 _CARD = re.compile(r"^card(\d+)$")
+
+#: The one driver whose metrics live behind NVML rather than in sysfs.
+_NVIDIA = "nvidia"
+
+NvmlQuery = Callable[[str], NvmlMetrics | None]
 
 
 @dataclass(frozen=True)
@@ -71,21 +80,23 @@ def _read_int(path: Path) -> int | None:
         return None
 
 
-def _driver(device: Path) -> str:
-    """The `DRIVER=` line of `device/uevent`, or "" when there is none.
+def _uevent(device: Path) -> dict[str, str]:
+    """`device/uevent` as a mapping, empty when it cannot be read.
 
-    `uevent` is a regular file where `device/driver` is a symlink; the same
-    name, without needing a test tree to hold a link.
+    `DRIVER=` names the driver (a regular file where `device/driver` is a
+    symlink, so a test tree needs no link) and `PCI_SLOT_NAME=` the bus ID
+    NVML is asked about.
     """
     try:
         text = (device / "uevent").read_text(encoding="ascii", errors="replace")
     except OSError:
-        return ""
+        return {}
+    fields: dict[str, str] = {}
     for line in text.splitlines():
         key, sep, value = line.partition("=")
-        if sep and key.strip() == "DRIVER":
-            return value.strip()
-    return ""
+        if sep:
+            fields[key.strip()] = value.strip()
+    return fields
 
 
 def _hwmon_order(path: Path) -> tuple[int, str]:
@@ -111,11 +122,12 @@ def _temperature(device: Path) -> float | None:
     return None
 
 
-def _card_entry(node: Path) -> GpuEntry:
+def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
     device = node / "device"
-    driver = _driver(device)
+    uevent = _uevent(device)
+    driver = uevent.get("DRIVER", "")
     label = f"GPU {node.name} ({driver})" if driver else f"GPU {node.name}"
-    return GpuEntry(
+    entry = GpuEntry(
         label=label,
         driver=driver,
         busy_percent=_read_int(device / "gpu_busy_percent"),
@@ -123,10 +135,23 @@ def _card_entry(node: Path) -> GpuEntry:
         vram_total=_read_int(device / "mem_info_vram_total"),
         temp_c=_temperature(device),
     )
+    bus_id = uevent.get("PCI_SLOT_NAME")
+    if driver != _NVIDIA or not bus_id:
+        return entry
+    metrics = nvml(bus_id)
+    if metrics is None:
+        return entry
+    return replace(entry, **vars(metrics))
 
 
-def collect_gpus(drm_root: str | Path = "/sys/class/drm") -> tuple[GpuEntry, ...]:
+def collect_gpus(
+    drm_root: str | Path = "/sys/class/drm", nvml: NvmlQuery = nvml_metrics
+) -> tuple[GpuEntry, ...]:
     """One entry per card under `drm_root`, in card-number order.
+
+    A card driven by `nvidia` is filled from `nvml` by its PCI bus ID; sysfs
+    holds nothing for it, and `nvml` answering `None` leaves the row bare,
+    naming the driver that stayed silent.
 
     A root that cannot be listed yields one `unavailable` entry rather than an
     empty tuple -- nothing found and nothing looked at must not render alike
@@ -145,4 +170,4 @@ def collect_gpus(drm_root: str | Path = "/sys/class/drm") -> tuple[GpuEntry, ...
         if match:
             cards.append((int(match.group(1)), name))
     cards.sort()
-    return tuple(_card_entry(root / name) for _, name in cards)
+    return tuple(_card_entry(root / name, nvml) for _, name in cards)

@@ -201,3 +201,83 @@ def test_collect_defaults_to_the_real_sysfs_root():
     import inspect
 
     assert inspect.signature(collect_gpus).parameters["drm_root"].default == "/sys/class/drm"
+
+
+# --- NVIDIA: nothing in sysfs, everything through NVML ---
+
+
+def nvidia_card(root: Path, name: str, bus_id: str | None = "0000:02:00.0") -> Path:
+    device = card(root, name, driver=None)
+    lines = ["DRIVER=nvidia", "PCI_ID=10DE:2503"]
+    if bus_id is not None:
+        lines.append(f"PCI_SLOT_NAME={bus_id}")
+    (device / "uevent").write_text("\n".join(lines) + "\n")
+    return device
+
+
+class FakeNvmlMetrics:
+    def __init__(self, metrics=None):
+        self.metrics = metrics
+        self.asked: list[str] = []
+
+    def __call__(self, bus_id: str):
+        self.asked.append(bus_id)
+        return self.metrics
+
+
+def test_collect_fills_an_nvidia_card_from_nvml_by_bus_id(tmp_path):
+    from harbor_console.nvml import NvmlMetrics
+
+    nvidia_card(tmp_path, "card1", bus_id="0000:02:00.0")
+    nvml = FakeNvmlMetrics(
+        NvmlMetrics(busy_percent=7, vram_used=5 * 1024**3, vram_total=12 * 1024**3, temp_c=48.0)
+    )
+
+    (entry,) = collect_gpus(tmp_path, nvml=nvml)
+
+    assert nvml.asked == ["0000:02:00.0"]
+    assert entry == GpuEntry(
+        label="GPU card1 (nvidia)",
+        driver="nvidia",
+        busy_percent=7,
+        vram_used=5 * 1024**3,
+        vram_total=12 * 1024**3,
+        temp_c=48.0,
+    )
+    assert format_gpu(entry) == "busy 7% · VRAM 5.0 / 12.0 GiB (41.7%) · 48 °C"
+
+
+def test_collect_does_not_ask_nvml_about_other_drivers(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon2__temp1_input="35000\n")
+    nvml = FakeNvmlMetrics()
+
+    collect_gpus(tmp_path, nvml=nvml)
+
+    assert nvml.asked == []
+
+
+def test_collect_leaves_an_nvidia_card_bare_when_nvml_has_nothing(tmp_path):
+    nvidia_card(tmp_path, "card1")
+
+    (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(None))
+
+    assert entry == GpuEntry(label="GPU card1 (nvidia)", driver="nvidia")
+    assert format_gpu(entry) == "no metrics exposed by nvidia"
+
+
+def test_collect_does_not_ask_nvml_without_a_bus_id(tmp_path):
+    nvidia_card(tmp_path, "card1", bus_id=None)
+    nvml = FakeNvmlMetrics()
+
+    (entry,) = collect_gpus(tmp_path, nvml=nvml)
+
+    assert nvml.asked == []
+    assert entry.driver == "nvidia"
+
+
+def test_collect_defaults_nvml_to_the_real_query():
+    import inspect
+
+    from harbor_console.nvml import nvml_metrics
+
+    assert inspect.signature(collect_gpus).parameters["nvml"].default is nvml_metrics
