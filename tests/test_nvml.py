@@ -82,18 +82,10 @@ def test_query_drops_only_the_metric_whose_call_failed():
     )
 
 
-def test_query_survives_a_library_missing_a_function():
-    lib = FakeNvml()
-    del FakeNvml.nvmlDeviceGetTemperature
-    try:
-        assert query(lib, "0000:02:00.0") == NvmlMetrics(busy_percent=12, vram_used=5, vram_total=12)
-    finally:
-        FakeNvml.nvmlDeviceGetTemperature = _restore_temperature
+def test_query_survives_a_library_missing_a_function(monkeypatch):
+    monkeypatch.delattr(FakeNvml, "nvmlDeviceGetTemperature")
 
-
-def _restore_temperature(self, handle, sensor, temp):
-    temp.contents.value = self.temp
-    return SUCCESS
+    assert query(FakeNvml(), "0000:02:00.0") == NvmlMetrics(busy_percent=12, vram_used=5, vram_total=12)
 
 
 def test_load_library_initialises_nvml_once_and_returns_it():
