@@ -138,16 +138,22 @@ def _hwmon_order(path: Path) -> tuple[int, str]:
 
 
 def _hwmon(device: Path) -> Path | None:
-    """The lowest-numbered hwmon directory under the device, or `None`.
+    """The lowest-numbered hwmon directory under the device that reports a
+    temperature, else the lowest that reports a fan, else `None`.
 
-    Guarded on the listing, so a device with no `hwmon` directory simply has
-    no sensors.
+    A directory with neither is skipped rather than chosen, so a sensor that
+    sits behind an empty one is still found. Guarded on the listing, so a
+    device with no `hwmon` directory simply has no sensors.
     """
     try:
         sensors = sorted((device / "hwmon").iterdir(), key=_hwmon_order)
     except OSError:
         return None
-    return sensors[0] if sensors else None
+    for probe in ("temp1_input", "pwm1"):
+        for sensor in sensors:
+            if _read_int(sensor / probe) is not None:
+                return sensor
+    return None
 
 
 def _temperature(sensor: Path | None) -> float | None:

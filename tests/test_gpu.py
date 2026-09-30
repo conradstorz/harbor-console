@@ -259,6 +259,28 @@ def test_collect_picks_the_lowest_numbered_hwmon_not_the_lexically_first(tmp_pat
     assert entry.temp_c == 55.0
 
 
+def test_collect_skips_a_hwmon_that_has_neither_temperature_nor_fan(tmp_path):
+    card(
+        tmp_path,
+        "card0",
+        hwmon__hwmon2__name="other",
+        hwmon__hwmon10__temp1_input="41000",
+        hwmon__hwmon10__pwm1="128",
+    )
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert (entry.temp_c, entry.fan_percent) == (41.0, 50)
+
+
+def test_collect_takes_a_hwmon_with_only_a_fan_when_no_hwmon_has_a_temperature(tmp_path):
+    card(tmp_path, "card0", hwmon__hwmon2__name="other", hwmon__hwmon3__pwm1="255")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert (entry.temp_c, entry.fan_percent) == (None, 100)
+
+
 def test_collect_keeps_a_card_whose_device_directory_is_missing(tmp_path):
     (tmp_path / "card0").mkdir()
 
