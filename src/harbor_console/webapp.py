@@ -22,6 +22,8 @@ from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from harbor_console.certificate import Certificate, CertificateUnavailable, served_certificate
+from harbor_console.checks import OWN_ROUTE_HOST, run_checks
 from harbor_console.directory import (
     KIND_HTTP,
     build_rows,
@@ -123,6 +125,7 @@ def collect_snapshot(
     prober: Callable[[str], Health] = probe,
     storage: Callable[[], tuple[StorageEntry, ...]] = collect_storage,
     gpus: Callable[[], tuple[GpuEntry, ...]] = collect_gpus,
+    certificate: Callable[[str], Certificate | CertificateUnavailable] = served_certificate,
     tailnet_address: str | None = None,
     own_port: int | None = WEB_PORT,
 ) -> Snapshot:
@@ -146,6 +149,15 @@ def collect_snapshot(
             continue
         health[route[0]] = prober(route_url(route[1]))
 
+    # The page's own route and the served certificate both need the edge's
+    # address; without one they are not attempted, and the checks say so.
+    own_route = prober(route_url(OWN_ROUTE_HOST)) if tailnet_address is not None else None
+    served = certificate(tailnet_address) if tailnet_address is not None else None
+
+    docker_available = running is not DOCKER_UNAVAILABLE
+    traefik_available = routed is not TRAEFIK_UNAVAILABLE
+    listeners_available = found is not LISTENING_UNAVAILABLE
+
     return Snapshot(
         collected=now,
         metrics=metrics,
@@ -153,15 +165,29 @@ def collect_snapshot(
         findings=find_findings(running, routed, found, tailnet_address, own_port=own_port),
         inventory=build_inventory(found, running, tailnet_address, own_port),
         containers=tuple(running),
-        docker_available=running is not DOCKER_UNAVAILABLE,
-        traefik_available=routed is not TRAEFIK_UNAVAILABLE,
-        listeners_available=found is not LISTENING_UNAVAILABLE,
+        docker_available=docker_available,
+        traefik_available=traefik_available,
+        listeners_available=listeners_available,
         health=health,
         collection_error=None,
         probed=True,
         tailnet_address=tailnet_address,
         storage=storage(),
         gpus=gpus(),
+        own_route=own_route,
+        certificate=served,
+        checks=run_checks(
+            now=now,
+            docker_available=docker_available,
+            traefik_available=traefik_available,
+            containers=running,
+            routers=routed,
+            own_route=own_route,
+            certificate=served,
+            listeners=found,
+            listeners_available=listeners_available,
+            tailnet_address=tailnet_address,
+        ),
     )
 
 

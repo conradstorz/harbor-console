@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from harbor_console.certificate import Certificate, CertificateUnavailable
+from harbor_console.checks import Check
 from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
 from harbor_console.gpu import GpuEntry
@@ -55,3 +57,16 @@ class Snapshot:
     #: One entry per DRM card. Empty is a host with no GPU; `probed` is what
     #: distinguishes that from a cycle that has not run.
     gpus: tuple[GpuEntry, ...] = ()
+    #: The page probed at its own route through Traefik -- the path ADR 17
+    #: and ADR 19 broke, and the one route the directory does not cover
+    #: because the page is not a container. None when not attempted (no
+    #: tailnet address), which the checks report as unknown, not failed.
+    own_route: Health | None = None
+    #: The certificate the edge served on the tailnet address, or why it
+    #: could not be read. None when not attempted.
+    certificate: Certificate | CertificateUnavailable | None = None
+    #: The platform checks judged from this cycle (`checks.run_checks`).
+    #: Empty until the first cycle. The renderer adds the prober-fresh
+    #: check itself, from `collected`, because the prober cannot report
+    #: its own silence.
+    checks: tuple[Check, ...] = ()
