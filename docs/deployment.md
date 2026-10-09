@@ -272,6 +272,13 @@ Traefik has its own failure modes, and they never take the page down:
   token in `/etc/traefik/env` is wrong or lacks `Zone.DNS` edit on the zone.
 - A route that 404s at the proxy is a router Traefik never accepted; the status
   page names it under `route-error`, with Traefik's own reason.
+- *Every* label-declared route 404s while `harbor.hpz440.ohr3023.org` (the one
+  file-provider route) still answers: Traefik's Docker provider has lost the
+  daemon, so it has no containers to route to. `docker logs traefik` says why.
+  `client version 1.24 is too old. Minimum supported API version is 1.40` is
+  the Docker Engine 29 upgrade meeting a Traefik older than v3.7 (or v3.6.16);
+  the fix is the image pin in `deploy/traefik/compose.yaml`, and
+  `tests/test_deploy.py` keeps it from regressing.
 
 ### The page is up but says something is wrong
 
