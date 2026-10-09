@@ -74,10 +74,10 @@ def loads(text: str) -> Verdict | None:
 
 
 def read_verdict(path: Path = VERDICT_PATH) -> Verdict | None:
-    """The verdict on disk, or None. Never raises; never blocks on anything but a local file."""
+    """The verdict on disk, or None. Never raises: a missing, unreadable or undecodable file is None; never blocks on anything but a local file."""
     try:
         return loads(path.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 

@@ -87,6 +87,13 @@ def test_read_returns_none_on_garbage(tmp_path):
     assert read_verdict(path) is None
 
 
+def test_read_returns_none_on_bytes_that_are_not_utf8(tmp_path):
+    path = tmp_path / "checks.json"
+    path.write_bytes(b"\xff\xfe\x00garbage")
+
+    assert read_verdict(path) is None
+
+
 def test_the_default_path_is_under_run():
     assert VERDICT_PATH.as_posix() == "/run/harbor-console/checks.json"
 
