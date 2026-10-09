@@ -209,7 +209,7 @@ below in the order it appears.
 ```yaml
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.7
     container_name: traefik
     restart: unless-stopped
     command:

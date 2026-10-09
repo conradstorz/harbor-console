@@ -3,7 +3,14 @@
 # by install.sh from the host's tailnet address and /etc/traefik/env.
 services:
   traefik:
-    image: traefik:v3.3
+    # Minor-pinned: a patch bump is an unattended `compose pull`, a minor bump
+    # is a reviewed change here. Floor is v3.7 (tests/test_deploy.py): Docker
+    # Engine 29 refuses API versions below 1.40, and Traefik v3.3 pinned its
+    # Docker provider to 1.24 -- the 2026-10-08 engine upgrade on hpz440 left
+    # Traefik running and the certificate valid while every label-declared
+    # route vanished (`client version 1.24 is too old` in its log, 404 at the
+    # edge). v3.6.16 / v3.7.0 negotiate the version instead.
+    image: traefik:v3.7
     container_name: traefik
     restart: unless-stopped
     command:
