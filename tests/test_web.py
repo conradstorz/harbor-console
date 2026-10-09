@@ -532,6 +532,15 @@ def test_page_before_the_first_cycle_shows_no_block():
     assert "Platform checks: 0 passed, 1 unknown: prober-fresh" in page
 
 
+def test_page_turns_red_when_the_first_cycle_never_completes():
+    started = Snapshot(collected=CHECK_NOW - timedelta(minutes=5), metrics=METRICS)
+
+    page = web.render_page(started, now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" in page
+    assert "prober-fresh: status page has not reported since 17:16:46" in page
+
+
 def test_the_handler_judges_staleness_with_the_real_clock():
     """The handler calls `render_page` with no explicit `now`, so it falls back
     to the real wall clock rather than ever rendering a verdict as fresh just

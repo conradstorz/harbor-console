@@ -222,10 +222,22 @@ def test_edge_listening_fails_when_443_is_not_bound():
     assert "443" in check.reason
 
 
-def test_edge_listening_accepts_a_wildcard_bind():
+def test_edge_listening_fails_on_a_wildcard_bind():
+    # 0.0.0.0 publishes the edge to the LAN, which the bind is supposed to
+    # prevent (ADR 7, ADR 15); nothing else reports it because the socket
+    # is accounted to the Traefik container.
     check = checks(listeners=(Listener("0.0.0.0", 80, 1), Listener("0.0.0.0", 443, 1)))[CHECK_EDGE_LISTENING]
 
-    assert check.state == STATE_OK
+    assert check.state == STATE_FAILED
+    assert "0.0.0.0" in check.reason
+    assert "80 and 443" in check.reason
+
+
+def test_edge_listening_fails_when_one_port_is_wildcard_and_the_other_is_right():
+    check = checks(listeners=(Listener(TAILNET, 80, 1), Listener("0.0.0.0", 443, 1)))[CHECK_EDGE_LISTENING]
+
+    assert check.state == STATE_FAILED
+    assert "0.0.0.0:443" in check.reason
 
 
 def test_edge_listening_ignores_udp_on_the_same_ports():

@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from harbor_console.certificate import Certificate, CertificateUnavailable
 from harbor_console.directory import KIND_HTTP, declared_kind, route_url
 from harbor_console.docker import Container
-from harbor_console.listening import PROTO_TCP, Listener, addrs_overlap
+from harbor_console.listening import ANY_ADDR, PROTO_TCP, Listener
 from harbor_console.probe import Health
 from harbor_console.traefik import Router
 
@@ -211,17 +211,37 @@ def _certificate(
 def _edge_listening(
     listeners: Sequence[Listener], available: bool, tailnet_address: str | None
 ) -> Check:
+    """The bind is the access control (ADR 7, ADR 15), so a wildcard bind on
+    80 or 443 is a failure, not a looser pass: it means the edge is published
+    to the whole LAN, which is the one thing the host must never do, and
+    nothing else reports it because the socket is accounted to the Traefik
+    container."""
     if not available:
         return Check(CHECK_EDGE_LISTENING, STATE_UNKNOWN, "the socket table could not be read")
     if tailnet_address is None:
         return Check(CHECK_EDGE_LISTENING, STATE_UNKNOWN, "no tailnet address")
+    wildcard = [
+        port
+        for port in EDGE_PORTS
+        if any(
+            listener.proto == PROTO_TCP and listener.port == port and listener.addr == ANY_ADDR
+            for listener in listeners
+        )
+    ]
+    if wildcard:
+        ports = " and ".join(str(p) for p in wildcard)
+        return Check(
+            CHECK_EDGE_LISTENING,
+            STATE_FAILED,
+            f"the edge is published on 0.0.0.0:{ports}, not the tailnet address only",
+        )
     missing = [
         port
         for port in EDGE_PORTS
         if not any(
             listener.proto == PROTO_TCP
             and listener.port == port
-            and addrs_overlap(listener.addr, tailnet_address)
+            and listener.addr == tailnet_address
             for listener in listeners
         )
     ]

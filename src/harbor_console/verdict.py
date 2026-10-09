@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from harbor_console.checks import Check
+from harbor_console.checks import STATE_FAILED, STATE_OK, STATE_UNKNOWN, Check
+
+_VALID_STATES = (STATE_OK, STATE_FAILED, STATE_UNKNOWN)
 
 VERDICT_PATH = Path("/run/harbor-console/checks.json")
 
@@ -60,14 +62,23 @@ def loads(text: str) -> Verdict | None:
         return None
     try:
         written = datetime.fromisoformat(str(payload["written"]))
-        hostname = str(payload["hostname"])
+        hostname = payload["hostname"]
+        if not isinstance(hostname, str):
+            return None
         raw_checks = payload["checks"]
         if not isinstance(raw_checks, list):
             return None
-        checks = tuple(
-            Check(name=str(c["name"]), state=str(c["state"]), reason=str(c["reason"]))
-            for c in raw_checks
-        )
+        checks = []
+        for c in raw_checks:
+            if not isinstance(c, dict):
+                return None
+            name, state, reason = c["name"], c["state"], c["reason"]
+            if not (isinstance(name, str) and isinstance(state, str) and isinstance(reason, str)):
+                return None
+            if state not in _VALID_STATES:
+                return None
+            checks.append(Check(name=name, state=state, reason=reason))
+        checks = tuple(checks)
     except (KeyError, TypeError, ValueError):
         return None
     return Verdict(written=written, hostname=hostname, checks=checks)

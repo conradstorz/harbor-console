@@ -142,7 +142,9 @@ prober has reported in the last 90 s. A declared service being down stays a
 The verdict lives at `/run/harbor-console/checks.json`, written by
 `harbor-console-web` every 30 s. Run `harbor-console-check` from
 `/opt/harbor-console/.venv/bin/` over SSH to read it; exit 0 is healthy, 1
-is a failed check, 2 is nothing reported (is the web service running?).
+is a failed check, 2 is nothing reported, or a verdict older than 90 s
+because collection keeps failing -- `journalctl -u harbor-console-web`
+tells the two apart.
 
 ## Admin access (important)
 

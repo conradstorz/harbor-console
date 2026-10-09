@@ -49,6 +49,9 @@ def test_dumps_is_plain_json_with_isoformat_timestamp():
         '{"written": "yesterday", "hostname": "h", "checks": []}',
         '{"written": "2026-10-09T17:21:46", "hostname": "h", "checks": [{"name": "x"}]}',
         '{"written": "2026-10-09T17:21:46", "hostname": "h", "checks": "none"}',
+        '{"written": "2026-10-09T17:21:46", "hostname": "h", "checks": [{"name": "x", "state": "bogus", "reason": "r"}]}',
+        '{"written": "2026-10-09T17:21:46", "hostname": "h", "checks": [{"name": 1, "state": "ok", "reason": "r"}]}',
+        '{"written": "2026-10-09T17:21:46", "hostname": 7, "checks": []}',
     ],
 )
 def test_loads_returns_none_for_malformed_input(text):

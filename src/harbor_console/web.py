@@ -20,6 +20,7 @@ from harbor_console.checks import (
     STATE_UNKNOWN,
     Check,
     freshness_check,
+    is_stale,
     platform_broken,
 )
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
@@ -107,10 +108,18 @@ def page_checks(snapshot: Snapshot, now: datetime) -> tuple[Check, ...]:
 
     Before the first cycle there is nothing to judge from, and that is
     unknown, not failed: a page that has been up for two seconds is not a
-    broken platform.
+    broken platform. But a page that has been up for 90 s with no cycle has
+    a prober that is failing, not starting, so silence past that grace
+    period still goes stale.
     """
-    written = snapshot.collected if snapshot.probed else None
-    return snapshot.checks + (freshness_check(written, now),)
+    if snapshot.probed:
+        return snapshot.checks + (freshness_check(snapshot.collected, now),)
+    # Not probed yet: `collected` is when this process started. Unknown
+    # while the first cycle could still be in flight; a page that has been
+    # up for 90 s with no cycle has a prober that is failing, not starting.
+    if is_stale(snapshot.collected, now):
+        return (freshness_check(snapshot.collected, now),)
+    return (freshness_check(None, now),)
 
 
 def _broken_block(checks: tuple[Check, ...]) -> str:

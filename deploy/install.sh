@@ -407,8 +407,13 @@ echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
 # route before the own-route probe can pass, so poll until the verdict is
 # clean, up to a minute: 1 (a check failed) and 2 (nothing written yet, or
 # stale) are both "not yet" while the restart settles, and only 0 ends the
-# wait. Whatever the last answer was is what the script exits with.
+# wait, but the restart alone is not enough to get there. Whatever the last
+# answer was is what the script exits with.
 echo "==> Restarting harbor-console-web against the finished edge, then waiting for the platform checks"
+# RuntimeDirectoryPreserve keeps the old verdict across the restart, and
+# the restart returns before the new prober has written one; without this
+# the first poll could accept a pre-deploy verdict that is still fresh.
+rm -f /run/harbor-console/checks.json
 systemctl restart harbor-console-web.service
 check_status=2
 check_output=""

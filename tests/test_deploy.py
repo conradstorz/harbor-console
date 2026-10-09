@@ -79,3 +79,7 @@ def test_the_installer_ends_with_the_platform_checks():
 
     assert ".venv/bin/harbor-console-check" in text
     assert text.index("harbor-console-check") > text.index("Bringing up hosted infrastructure")
+    assert "rm -f /run/harbor-console/checks.json" in text
+    assert text.index("rm -f /run/harbor-console/checks.json") < text.index(
+        "systemctl restart harbor-console-web.service"
+    )
