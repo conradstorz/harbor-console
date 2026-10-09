@@ -399,6 +399,34 @@ fi
 echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
 ( cd "${INSTALL_DIR}/deploy/hosted" && docker compose -p hosted up -d --remove-orphans )
 
+# The deploy's own acceptance check. The web unit restarted above, before
+# the edge was touched, so its first verdict describes the host as it was:
+# restart it again now that Traefik, its network pin, the ufw rule and the
+# hosted containers are all in their final state, and judge that. The
+# prober's first cycle takes up to 30 s and Traefik has to reload its file
+# route before the own-route probe can pass, so poll until the verdict is
+# clean, up to a minute: 1 (a check failed) and 2 (nothing written yet, or
+# stale) are both "not yet" while the restart settles, and only 0 ends the
+# wait, but the restart alone is not enough to get there. Whatever the last
+# answer was is what the script exits with.
+echo "==> Restarting harbor-console-web against the finished edge, then waiting for the platform checks"
+# RuntimeDirectoryPreserve keeps the old verdict across the restart, and
+# the restart returns before the new prober has written one; without this
+# the first poll could accept a pre-deploy verdict that is still fresh.
+rm -f /run/harbor-console/checks.json
+systemctl restart harbor-console-web.service
+check_status=2
+check_output=""
+for attempt in $(seq 1 12); do
+  check_output=$("${INSTALL_DIR}/.venv/bin/harbor-console-check" 2>&1) && check_status=0 || check_status=$?
+  if [[ ${check_status} -eq 0 ]]; then
+    break
+  fi
+  if [[ ${attempt} -lt 12 ]]; then
+    sleep 5
+  fi
+done
+
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
 echo "The status page is https://harbor.hpz440.ohr3023.org/ (direct: http://${TAILNET_ADDRESS}:8100/)."
@@ -410,3 +438,9 @@ echo
 for unit in "${UNIT_NAMES[@]}"; do
   systemctl status "${unit}" --no-pager || true
 done
+echo
+echo "${check_output}"
+if [[ ${check_status} -ne 0 ]]; then
+  echo "Deploy finished, but the platform checks did not pass (see above). The status page and tty1 show the same banner until they do." >&2
+  exit "${check_status}"
+fi

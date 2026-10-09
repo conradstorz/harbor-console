@@ -25,6 +25,13 @@ NoNewPrivileges=yes
 # this process ever needed: it reads statvfs and never writes there.
 ProtectHome=read-only
 PrivateTmp=yes
+# /run/harbor-console, owned by harbor: where the prober writes the
+# verdict file the tty1 console and harbor-console-check read. Preserved
+# across restarts so a deploy does not blank the console's banner for the
+# first cycle; staleness (90 s) is what retires an old verdict, not the
+# service stopping.
+RuntimeDirectory=harbor-console
+RuntimeDirectoryPreserve=yes
 StandardOutput=journal
 StandardError=journal
 

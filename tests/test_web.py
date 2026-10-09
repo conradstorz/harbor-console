@@ -465,3 +465,91 @@ def test_gpu_probed_but_empty_says_no_gpu_detected():
     page = web.render_page(snapshot(probed=True, gpus=())).decode()
 
     assert "<h2>GPU</h2><p>No GPU detected.</p>" in page
+
+
+from datetime import timedelta
+
+from harbor_console.checks import STATE_FAILED, STATE_OK, STATE_UNKNOWN, Check
+
+CHECK_NOW = datetime(2026, 10, 9, 17, 21, 46)
+
+
+def test_page_shows_a_red_block_when_a_check_failed():
+    checks = (
+        Check("docker", STATE_OK, "Docker answered"),
+        Check("docker-provider", STATE_FAILED, "8 containers declare a route but Traefik reports no @docker router"),
+    )
+
+    page = web.render_page(snapshot(collected=CHECK_NOW, checks=checks), now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" in page
+    assert 'class="broken"' in page
+    assert "docker-provider: 8 containers declare a route" in page
+    assert page.index("PLATFORM BROKEN") < page.index("<h2>")
+
+
+def test_page_block_escapes_the_reason():
+    checks = (Check("own-route", STATE_FAILED, "<b>504</b>"),)
+
+    page = web.render_page(snapshot(collected=CHECK_NOW, checks=checks), now=CHECK_NOW).decode()
+
+    assert "&lt;b&gt;504&lt;/b&gt;" in page
+
+
+def test_page_shows_no_block_when_nothing_failed():
+    checks = (Check("docker", STATE_OK, "Docker answered"),)
+
+    page = web.render_page(snapshot(collected=CHECK_NOW, checks=checks), now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" not in page
+
+
+def test_page_footer_counts_passed_checks_including_freshness():
+    checks = (
+        Check("docker", STATE_OK, "Docker answered"),
+        Check("certificate", STATE_UNKNOWN, "not checked: no tailnet address"),
+    )
+
+    page = web.render_page(snapshot(collected=CHECK_NOW, checks=checks), now=CHECK_NOW).decode()
+
+    assert "Platform checks: 2 passed, 1 unknown: certificate" in page
+
+
+def test_page_block_when_the_prober_has_gone_quiet():
+    checks = (Check("docker", STATE_OK, "Docker answered"),)
+    quiet = snapshot(collected=CHECK_NOW - timedelta(minutes=5), checks=checks)
+
+    page = web.render_page(quiet, now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" in page
+    assert "prober-fresh: status page has not reported since 17:16:46" in page
+
+
+def test_page_before_the_first_cycle_shows_no_block():
+    page = web.render_page(Snapshot(collected=CHECK_NOW, metrics=METRICS), now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" not in page
+    assert "Platform checks: 0 passed, 1 unknown: prober-fresh" in page
+
+
+def test_page_turns_red_when_the_first_cycle_never_completes():
+    started = Snapshot(collected=CHECK_NOW - timedelta(minutes=5), metrics=METRICS)
+
+    page = web.render_page(started, now=CHECK_NOW).decode()
+
+    assert "PLATFORM BROKEN" in page
+    assert "prober-fresh: status page has not reported since 17:16:46" in page
+
+
+def test_the_handler_judges_staleness_with_the_real_clock():
+    """The handler calls `render_page` with no explicit `now`, so it falls back
+    to the real wall clock rather than ever rendering a verdict as fresh just
+    because nothing told it the time. A snapshot collected minutes ago by a
+    fixed fake clock is ancient next to the real one, so the served page
+    shows the broken banner."""
+    quiet = snapshot(collected=CHECK_NOW - timedelta(minutes=5), checks=(Check("docker", STATE_OK, "x"),))
+
+    status, _headers, body = _get(web.make_handler(lambda: quiet), "/")
+
+    assert status == 200
+    assert b"PLATFORM BROKEN" in body

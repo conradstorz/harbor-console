@@ -61,3 +61,25 @@ def test_traefik_image_negotiates_the_docker_api_version():
     # route and the certificate kept working. Auto-negotiation landed in
     # v3.6.16 and v3.7.0; the pin must stay on a line that has it.
     assert traefik_image_version() >= (3, 7)
+
+
+WEB_UNIT = REPO / "deploy" / "harbor-console-web.service"
+INSTALL = REPO / "deploy" / "install.sh"
+
+
+def test_the_web_unit_owns_the_verdict_directory():
+    text = WEB_UNIT.read_text(encoding="utf-8")
+
+    assert "RuntimeDirectory=harbor-console\n" in text
+    assert "RuntimeDirectoryPreserve=yes\n" in text
+
+
+def test_the_installer_ends_with_the_platform_checks():
+    text = INSTALL.read_text(encoding="utf-8")
+
+    assert ".venv/bin/harbor-console-check" in text
+    assert text.index("harbor-console-check") > text.index("Bringing up hosted infrastructure")
+    assert "rm -f /run/harbor-console/checks.json" in text
+    assert text.index("rm -f /run/harbor-console/checks.json") < text.index(
+        "systemctl restart harbor-console-web.service"
+    )

@@ -1,8 +1,18 @@
 import inspect
 from datetime import datetime
+from datetime import timezone as _tz
 from http.server import ThreadingHTTPServer
 
 from harbor_console import web, webapp
+from harbor_console.certificate import Certificate, CertificateUnavailable
+from harbor_console.checks import (
+    CHECK_CERTIFICATE,
+    CHECK_DOCKER_PROVIDER,
+    CHECK_OWN_ROUTE,
+    STATE_FAILED,
+    STATE_OK,
+    Check,
+)
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.gpu import GpuEntry
@@ -12,6 +22,12 @@ from harbor_console.snapshot import Snapshot
 from harbor_console.storage import StorageEntry
 from harbor_console.tailnet import TailnetUnavailable
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router
+from harbor_console.verdict import Verdict, read_verdict
+
+GOOD_CERT = Certificate(
+    ("hpz440.ohr3023.org", "*.hpz440.ohr3023.org"),
+    datetime(2026, 12, 18, tzinfo=_tz.utc),
+)
 
 METRICS = {
     "hostname": "hpz440",
@@ -43,6 +59,7 @@ def collect(**overrides):
         routers=lambda: (ROUTER,),
         prober=lambda url: Health(True, "ok", "fine", (), None),
         tailnet_address="100.69.239.123",
+        certificate=lambda address: GOOD_CERT,
     )
     kwargs.update(overrides)
     return webapp.collect_snapshot(**kwargs)
@@ -88,7 +105,7 @@ def test_http_rows_are_probed_at_their_route():
 
     collect(prober=prober)
 
-    assert seen == [f"https://{HOST}/"]
+    assert f"https://{HOST}/" in seen
 
 
 def test_rows_without_a_host_are_not_probed():
@@ -97,7 +114,8 @@ def test_rows_without_a_host_are_not_probed():
 
     collect(containers=lambda: (plain,), routers=lambda: (), prober=lambda url: seen.append(url))
 
-    assert seen == []
+    # Only the page's own route; nothing for the container with no host.
+    assert seen == ["https://harbor.hpz440.ohr3023.org/"]
 
 
 def test_non_http_rows_are_not_probed():
@@ -106,7 +124,7 @@ def test_non_http_rows_are_not_probed():
 
     collect(containers=lambda: (mqtt,), routers=lambda: (), prober=lambda url: seen.append(url))
 
-    assert seen == []
+    assert seen == ["https://harbor.hpz440.ohr3023.org/"]
 
 
 def test_collect_snapshot_marks_docker_unavailable():
@@ -407,4 +425,198 @@ def test_collect_snapshot_defaults_to_the_real_gpu_collector():
     assert (
         inspect.signature(webapp.collect_snapshot).parameters["gpus"].default
         is webapp.collect_gpus
+    )
+
+
+def test_collect_snapshot_probes_the_pages_own_route_through_the_proxy():
+    seen = []
+
+    def prober(url):
+        seen.append(url)
+        return Health(True, None, None, (), None)
+
+    snapshot = collect(prober=prober, certificate=lambda address: GOOD_CERT)
+
+    assert "https://harbor.hpz440.ohr3023.org/" in seen
+    assert snapshot.own_route is not None and snapshot.own_route.up is True
+
+
+def test_collect_snapshot_does_not_probe_its_own_route_without_a_tailnet_address():
+    seen = []
+
+    def prober(url):
+        seen.append(url)
+        return Health(True, None, None, (), None)
+
+    snapshot = collect(prober=prober, tailnet_address=None, certificate=lambda a: GOOD_CERT)
+
+    assert "https://harbor.hpz440.ohr3023.org/" not in seen
+    assert snapshot.own_route is None
+
+
+def test_collect_snapshot_reads_the_certificate_at_the_tailnet_address():
+    seen = []
+
+    def certificate(address):
+        seen.append(address)
+        return GOOD_CERT
+
+    snapshot = collect(certificate=certificate)
+
+    assert seen == ["100.69.239.123"]
+    assert snapshot.certificate == GOOD_CERT
+
+
+def test_collect_snapshot_skips_the_certificate_without_a_tailnet_address():
+    snapshot = collect(tailnet_address=None, certificate=lambda a: GOOD_CERT)
+
+    assert snapshot.certificate is None
+
+
+def test_collect_snapshot_defaults_to_the_real_certificate_collector():
+    assert (
+        inspect.signature(webapp.collect_snapshot).parameters["certificate"].default
+        is webapp.served_certificate
+    )
+
+
+def test_collect_snapshot_runs_the_checks():
+    snapshot = collect(certificate=lambda a: GOOD_CERT)
+
+    states = {c.name: c.state for c in snapshot.checks}
+    assert states[CHECK_DOCKER_PROVIDER] == STATE_OK
+    assert states[CHECK_OWN_ROUTE] == STATE_OK
+    assert states[CHECK_CERTIFICATE] == STATE_OK
+
+
+def test_collect_snapshot_checks_fail_when_the_docker_provider_is_dead():
+    file_only = Router("harbor@file", "harbor.hpz440.ohr3023.org", "harbor", True, None)
+
+    snapshot = collect(routers=lambda: (file_only,), certificate=lambda a: GOOD_CERT)
+
+    states = {c.name: c.state for c in snapshot.checks}
+    assert states[CHECK_DOCKER_PROVIDER] == STATE_FAILED
+
+
+def test_collect_snapshot_checks_fail_on_a_failed_handshake():
+    snapshot = collect(certificate=lambda a: CertificateUnavailable("refused"))
+
+    states = {c.name: c.state for c in snapshot.checks}
+    assert states[CHECK_CERTIFICATE] == STATE_FAILED
+
+
+def test_the_starting_snapshot_has_no_checks():
+    snapshot = webapp.starting_snapshot("h", NOW)
+
+    assert snapshot.checks == ()
+    assert snapshot.own_route is None
+    assert snapshot.certificate is None
+
+
+def test_probe_loop_publishes_each_good_snapshot():
+    holder = webapp.SnapshotHolder(Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS))
+    published = []
+
+    def collect_fn():
+        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, publish=published.append)
+
+    assert [s.collected for s in published] == [datetime(2026, 9, 2)]
+
+
+def test_probe_loop_does_not_publish_after_a_failed_cycle():
+    holder = webapp.SnapshotHolder(Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS))
+    published = []
+
+    def collect_fn():
+        raise RuntimeError("psutil fell over")
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, publish=published.append)
+
+    assert published == []
+
+
+def test_probe_loop_survives_a_publish_that_raises():
+    holder = webapp.SnapshotHolder(Snapshot(collected=datetime(2026, 1, 1), metrics=METRICS))
+
+    def collect_fn():
+        return Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    def publish(_snapshot):
+        raise OSError("read-only")
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    webapp.probe_loop(holder, collect=collect_fn, sleep=fake_sleep, publish=publish)
+
+    assert holder.get().collected == datetime(2026, 9, 2)
+
+
+def test_verdict_publisher_writes_the_snapshots_checks(tmp_path):
+    path = tmp_path / "checks.json"
+    checks = (Check("docker", "ok", "Docker answered"),)
+    snapshot = Snapshot(collected=datetime(2026, 9, 2, 1, 2, 3), metrics=METRICS, checks=checks)
+
+    webapp.VerdictPublisher(path)(snapshot)
+
+    assert read_verdict(path) == Verdict(datetime(2026, 9, 2, 1, 2, 3), "hpz440", checks)
+
+
+def test_verdict_publisher_reports_a_write_failure_once_per_distinct_error(tmp_path):
+    reported = []
+    publisher = webapp.VerdictPublisher(
+        tmp_path / "missing" / "checks.json", report=reported.append
+    )
+    snapshot = Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    publisher(snapshot)
+    publisher(snapshot)
+
+    assert len(reported) == 1
+    assert "checks.json" in reported[0]
+
+
+def test_verdict_publisher_reports_again_after_a_different_error(tmp_path):
+    reported = []
+    errors = iter([OSError("first"), OSError("second")])
+
+    def writer(_verdict, _path):
+        raise next(errors)
+
+    publisher = webapp.VerdictPublisher(
+        tmp_path / "checks.json", writer=writer, report=reported.append
+    )
+    snapshot = Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS)
+
+    publisher(snapshot)
+    publisher(snapshot)
+
+    assert len(reported) == 2
+
+
+def test_verdict_publisher_reports_a_non_os_error_too(tmp_path):
+    reported = []
+
+    def writer(_verdict, _path):
+        raise TypeError("not serialisable")
+
+    publisher = webapp.VerdictPublisher(tmp_path / "checks.json", writer=writer, report=reported.append)
+
+    publisher(Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS))
+
+    assert reported and "not serialisable" in reported[0]
+
+
+def test_the_default_prober_publishes_to_the_verdict_path():
+    assert (
+        inspect.signature(webapp.VerdictPublisher.__init__).parameters["path"].default
+        is webapp.VERDICT_PATH
     )

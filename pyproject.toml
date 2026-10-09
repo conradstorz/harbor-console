@@ -23,6 +23,7 @@ dev = [
 [project.scripts]
 harbor-console = "harbor_console.app:main"
 harbor-console-web = "harbor_console.webapp:main"
+harbor-console-check = "harbor_console.check:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

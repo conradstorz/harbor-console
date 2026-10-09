@@ -128,6 +128,24 @@ A service joins the edge by adding labels and the `harbor` network to its own
 compose file — see [Declaring a service](../README.md#declaring-a-service).
 Nothing in this repository has to change when a service appears.
 
+### The platform checks
+
+`install.sh` ends by waiting up to a minute for `harbor-console-check` to
+report a clean verdict, prints its output, and exits non-zero if the
+platform is broken. The same verdict drives the red banner on the status
+page and on tty1 (ADR 21). The checks are platform only: Docker, Traefik and
+its Docker provider, the page's own route through the proxy, the certificate
+(fails under 14 days left), the edge's tailnet listeners, and whether the
+prober has reported in the last 90 s. A declared service being down stays a
+`DOWN` row and never trips the banner.
+
+The verdict lives at `/run/harbor-console/checks.json`, written by
+`harbor-console-web` every 30 s. Run `harbor-console-check` from
+`/opt/harbor-console/.venv/bin/` over SSH to read it; exit 0 is healthy, 1
+is a failed check, 2 is nothing reported, or a verdict older than 90 s
+because collection keeps failing -- `journalctl -u harbor-console-web`
+tells the two apart.
+
 ## Admin access (important)
 
 Masking `getty@tty1` removes the interactive login on `tty1` only. Virtual
@@ -279,6 +297,12 @@ Traefik has its own failure modes, and they never take the page down:
   the Docker Engine 29 upgrade meeting a Traefik older than v3.7 (or v3.6.16);
   the fix is the image pin in `deploy/traefik/compose.yaml`, and
   `tests/test_deploy.py` keeps it from regressing.
+- The banner says `PLATFORM BROKEN` on tty1 but the status page looks
+  healthy: the console reads `/run/harbor-console/checks.json`; if the
+  banner line is `status page has not reported since ...`, the web unit is
+  up but not writing. `journalctl -u harbor-console-web` shows a
+  `could not write /run/harbor-console/checks.json` line if the directory
+  is missing, which an `install.sh` re-run fixes by reinstalling the unit.
 
 ### The page is up but says something is wrong
 

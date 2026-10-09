@@ -10,9 +10,19 @@ The page is read-only: no forms, no buttons, no state-changing routes.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler
 
+from harbor_console.checks import (
+    STATE_FAILED,
+    STATE_OK,
+    STATE_UNKNOWN,
+    Check,
+    freshness_check,
+    is_stale,
+    platform_broken,
+)
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.gpu import format_gpu
 from harbor_console.inventory import REACH_LOOPBACK, Entry
@@ -30,13 +40,16 @@ tr.detail td { padding-left: 2rem; opacity: 0.75; }
 .down { font-weight: 700; }
 .unaccounted { font-weight: 700; }
 .banner { border: 1px solid; padding: 0.5rem 0.75rem; margin-bottom: 1.5rem; }
+.broken { background: #b00020; color: #fff; font-weight: 700; padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+.broken p { margin: 0.25rem 0; }
+.broken .headline { font-size: 1.5rem; letter-spacing: 0.05em; }
 .stamp { opacity: 0.7; }
 .resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 48rem) { .resource-grid { grid-template-columns: 1fr; } }
 """
 
 
-def render_page(snapshot: Snapshot) -> bytes:
+def render_page(snapshot: Snapshot, now: datetime | None = None) -> bytes:
     """Render the whole status page as one self-contained document."""
     parts = [
         "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -46,6 +59,9 @@ def render_page(snapshot: Snapshot) -> bytes:
         f"<style>{_STYLE}</style></head><body>",
         f"<h1>{escape(str(snapshot.metrics['hostname']))}</h1>",
     ]
+    checks = page_checks(snapshot, now if now is not None else datetime.now())
+    if platform_broken(checks):
+        parts.append(_broken_block(checks))
     if snapshot.collection_error is not None:
         tail = " Showing the last good page." if snapshot.probed else ""
         parts.append(
@@ -81,10 +97,51 @@ def render_page(snapshot: Snapshot) -> bytes:
     parts.append(
         f"<p class=\"stamp\">Collected "
         f"{escape(snapshot.collected.strftime('%Y-%m-%d %H:%M:%S'))}, "
-        f"refreshing every {REFRESH_SECONDS}s.</p>"
+        f"refreshing every {REFRESH_SECONDS}s. {_checks_summary(checks)}</p>"
     )
     parts.append("</body></html>")
     return "".join(parts).encode("utf-8")
+
+
+def page_checks(snapshot: Snapshot, now: datetime) -> tuple[Check, ...]:
+    """The snapshot's checks plus prober-fresh, which only a reader can judge.
+
+    Before the first cycle there is nothing to judge from, and that is
+    unknown, not failed: a page that has been up for two seconds is not a
+    broken platform. But a page that has been up for 90 s with no cycle has
+    a prober that is failing, not starting, so silence past that grace
+    period still goes stale.
+    """
+    if snapshot.probed:
+        return snapshot.checks + (freshness_check(snapshot.collected, now),)
+    # Not probed yet: `collected` is when this process started. Unknown
+    # while the first cycle could still be in flight; a page that has been
+    # up for 90 s with no cycle has a prober that is failing, not starting.
+    if is_stale(snapshot.collected, now):
+        return (freshness_check(snapshot.collected, now),)
+    return (freshness_check(None, now),)
+
+
+def _broken_block(checks: tuple[Check, ...]) -> str:
+    """The takeover. Red, above everything, one line per failed check.
+
+    The only colour on the page (ADR 21): it means the host's own machinery
+    is broken, never that a project is.
+    """
+    lines = "".join(
+        f"<p>{escape(c.name)}: {escape(c.reason)}</p>" for c in checks if c.state == STATE_FAILED
+    )
+    return f'<div class="broken"><p class="headline">PLATFORM BROKEN</p>{lines}</div>'
+
+
+def _checks_summary(checks: tuple[Check, ...]) -> str:
+    """The footer's proof that the checks ran: counts, and which were unknown."""
+    passed = sum(1 for c in checks if c.state == STATE_OK)
+    unknown = [c.name for c in checks if c.state == STATE_UNKNOWN]
+    summary = f"Platform checks: {passed} passed"
+    if unknown:
+        summary += f", {len(unknown)} unknown: {escape(', '.join(unknown))}"
+    return summary + "."
 
 
 def _host_table(snapshot: Snapshot) -> str:
