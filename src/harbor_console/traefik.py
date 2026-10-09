@@ -54,6 +54,25 @@ def router_name(label_name: str) -> str:
     return f"{label_name}@docker"
 
 
+#: The entrypoint whose router is the route. A router declared without an
+#: `entrypoints` label is reported by Traefik v3.7 once per entrypoint it
+#: applies to, with the entrypoint prefixed to the name: `web-<name>` for
+#: the HTTP redirect and `websecure-<name>` for the HTTPS route itself.
+ROUTE_ENTRYPOINT = "websecure"
+
+
+def router_names(label_name: str) -> tuple[str, str]:
+    """The names Traefik may report a label-declared router under, best first.
+
+    The plain name is what a router with an explicit `entrypoints=websecure`
+    label gets; the prefixed one is what the same labels without that line
+    get from Traefik v3.7, which splits an entrypoint-less router per
+    entrypoint. The `web-` twin exists only to redirect and is never the
+    route, so it is not a candidate.
+    """
+    return (router_name(label_name), f"{ROUTE_ENTRYPOINT}-{router_name(label_name)}")
+
+
 def traefik_routers(
     opener: Callable[..., object] = urllib.request.urlopen,
     base: str = TRAEFIK_API,

@@ -6,6 +6,7 @@ from harbor_console.traefik import (
     TRAEFIK_UNAVAILABLE,
     Router,
     router_name,
+    router_names,
     traefik_routers,
 )
 
@@ -115,6 +116,10 @@ def test_empty_router_list_is_not_unavailable():
 
 def test_router_name_appends_the_docker_provider():
     assert router_name("parksmart") == "parksmart@docker"
+
+
+def test_router_names_tries_the_plain_name_then_the_websecure_prefix():
+    assert router_names("gte") == ("gte@docker", "websecure-gte@docker")
 
 
 def test_no_credentials_sends_a_plain_url():
