@@ -399,6 +399,23 @@ fi
 echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
 ( cd "${INSTALL_DIR}/deploy/hosted" && docker compose -p hosted up -d --remove-orphans )
 
+# The deploy's own acceptance check. The prober's first cycle after the
+# restart above takes up to 30 s, and Traefik's file route to the page has
+# to reload before the own-route probe can pass, so wait up to a minute
+# for a clean verdict rather than judging the first second. Exit code 2
+# (nothing written yet, or stale) is what the wait is for; 1 (a check
+# failed) is a real verdict and ends the wait early.
+echo "==> Waiting for the platform checks"
+check_status=2
+check_output=""
+for _ in $(seq 1 12); do
+  check_output=$("${INSTALL_DIR}/.venv/bin/harbor-console-check" 2>&1) && check_status=0 || check_status=$?
+  if [[ ${check_status} -ne 2 ]]; then
+    break
+  fi
+  sleep 5
+done
+
 echo
 echo "Harbor Console is installed. tty1 now shows the dashboard."
 echo "The status page is https://harbor.hpz440.ohr3023.org/ (direct: http://${TAILNET_ADDRESS}:8100/)."
@@ -410,3 +427,9 @@ echo
 for unit in "${UNIT_NAMES[@]}"; do
   systemctl status "${unit}" --no-pager || true
 done
+echo
+echo "${check_output}"
+if [[ ${check_status} -ne 0 ]]; then
+  echo "Deploy finished, but the platform checks did not pass (see above). The status page and tty1 show the same banner until they do." >&2
+  exit "${check_status}"
+fi
