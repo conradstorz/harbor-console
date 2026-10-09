@@ -128,6 +128,38 @@ def test_http_row_is_down_not_route_error_when_traefik_is_unavailable():
     assert rows[0].state == "DOWN"
 
 
+def test_http_row_matches_a_websecure_prefixed_router():
+    routers = (
+        Router("web-parksmart@docker", HOST, "parksmart", True, None),
+        Router("websecure-parksmart@docker", HOST, "parksmart", True, None),
+    )
+
+    rows = build_rows((http_container(),), routers, (), {"parksmart": UP}, probed=True)
+
+    assert rows[0].state == "UP"
+
+
+def test_the_web_twin_alone_is_not_the_route():
+    routers = (Router("web-parksmart@docker", HOST, "parksmart", True, None),)
+
+    rows = build_rows((http_container(),), routers, (), {"parksmart": UP}, probed=True)
+
+    assert rows[0].state == "ROUTE ERROR"
+
+
+def test_a_prefixed_router_that_is_disabled_is_reported_under_traefiks_name():
+    routers = (Router("websecure-parksmart@docker", HOST, "parksmart", False, "no service"),)
+
+    rows = build_rows((http_container(),), routers, (), {"parksmart": DOWN}, probed=True)
+    findings = find_findings((http_container(),), routers, (), TAILNET)
+
+    assert rows[0].state == "ROUTE ERROR"
+    assert len(findings) == 1
+    assert findings[0].kind == ROUTE_ERROR
+    assert "websecure-parksmart@docker" in findings[0].detail
+    assert "no service" in findings[0].detail
+
+
 def test_tcp_row_is_listening_when_the_port_is_held():
     mqtt = Container("ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"})
 
@@ -337,6 +369,15 @@ def test_an_http_container_traefik_does_not_know_is_a_route_error():
     findings = find_findings((http_container(),), (), (), TAILNET)
 
     assert findings == (Finding(ROUTE_ERROR, "container 'parksmart-parksmart-1' asks for router parksmart@docker, which Traefik does not report; is it on the harbor network?"),)
+
+
+def test_find_findings_accepts_a_websecure_prefixed_router():
+    routers = (
+        Router("web-parksmart@docker", HOST, "parksmart", True, None),
+        Router("websecure-parksmart@docker", HOST, "parksmart", True, None),
+    )
+
+    assert find_findings((http_container(),), routers, (), TAILNET) == ()
 
 
 def test_route_errors_are_withheld_when_traefik_is_unavailable():

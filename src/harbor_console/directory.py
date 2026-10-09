@@ -6,7 +6,9 @@ out. No I/O, so every rule is testable with plain values.
 A container declares itself with labels and nothing else. `traefik.enable=true`
 plus a router rule is an HTTP service; `harbor.kind` covers everything Traefik
 does not route. Traefik is the truth for whether a route is live; this module
-only joins its verdict to the container that asked for it.
+only joins its verdict to the container that asked for it -- matching either
+the plain name Traefik reports or, since v3.7, the `websecure-` prefixed name
+it uses for a router with no explicit `entrypoints` label.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from harbor_console.listening import (
     addrs_overlap,
 )
 from harbor_console.probe import Health
-from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name
+from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, router_name, router_names
 
 KIND_HTTP = "http"
 KIND_TCP = "tcp"
@@ -58,6 +60,19 @@ class Row:
     container: str
     description: str
     state: str
+
+
+def declared_router(by_name: Mapping[str, Router], label_name: str) -> Router | None:
+    """The router Traefik reports for a declared label name, if any.
+
+    Tries the plain name first, then its `websecure-` prefixed twin -- see
+    `router_names` for why Traefik v3.7 may report either.
+    """
+    for candidate in router_names(label_name):
+        router = by_name.get(candidate)
+        if router is not None:
+            return router
+    return None
 
 
 def declared_kind(container: Container) -> str | None:
@@ -137,10 +152,14 @@ def _http_row(
     the container asked for a route and did not get one, most often by not
     being on the harbor network. That is only knowable when Traefik answered
     -- an empty `routers` because it could not be asked says nothing, so the
-    probe decides, exactly as it did before there was a proxy.
+    probe decides, exactly as it did before there was a proxy. Traefik v3.7
+    reports a router declared without an explicit `entrypoints` label as
+    `websecure-<name>@docker` (plus a `web-<name>@docker` redirect twin that
+    is never the route), so the plain name is tried first and the prefixed
+    one second -- see `declared_router`.
     """
     name, host = route_of(container)  # type: ignore[misc] - kind is HTTP here
-    router = routers.get(router_name(name))
+    router = declared_router(routers, name)
     target = route_url(host) if host else ""
     if (
         host is None
@@ -290,7 +309,7 @@ def find_findings(
             if route is None:
                 continue
             name = router_name(route[0])
-            router = known.get(name)
+            router = declared_router(known, route[0])
             if router is None:
                 findings.append(
                     Finding(
@@ -301,7 +320,10 @@ def find_findings(
                 )
             elif not router.enabled:
                 findings.append(
-                    Finding(ROUTE_ERROR, f"router {name} is disabled: {router.error or 'no reason given'}")
+                    Finding(
+                        ROUTE_ERROR,
+                        f"router {router.name} is disabled: {router.error or 'no reason given'}",
+                    )
                 )
 
     if docker_available and tailnet_address is not None and listeners_available:
