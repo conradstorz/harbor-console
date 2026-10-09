@@ -99,3 +99,133 @@ def freshness_check(written: datetime | None, now: datetime) -> Check:
             f"status page has not reported since {written:%H:%M:%S}, {age} s ago",
         )
     return Check(CHECK_PROBER_FRESH, STATE_OK, f"reported {age} s ago")
+
+
+def run_checks(
+    *,
+    now: datetime,
+    docker_available: bool,
+    traefik_available: bool,
+    containers: Sequence[Container],
+    routers: Sequence[Router],
+    own_route: Health | None,
+    certificate: Certificate | CertificateUnavailable | None,
+    listeners: Sequence[Listener],
+    listeners_available: bool,
+    tailnet_address: str | None,
+) -> tuple[Check, ...]:
+    """Judge the platform from one cycle's evidence. Fixed order, six checks.
+
+    Plain values rather than a `Snapshot`, so this module never imports the
+    one that carries its result. `own_route` and `certificate` are `None`
+    when they were not attempted (no tailnet address), which is unknown;
+    a probe that was attempted and failed is failed.
+    """
+    return (
+        _docker(docker_available),
+        _traefik_api(traefik_available),
+        _docker_provider(docker_available, traefik_available, containers, routers),
+        _own_route(own_route),
+        _certificate(certificate, now, tailnet_address),
+        _edge_listening(listeners, listeners_available, tailnet_address),
+    )
+
+
+def _docker(available: bool) -> Check:
+    if not available:
+        return Check(CHECK_DOCKER, STATE_FAILED, "Docker could not be read")
+    return Check(CHECK_DOCKER, STATE_OK, "Docker answered")
+
+
+def _traefik_api(available: bool) -> Check:
+    if not available:
+        return Check(
+            CHECK_TRAEFIK_API, STATE_FAILED, "Traefik's API at 127.0.0.1:8081 could not be read"
+        )
+    return Check(CHECK_TRAEFIK_API, STATE_OK, "Traefik's API answered")
+
+
+def _docker_provider(
+    docker_available: bool,
+    traefik_available: bool,
+    containers: Sequence[Container],
+    routers: Sequence[Router],
+) -> Check:
+    if not docker_available or not traefik_available:
+        return Check(CHECK_DOCKER_PROVIDER, STATE_UNKNOWN, "needs both Docker and Traefik")
+    declared = [c for c in containers if declared_kind(c) == KIND_HTTP]
+    if not declared:
+        return Check(CHECK_DOCKER_PROVIDER, STATE_UNKNOWN, "no container declares a route")
+    from_docker = [r for r in routers if r.name.endswith("@docker")]
+    noun = "container" if len(declared) == 1 else "containers"
+    verb = "declares" if len(declared) == 1 else "declare"
+    if not from_docker:
+        return Check(
+            CHECK_DOCKER_PROVIDER,
+            STATE_FAILED,
+            f"{len(declared)} {noun} {verb} a route but Traefik reports no @docker router",
+        )
+    return Check(
+        CHECK_DOCKER_PROVIDER,
+        STATE_OK,
+        f"{len(from_docker)} @docker routers from {len(declared)} {noun}",
+    )
+
+
+def _own_route(health: Health | None) -> Check:
+    url = route_url(OWN_ROUTE_HOST)
+    if health is None:
+        return Check(CHECK_OWN_ROUTE, STATE_UNKNOWN, "not probed: no tailnet address")
+    if not health.up:
+        return Check(CHECK_OWN_ROUTE, STATE_FAILED, f"{url} did not answer through the proxy")
+    return Check(CHECK_OWN_ROUTE, STATE_OK, f"{url} answers through the proxy")
+
+
+def _certificate(
+    certificate: Certificate | CertificateUnavailable | None,
+    now: datetime,
+    tailnet_address: str | None,
+) -> Check:
+    if certificate is None:
+        return Check(CHECK_CERTIFICATE, STATE_UNKNOWN, "not checked: no tailnet address")
+    if isinstance(certificate, CertificateUnavailable):
+        return Check(
+            CHECK_CERTIFICATE,
+            STATE_FAILED,
+            f"TLS to {tailnet_address}:443 failed: {certificate.reason}",
+        )
+    if WILDCARD_NAME not in certificate.names:
+        covered = ", ".join(certificate.names) or "nothing"
+        return Check(
+            CHECK_CERTIFICATE,
+            STATE_FAILED,
+            f"the served certificate covers {covered}, not {WILDCARD_NAME}",
+        )
+    now_utc = now.astimezone(timezone.utc)
+    days = (certificate.not_after - now_utc).days
+    if days < CERTIFICATE_MIN_DAYS:
+        return Check(CHECK_CERTIFICATE, STATE_FAILED, f"the certificate expires in {days} days")
+    return Check(CHECK_CERTIFICATE, STATE_OK, f"covers {WILDCARD_NAME}, {days} days left")
+
+
+def _edge_listening(
+    listeners: Sequence[Listener], available: bool, tailnet_address: str | None
+) -> Check:
+    if not available:
+        return Check(CHECK_EDGE_LISTENING, STATE_UNKNOWN, "the socket table could not be read")
+    if tailnet_address is None:
+        return Check(CHECK_EDGE_LISTENING, STATE_UNKNOWN, "no tailnet address")
+    missing = [
+        port
+        for port in EDGE_PORTS
+        if not any(
+            l.proto == PROTO_TCP and l.port == port and l.addr in (tailnet_address, ANY_ADDR)
+            for l in listeners
+        )
+    ]
+    if missing:
+        ports = " and ".join(str(p) for p in missing)
+        return Check(
+            CHECK_EDGE_LISTENING, STATE_FAILED, f"nothing listens on {tailnet_address}:{ports}"
+        )
+    return Check(CHECK_EDGE_LISTENING, STATE_OK, f"the edge listens on {tailnet_address}:80 and :443")
