@@ -158,3 +158,100 @@ def test_dashboard_keeps_the_fullest_gpu_row_on_one_line_at_80_columns():
 
     assert any("GPU card1 (RTX 3060)" in line and "fan 100%" in line for line in lines)
     assert any("Docker containers" in line and "17" in line for line in lines)
+
+
+from datetime import datetime, timedelta
+
+from rich.console import Console as _Console
+
+from harbor_console.checks import STATE_FAILED, STATE_OK, Check
+from harbor_console.ui import build_banner
+from harbor_console.verdict import Verdict
+
+NOW = datetime(2026, 10, 9, 17, 21, 46)
+STARTED = NOW - timedelta(minutes=10)
+
+
+def verdict(checks, written=NOW):
+    return Verdict(written=written, hostname="host-a", checks=tuple(checks))
+
+
+def banner_lines(banner):
+    console = _Console(width=80, record=True)
+    console.print(banner)
+    return console.export_text().splitlines()
+
+
+def test_no_banner_when_nothing_failed():
+    assert build_banner(verdict([Check("docker", STATE_OK, "answered")]), NOW, STARTED) is None
+
+
+def test_banner_names_the_failed_checks_on_three_rows():
+    checks = [
+        Check("docker", STATE_OK, "answered"),
+        Check("docker-provider", STATE_FAILED, "8 containers declare a route but Traefik reports no @docker router"),
+        Check("own-route", STATE_FAILED, "https://harbor.hpz440.ohr3023.org/ did not answer through the proxy"),
+    ]
+
+    lines = banner_lines(build_banner(verdict(checks), NOW, STARTED))
+
+    assert len(lines) == 3
+    assert lines[0].startswith("PLATFORM BROKEN")
+    assert lines[1].startswith("docker-provider: 8 containers")
+    assert lines[2].startswith("own-route: https://harbor")
+    assert all(len(line) <= 80 for line in lines)
+
+
+def test_banner_pads_a_single_failure_to_three_rows():
+    lines = banner_lines(build_banner(verdict([Check("docker", STATE_FAILED, "could not be read")]), NOW, STARTED))
+
+    assert len(lines) == 3
+    assert lines[1].startswith("docker: could not be read")
+
+
+def test_banner_collapses_a_third_failure_and_beyond():
+    checks = [Check(f"c{i}", STATE_FAILED, "x") for i in range(5)]
+
+    lines = banner_lines(build_banner(verdict(checks), NOW, STARTED))
+
+    assert lines[1].startswith("c0: x")
+    assert "+4 more, see the status page" in lines[2]
+
+
+def test_banner_when_the_verdict_is_stale():
+    stale = verdict([Check("docker", STATE_OK, "answered")], written=NOW - timedelta(minutes=5))
+
+    lines = banner_lines(build_banner(stale, NOW, STARTED))
+
+    assert len(lines) == 3
+    assert lines[1].startswith("status page has not reported since 17:16:46")
+
+
+def test_banner_when_the_file_is_missing_long_after_start():
+    lines = banner_lines(build_banner(None, NOW, STARTED))
+
+    assert lines[1].startswith("status page has not reported since 17:11:46")
+
+
+def test_no_banner_while_the_file_is_missing_just_after_start():
+    assert build_banner(None, NOW, NOW - timedelta(seconds=30)) is None
+
+
+def test_dashboard_puts_the_banner_above_the_panel_within_80_columns():
+    banner = build_banner(verdict([Check("docker", STATE_FAILED, "could not be read")]), NOW, STARTED)
+
+    console = _Console(width=80, record=True)
+    console.print(build_dashboard(METRICS, (), (), banner))
+    lines = console.export_text().splitlines()
+
+    assert lines[0].startswith("PLATFORM BROKEN")
+    assert "Harbor Console" in lines[3]
+    assert any("Docker containers" in line and "17" in line for line in lines)
+
+
+def test_dashboard_without_a_banner_is_unchanged():
+    console = _Console(width=80, record=True)
+    console.print(build_dashboard(METRICS, (), ()))
+    lines = console.export_text().splitlines()
+
+    assert "Harbor Console" in lines[0]
