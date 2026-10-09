@@ -28,6 +28,42 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].main=hpz440.ohr3023.org
       - --entrypoints.websecure.http.tls.domains[0].sans=*.hpz440.ohr3023.org
       - --entrypoints.traefik.address=:8081
+      # Two hardening options Traefik v3.7 warns about at startup until they
+      # are set, repeated for all three entrypoints because it checks each.
+      # aliasHeadersStrategy=delete drops a request header whose name only
+      # aliases another once a WSGI/CGI backend turns it into a variable
+      # (X_Auth_User and X.Auth.User both become HTTP_X_AUTH_USER), so a
+      # client cannot spoof a header the proxy sets. `reject` would answer
+      # 400 instead; nothing legitimate sends such headers, so dropping them
+      # is the quieter choice. encodedCharacters.*=false refuses %2F, %5C,
+      # %00, %3B, %25, %3F and %23 in the path (CVE-2025-66490): a backend
+      # that decodes them differently from Traefik sees a different path
+      # than the one the proxy routed, and no app behind this edge needs
+      # them. tests/test_deploy.py checks every entrypoint carries all of it.
+      - --entrypoints.web.http.aliasHeadersStrategy=delete
+      - --entrypoints.web.http.encodedCharacters.allowEncodedSlash=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedSemicolon=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedPercent=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedQuestionMark=false
+      - --entrypoints.web.http.encodedCharacters.allowEncodedHash=false
+      - --entrypoints.websecure.http.aliasHeadersStrategy=delete
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedSlash=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedSemicolon=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedPercent=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedQuestionMark=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedHash=false
+      - --entrypoints.traefik.http.aliasHeadersStrategy=delete
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedSlash=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedSemicolon=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedPercent=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedQuestionMark=false
+      - --entrypoints.traefik.http.encodedCharacters.allowEncodedHash=false
       # Read-only API, gated by HTTP Basic Auth (ADR 16) via the router in
       # dynamic/api.yml -- not --api.insecure, which would serve it with no
       # auth at all to anything on the harbor network, not only to the
