@@ -227,6 +227,8 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].main=hpz440.ohr3023.org
       - --entrypoints.websecure.http.tls.domains[0].sans=*.hpz440.ohr3023.org
       - --entrypoints.traefik.address=:8081
+      - --entrypoints.<each>.http.aliasHeadersStrategy=delete           # x3
+      - --entrypoints.<each>.http.encodedCharacters.allowEncoded*=false  # x3, x7
       - --api=true
       - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL:?...}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
@@ -308,6 +310,24 @@ included, to anything running on `harbor`. ADR 16 closes this: `--api=true`
 enables the API's internal service without auto-creating a router for it,
 and `dynamic/api.yml` declares one explicitly, gated by an HTTP Basic Auth
 middleware. See "The gated API" below for the credential.
+
+**`--entrypoints.<each>.http.aliasHeadersStrategy=delete`** and
+**`--entrypoints.<each>.http.encodedCharacters.allowEncoded*=false`** — two
+hardening options Traefik v3.7 warns about at startup until they are set,
+checked per entrypoint, so the real file repeats them for `web`, `websecure`
+and `traefik` (24 lines; abbreviated above). The first drops any request
+header whose name merely *aliases* another: a WSGI or CGI backend turns
+`X_Auth_User`, `X.Auth.User` and `X-Auth-User` into the same
+`HTTP_X_AUTH_USER` variable, so without this a client could send the
+underscore form and have the app read it as a header the proxy is supposed
+to control. `reject` would answer such a request with 400 instead; nothing
+legitimate sends these, so silently dropping them is the quieter choice. The
+second refuses the seven percent-encoded path characters (`%2F`, `%5C`,
+`%00`, `%3B`, `%25`, `%3F`, `%23`) that CVE-2025-66490 is about: if a
+backend decodes one of them differently from Traefik, it serves a different
+path than the one the proxy matched a router on, and no app behind this edge
+has a legitimate use for any of them in a path. `tests/test_deploy.py` checks
+every entrypoint carries all of it.
 
 **`--certificatesresolvers.cloudflare.acme.*`** — configures the ACME
 (automatic certificate management) client named `cloudflare` that the
