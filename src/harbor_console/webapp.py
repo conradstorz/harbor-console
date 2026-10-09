@@ -42,6 +42,7 @@ from harbor_console.storage import StorageEntry, collect_storage
 from harbor_console.system import collect_system_metrics
 from harbor_console.tailnet import TailnetUnavailable, tailscale_address
 from harbor_console.traefik import TRAEFIK_UNAVAILABLE, Router, traefik_routers
+from harbor_console.verdict import VERDICT_PATH, Verdict, write_verdict
 from harbor_console.web import make_handler
 
 #: Fixed. Traefik's file-provider route for `harbor.<host>` points here, and
@@ -196,22 +197,76 @@ def probe_loop(
     collect: Callable[[], Snapshot],
     sleep: Callable[[float], None] = time.sleep,
     interval: float = PROBE_INTERVAL_SECONDS,
+    publish: Callable[[Snapshot], None] | None = None,
 ) -> None:
     """Publish a fresh snapshot on an interval until interrupted.
 
     A collection failure never takes the page down: the last good snapshot
     stands, with the reason attached. A successful cycle publishes
     `collection_error=None`, so a reason never outlives its cause.
+
+    `publish` is how the verdict leaves this process (the file the console
+    reads). It runs only after a good cycle, so a failed cycle lets the
+    file go stale rather than restating a verdict from evidence the cycle
+    did not have; and it is guarded, so a write that fails never stops the
+    loop either.
     """
     while True:
         try:
-            holder.set(collect())
+            snapshot = collect()
         except Exception as exc:  # noqa: BLE001 - a supervisor loop, see above
             holder.set(replace(holder.get(), collection_error=str(exc) or exc.__class__.__name__))
+        else:
+            holder.set(snapshot)
+            if publish is not None:
+                try:
+                    publish(snapshot)
+                except Exception:  # noqa: BLE001 - the publisher reports its own failures
+                    pass
         try:
             sleep(interval)
         except KeyboardInterrupt:
             return
+
+
+def _report(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+class VerdictPublisher:
+    """Write one snapshot's checks to the verdict file.
+
+    A write that fails is reported once per distinct error, not once per
+    cycle: the same message every 30 s to the journal is noise, and a
+    different one is news. The loop never sees the exception.
+    """
+
+    def __init__(
+        self,
+        path: Path = VERDICT_PATH,
+        writer: Callable[[Verdict, Path], None] = write_verdict,
+        report: Callable[[str], None] = _report,
+    ) -> None:
+        self._path = path
+        self._writer = writer
+        self._report = report
+        self._last_error: str | None = None
+
+    def __call__(self, snapshot: Snapshot) -> None:
+        verdict = Verdict(
+            written=snapshot.collected,
+            hostname=str(snapshot.metrics.get("hostname", "")),
+            checks=snapshot.checks,
+        )
+        try:
+            self._writer(verdict, self._path)
+        except OSError as exc:
+            message = f"could not write {self._path}: {exc}"
+            if message != self._last_error:
+                self._report(message)
+                self._last_error = message
+            return
+        self._last_error = None
 
 
 def main(
@@ -258,7 +313,11 @@ def _default_prober(holder: SnapshotHolder, tailnet_address: str) -> None:
         )
 
     thread = threading.Thread(
-        target=probe_loop, args=(holder, collect), name="harbor-prober", daemon=True
+        target=probe_loop,
+        args=(holder, collect),
+        kwargs={"publish": VerdictPublisher()},
+        name="harbor-prober",
+        daemon=True,
     )
     thread.start()
 
