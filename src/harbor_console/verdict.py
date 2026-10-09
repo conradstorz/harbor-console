@@ -21,11 +21,11 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from harbor_console.checks import Check
 
-VERDICT_PATH = PurePosixPath("/run/harbor-console/checks.json")
+VERDICT_PATH = Path("/run/harbor-console/checks.json")
 
 
 @dataclass(frozen=True)

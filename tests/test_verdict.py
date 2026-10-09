@@ -88,4 +88,10 @@ def test_read_returns_none_on_garbage(tmp_path):
 
 
 def test_the_default_path_is_under_run():
-    assert str(VERDICT_PATH) == "/run/harbor-console/checks.json"
+    assert VERDICT_PATH.as_posix() == "/run/harbor-console/checks.json"
+
+
+def test_read_with_the_default_path_degrades_when_the_file_is_missing():
+    # The default must be a real Path: a PurePosixPath has no read_text and
+    # would raise AttributeError here, which read_verdict does not catch.
+    assert read_verdict() is None
