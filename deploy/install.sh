@@ -399,21 +399,27 @@ fi
 echo "==> Bringing up hosted infrastructure (Portainer, Watchtower)"
 ( cd "${INSTALL_DIR}/deploy/hosted" && docker compose -p hosted up -d --remove-orphans )
 
-# The deploy's own acceptance check. The prober's first cycle after the
-# restart above takes up to 30 s, and Traefik's file route to the page has
-# to reload before the own-route probe can pass, so wait up to a minute
-# for a clean verdict rather than judging the first second. Exit code 2
-# (nothing written yet, or stale) is what the wait is for; 1 (a check
-# failed) is a real verdict and ends the wait early.
-echo "==> Waiting for the platform checks"
+# The deploy's own acceptance check. The web unit restarted above, before
+# the edge was touched, so its first verdict describes the host as it was:
+# restart it again now that Traefik, its network pin, the ufw rule and the
+# hosted containers are all in their final state, and judge that. The
+# prober's first cycle takes up to 30 s and Traefik has to reload its file
+# route before the own-route probe can pass, so poll until the verdict is
+# clean, up to a minute: 1 (a check failed) and 2 (nothing written yet, or
+# stale) are both "not yet" while the restart settles, and only 0 ends the
+# wait. Whatever the last answer was is what the script exits with.
+echo "==> Restarting harbor-console-web against the finished edge, then waiting for the platform checks"
+systemctl restart harbor-console-web.service
 check_status=2
 check_output=""
-for _ in $(seq 1 12); do
+for attempt in $(seq 1 12); do
   check_output=$("${INSTALL_DIR}/.venv/bin/harbor-console-check" 2>&1) && check_status=0 || check_status=$?
-  if [[ ${check_status} -ne 2 ]]; then
+  if [[ ${check_status} -eq 0 ]]; then
     break
   fi
-  sleep 5
+  if [[ ${attempt} -lt 12 ]]; then
+    sleep 5
+  fi
 done
 
 echo

@@ -260,7 +260,7 @@ class VerdictPublisher:
         )
         try:
             self._writer(verdict, self._path)
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 - every failure to write must reach the journal
             message = f"could not write {self._path}: {exc}"
             if message != self._last_error:
                 self._report(message)

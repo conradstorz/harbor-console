@@ -532,7 +532,15 @@ def test_page_before_the_first_cycle_shows_no_block():
     assert "Platform checks: 0 passed, 1 unknown: prober-fresh" in page
 
 
-def test_the_handler_renders_with_the_current_time():
-    import inspect
+def test_the_handler_judges_staleness_with_the_real_clock():
+    """The handler calls `render_page` with no explicit `now`, so it falls back
+    to the real wall clock rather than ever rendering a verdict as fresh just
+    because nothing told it the time. A snapshot collected minutes ago by a
+    fixed fake clock is ancient next to the real one, so the served page
+    shows the broken banner."""
+    quiet = snapshot(collected=CHECK_NOW - timedelta(minutes=5), checks=(Check("docker", STATE_OK, "x"),))
 
-    assert inspect.signature(web.render_page).parameters["now"].default is None
+    status, _headers, body = _get(web.make_handler(lambda: quiet), "/")
+
+    assert status == 200
+    assert b"PLATFORM BROKEN" in body

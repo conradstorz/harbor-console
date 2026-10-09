@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from harbor_console.certificate import Certificate, CertificateUnavailable
 from harbor_console.directory import KIND_HTTP, declared_kind, route_url
 from harbor_console.docker import Container
-from harbor_console.listening import ANY_ADDR, PROTO_TCP, Listener
+from harbor_console.listening import PROTO_TCP, Listener, addrs_overlap
 from harbor_console.probe import Health
 from harbor_console.traefik import Router
 
@@ -219,8 +219,10 @@ def _edge_listening(
         port
         for port in EDGE_PORTS
         if not any(
-            l.proto == PROTO_TCP and l.port == port and l.addr in (tailnet_address, ANY_ADDR)
-            for l in listeners
+            listener.proto == PROTO_TCP
+            and listener.port == port
+            and addrs_overlap(listener.addr, tailnet_address)
+            for listener in listeners
         )
     ]
     if missing:
@@ -228,4 +230,5 @@ def _edge_listening(
         return Check(
             CHECK_EDGE_LISTENING, STATE_FAILED, f"nothing listens on {tailnet_address}:{ports}"
         )
-    return Check(CHECK_EDGE_LISTENING, STATE_OK, f"the edge listens on {tailnet_address}:80 and :443")
+    ports = " and ".join(f":{p}" for p in EDGE_PORTS)
+    return Check(CHECK_EDGE_LISTENING, STATE_OK, f"the edge listens on {tailnet_address}{ports}")

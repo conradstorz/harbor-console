@@ -72,7 +72,7 @@ def test_degrades_when_the_connection_fails(error):
     result = served_certificate("100.69.239.123", connector=connect)
 
     assert isinstance(result, CertificateUnavailable)
-    assert str(error).split("(")[0] in result.reason or type(error).__name__ in result.reason
+    assert result.reason == f"{type(error).__name__}: {error}"
 
 
 def test_degrades_on_an_empty_peer_certificate():

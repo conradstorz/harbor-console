@@ -39,7 +39,7 @@ Existing (implemented):
 - `ui.py` — **renders** only. `build_dashboard(metrics)` turns the metrics dict into a `rich` renderable. No business logic, no metric collection. It also renders the 3-row red banner from a `Verdict` (`build_banner`), the only colour on the surface.
 - `app.py` — **coordinates** the refresh loop (`rich.live.Live`). No collection or rendering logic of its own. It reads the verdict file once per tick through an injectable `verdict_reader` and never probes.
 
-The web surface is ten modules at the top level, and keeps the same split:
+The web surface is fourteen modules at the top level, and keeps the same split:
 
 - `tailnet.py` — **collects** the host's Tailscale address from `tailscale ip -4`. The one collector allowed to raise (see Graceful degradation below).
 - `listening.py` — **collects** every listening TCP socket and every bound UDP socket via `psutil`, including loopback-bound and non-Docker ones. UDP has no `LISTEN` state, so a datagram socket counts when it has no peer; `Listener.proto` tells the two apart, and the policy in `directory.py` requires `tcp` wherever it checks a TCP service's liveness. IPv6 `::` is normalised to `0.0.0.0`, and `addrs_overlap` lives here: the wildcard contends with every address on its host, two specific addresses do not contend. Degrades to `LISTENING_UNAVAILABLE` when the socket table itself could not be read, distinguishable from a host with nothing listening the same way `DOCKER_UNAVAILABLE` is -- the page always binds a socket of its own, so a genuinely empty reachable inventory never happens.
@@ -56,7 +56,7 @@ The web surface is ten modules at the top level, and keeps the same split:
 - `web.py` — **renders** the HTML page from a snapshot and serves it over stdlib `http.server`. No collection, no probing, and no endpoint but the page itself.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
 
-Four behaviours of that service are load-bearing and easy to undo by accident:
+Five behaviours of that service are load-bearing and easy to undo by accident:
 
 - **The page binds the host's Tailscale address on fixed port 8100.** The port is a constant in `webapp.py`, not configuration: Traefik's file-provider route for `harbor.hpz440.ohr3023.org` points at it, and there is deliberately no flag, no environment variable and no file that moves it ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 - **`harbor-console-web` has one startup refusal, and only one: no tailnet address.** It happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The four refusals of the ledger era went with the ledger. (Port 8100 already in use fails the bind and exits the same way, but that is the environment rather than a second rule.)

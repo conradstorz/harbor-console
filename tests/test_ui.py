@@ -186,6 +186,16 @@ def test_no_banner_when_nothing_failed():
     assert build_banner(verdict([Check("docker", STATE_OK, "answered")]), NOW, STARTED) is None
 
 
+def test_banner_carries_the_one_colour_on_the_surface():
+    from harbor_console import ui
+
+    banner = build_banner(verdict([Check("docker", STATE_FAILED, "could not be read")]), NOW, STARTED)
+
+    assert banner is not None
+    assert banner.style == ui.BANNER_STYLE
+    assert "red" in str(ui.BANNER_STYLE)
+
+
 def test_banner_names_the_failed_checks_on_three_rows():
     checks = [
         Check("docker", STATE_OK, "answered"),

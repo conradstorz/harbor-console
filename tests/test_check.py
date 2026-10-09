@@ -50,6 +50,20 @@ def test_a_stale_verdict_exits_two():
     assert "FAIL prober-fresh: status page has not reported since 17:16:46" in text
 
 
+def test_a_stale_verdict_with_another_failure_still_exits_two():
+    verdict = Verdict(
+        NOW - timedelta(minutes=5),
+        "hpz440",
+        (Check("own-route", STATE_FAILED, "504"),),
+    )
+
+    code, text = run(verdict)
+
+    assert code == check.EXIT_STALE
+    assert "FAIL own-route: 504\n" in text
+    assert "FAIL prober-fresh: status page has not reported since 17:16:46" in text
+
+
 def test_a_missing_verdict_exits_two():
     code, text = run(None)
 

@@ -11,7 +11,6 @@ from harbor_console.checks import (
     CHECK_OWN_ROUTE,
     STATE_FAILED,
     STATE_OK,
-    STATE_UNKNOWN,
     Check,
 )
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
@@ -601,6 +600,19 @@ def test_verdict_publisher_reports_again_after_a_different_error(tmp_path):
     publisher(snapshot)
 
     assert len(reported) == 2
+
+
+def test_verdict_publisher_reports_a_non_os_error_too(tmp_path):
+    reported = []
+
+    def writer(_verdict, _path):
+        raise TypeError("not serialisable")
+
+    publisher = webapp.VerdictPublisher(tmp_path / "checks.json", writer=writer, report=reported.append)
+
+    publisher(Snapshot(collected=datetime(2026, 9, 2), metrics=METRICS))
+
+    assert reported and "not serialisable" in reported[0]
 
 
 def test_the_default_prober_publishes_to_the_verdict_path():
