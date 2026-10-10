@@ -25,9 +25,11 @@ from harbor_console.checks import (
 )
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.gpu import format_gpu
+from harbor_console.gpu_history import format_averages
 from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
 from harbor_console.storage import format_entry
+from harbor_console.ui import AVERAGES_LABEL, NOT_REPORTED
 
 REFRESH_SECONDS = 30
 
@@ -186,7 +188,7 @@ def _storage_section(snapshot: Snapshot) -> str:
 
 
 def _gpu_section(snapshot: Snapshot) -> str:
-    """One row per card, whatever its driver exposed.
+    """One row per card, whatever its driver exposed. Under each card, the busy averages the prober keeps (ADR 22), or `not reported` before the first cycle has recorded one.
 
     The three states storage has: not yet collected, collected and empty,
     rows. "No GPU detected" is a fact about the host, so it is said outright
@@ -199,10 +201,14 @@ def _gpu_section(snapshot: Snapshot) -> str:
         )
     if not snapshot.gpus:
         return "<h2>GPU</h2><p>No GPU detected.</p>"
-    rows = "".join(
-        f"<tr><td>{escape(entry.label)}</td><td>{escape(format_gpu(entry))}</td></tr>"
-        for entry in snapshot.gpus
-    )
+    by_card = {a.card: a for a in snapshot.gpu_averages}
+    rows = ""
+    for entry in snapshot.gpus:
+        rows += f"<tr><td>{escape(entry.label)}</td><td>{escape(format_gpu(entry))}</td></tr>"
+        if entry.card:
+            found = by_card.get(entry.card)
+            text = NOT_REPORTED if found is None else format_averages(found)
+            rows += f"<tr><td>{escape(AVERAGES_LABEL)}</td><td>{escape(text)}</td></tr>"
     return "<h2>GPU</h2><table>" + rows + "</table>"
 
 
