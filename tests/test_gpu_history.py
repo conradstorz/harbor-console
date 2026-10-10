@@ -178,3 +178,84 @@ def test_averages_is_a_tuple_of_gpu_averages():
     (result,) = averages({"card0": (Sample(NOW, 1),)}, NOW)
 
     assert isinstance(result, GpuAverages)
+
+
+# --- format_averages -------------------------------------------------------
+
+from harbor_console.gpu_history import FULL_COVERAGE, NO_MEAN, format_averages  # noqa: E402
+
+
+def window(name: str, seconds: int, mean: int | None, covered: int | None = None) -> WindowAverage:
+    """A window; coverage defaults to full."""
+    return WindowAverage(name, seconds, mean, seconds if covered is None else covered)
+
+
+def test_format_joins_every_window_in_order():
+    entry = GpuAverages(
+        "card1",
+        (
+            window("1h", 3600, 42),
+            window("3h", 3 * 3600, 38),
+            window("7h", 7 * 3600, 30),
+            window("24h", 86400, 25),
+            window("7d", 7 * 86400, 18),
+        ),
+    )
+
+    assert format_averages(entry) == "1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18%"
+
+
+def test_format_flags_a_window_the_samples_do_not_cover():
+    entry = GpuAverages("card1", (window("7d", 7 * 86400, 18, covered=2 * 86400),))
+
+    assert format_averages(entry) == "7d 18% (2d)"
+
+
+def test_format_does_not_flag_coverage_at_or_above_the_threshold():
+    assert FULL_COVERAGE == 0.95
+    just_enough = GpuAverages("card1", (window("1h", 3600, 5, covered=3420),))
+    just_short = GpuAverages("card1", (window("1h", 3600, 5, covered=3419),))
+
+    assert format_averages(just_enough) == "1h 5%"
+    assert format_averages(just_short) == "1h 5% (56m)"
+
+
+def test_format_shows_the_span_in_minutes_hours_or_days_floored():
+    cases = [
+        (window("1h", 3600, 1, covered=0), "1h 1% (0m)"),
+        (window("3h", 3 * 3600, 1, covered=59 * 60 + 59), "3h 1% (59m)"),
+        (window("24h", 86400, 1, covered=3600), "24h 1% (1h)"),
+        (window("7d", 7 * 86400, 1, covered=23 * 3600 + 3599), "7d 1% (23h)"),
+        (window("7d", 7 * 86400, 1, covered=86400), "7d 1% (1d)"),
+        (window("7d", 7 * 86400, 1, covered=6 * 86400), "7d 1% (6d)"),
+    ]
+
+    for w, expected in cases:
+        assert format_averages(GpuAverages("card1", (w,))) == expected
+
+
+def test_format_shows_a_dash_for_a_window_with_no_samples():
+    entry = GpuAverages("card1", (window("1h", 3600, 5), WindowAverage("24h", 86400, None, 0)))
+
+    assert NO_MEAN == "—"
+    assert format_averages(entry) == "1h 5% · 24h —"
+
+
+def test_format_fits_the_steady_partial_row_in_the_console_value_column():
+    """From one day after a fresh history until the week is full, only the
+    7 d window carries a flag. 80 columns minus the panel border, padding
+    and the GPU label leaves 54 for the value (see `test_gpu.py`); this
+    row has to fit beside the instantaneous one without wrapping."""
+    entry = GpuAverages(
+        "card1",
+        (
+            window("1h", 3600, 100),
+            window("3h", 3 * 3600, 100),
+            window("7h", 7 * 3600, 100),
+            window("24h", 86400, 100),
+            window("7d", 7 * 86400, 100, covered=6 * 86400),
+        ),
+    )
+
+    assert format_averages(entry) == "1h 100% · 3h 100% · 7h 100% · 24h 100% · 7d 100% (6d)"
+    assert len(format_averages(entry)) <= 54

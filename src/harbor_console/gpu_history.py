@@ -30,6 +30,13 @@ WINDOWS: tuple[tuple[str, int], ...] = (
     ("7d", 7 * 86400),
 )
 
+#: Below this share of a window, the span the samples cover is shown
+#: beside the mean, so a fresh history never passes for a full one.
+FULL_COVERAGE = 0.95
+
+#: What a window with no samples shows in place of a percentage.
+NO_MEAN = "—"
+
 _CARD_NUMBER = re.compile(r"(\d+)$")
 
 
@@ -111,3 +118,31 @@ def _card_order(card: str) -> tuple[int, str]:
     """`card2` before `card10`: numeric where there is a number, name otherwise."""
     match = _CARD_NUMBER.search(card)
     return (int(match.group(1)) if match else -1, card)
+
+
+def format_averages(entry: GpuAverages) -> str:
+    """`1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)`.
+
+    A window the samples cover less than `FULL_COVERAGE` of carries the span
+    they do cover, floored to the coarsest whole unit: minutes under an
+    hour, hours under a day, days beyond. A window with no samples shows
+    `NO_MEAN` and no span. Shared by both renderers, like `format_gpu`.
+    """
+    return " · ".join(_format_window(w) for w in entry.windows)
+
+
+def _format_window(w: WindowAverage) -> str:
+    if w.mean is None:
+        return f"{w.window} {NO_MEAN}"
+    text = f"{w.window} {w.mean}%"
+    if w.covered_seconds < FULL_COVERAGE * w.seconds:
+        text += f" ({_span(w.covered_seconds)})"
+    return text
+
+
+def _span(seconds: int) -> str:
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
