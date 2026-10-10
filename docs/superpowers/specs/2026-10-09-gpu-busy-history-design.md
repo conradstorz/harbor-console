@@ -68,7 +68,7 @@ one process, and the console does not have it).
   history still advances so the page keeps its averages until the disk
   recovers. `collect_snapshot` gains `history: Callable[[tuple[GpuEntry,
   ...], datetime], tuple[GpuAverages, ...]]`, defaulting to a function that
-  returns `()`; `main` wires the keeper.
+  returns `()`; `_default_prober` constructs one keeper and wires it.
 - `snapshot.py` -- gains `gpu_averages: tuple[GpuAverages, ...] = ()`.
 - `verdict.py` -- `Verdict` gains `gpus: tuple[GpuAverages, ...] = ()`,
   serialised as `"gpus": [{"card": ..., "windows": [{"window": "1h",
@@ -102,8 +102,9 @@ the file it already reads.
   rewritten atomically every cycle (about 1 GB/day, negligible on an SSD and
   simpler than batching writes).
 - Loaded once at startup. Missing, unreadable or malformed means an empty
-  history, reported once to the journal when the file existed, and the next
-  cycle starts it fresh.
+  history, and the next cycle starts it fresh. Nothing is reported: there is
+  nothing an operator could do about it, and the write path reports its own
+  failures.
 - `uninstall.sh` removes `/var/lib/harbor-console`.
 
 ## Averaging rules
@@ -132,14 +133,22 @@ the file it already reads.
     (`5h`), days otherwise (`2d`), each `floor`ed. The very first cycle has
     one sample at `now`, so every window shows `(0m)`; accepted, it lasts
     one cycle.
-  - The fullest case, every window flagged, is pinned by a test to the
-    console's 54-cell value width.
+  - Width. Unflagged, the row is at most 48 cells (`1h 100% · 3h 100% ·
+    7h 100% · 24h 100% · 7d 100%`). With only the 7 d window flagged, the
+    state the row is in from one day after a fresh history until the week
+    is full, it is at most 53, and that case is pinned by a test to the
+    console's 54-cell value width. During the first day of a fresh history
+    two or more windows carry a flag and the row wraps onto a second line on
+    the console; that is the accepted cost ADR 20 names, and it ends on its
+    own.
 - Console: under each GPU row, one row labelled `  busy avg` (two leading
   spaces, so it reads as belonging to the card above). Value: the formatted
   averages of the verdict entry whose `card` matches; `not reported` when
   there is no verdict or no entry for that card. Staleness stays the
   banner's job; a stale verdict still renders its last averages. With one
-  card hpz440 spends one of its three spare rows.
+  card hpz440 spends one of its three spare rows; while the banner is up
+  (it takes all three) the panel's bottom border is cropped, and the remedy
+  ADR 20 names is the smaller console font, not compressing rows.
 - Web page: the GPU table gets the same second row per card from
   `snapshot.gpu_averages`, same label, same `not reported` fallback (on the
   web that means the keeper had nothing yet).
