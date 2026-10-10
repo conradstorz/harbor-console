@@ -242,7 +242,7 @@ def test_dashboard_keeps_the_steady_averages_row_on_one_line_at_80_columns():
     assert any("busy avg" in line and "7d 100% (6d)" in line for line in lines)
 
 
-def test_dashboard_without_averages_renders_as_before():
+def test_dashboard_accepts_the_old_three_argument_call():
     gpus = (GpuEntry(label="GPU card0 (radeon)", card="card0", driver="radeon", temp_c=35.0),)
     console = Console(width=120, record=True)
 
