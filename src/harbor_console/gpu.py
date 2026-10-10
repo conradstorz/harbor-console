@@ -47,6 +47,10 @@ class GpuEntry:
     """One GPU, with whatever its driver chose to say about it."""
 
     label: str
+    #: The DRM node (`card1`): the one name for a card that survives NVML
+    #: going quiet for a cycle, so it is what history is keyed by. Empty on
+    #: the `unavailable` sentinel, which is not a card.
+    card: str = ""
     driver: str = ""
     busy_percent: int | None = None
     #: Bytes. Rendered only when both are known and total is non-zero.
@@ -189,6 +193,7 @@ def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
     sensor = _hwmon(device)
     entry = GpuEntry(
         label=_label(node.name, driver),
+        card=node.name,
         driver=driver,
         busy_percent=_read_int(device / "gpu_busy_percent"),
         vram_used=_read_int(device / "mem_info_vram_used"),
