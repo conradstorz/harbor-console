@@ -12,9 +12,12 @@ and tests pass fixed datetimes.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from harbor_console.gpu import GpuEntry
 
@@ -36,6 +39,10 @@ FULL_COVERAGE = 0.95
 
 #: What a window with no samples shows in place of a percentage.
 NO_MEAN = "—"
+
+#: Under the web unit's `StateDirectory`: the one place this project keeps
+#: anything across a restart or a reboot (ADR 22). No flag moves it.
+HISTORY_PATH = Path("/var/lib/harbor-console/gpu-history.json")
 
 _CARD_NUMBER = re.compile(r"(\d+)$")
 
@@ -146,3 +153,67 @@ def _span(seconds: int) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"
+
+
+def dumps(history: History) -> str:
+    """`{"cards": {"card1": [[epoch_seconds, busy_percent], ...]}}`, on one
+    line: at ~20k pairs per card a week, the file is rewritten every cycle
+    and indentation would double it for nothing."""
+    return json.dumps(
+        {
+            "cards": {
+                card: [[int(sample.at.timestamp()), sample.busy_percent] for sample in samples]
+                for card, samples in history.items()
+            }
+        },
+        separators=(",", ":"),
+    )
+
+
+def loads(text: str) -> History:
+    """Parse a history, or an empty one for anything that is not a history.
+    Never raises: a malformed file costs the week it held, and the next
+    cycle starts a new one."""
+    try:
+        payload = json.loads(text)
+        cards = payload["cards"]
+        if not isinstance(payload, dict) or not isinstance(cards, dict):
+            return {}
+        history: History = {}
+        for card, pairs in cards.items():
+            if not isinstance(card, str) or not isinstance(pairs, list):
+                return {}
+            samples = []
+            for pair in pairs:
+                if not (isinstance(pair, list) and len(pair) == 2):
+                    return {}
+                at, busy = pair
+                if not (_is_int(at) and _is_int(busy)):
+                    return {}
+                samples.append(Sample(datetime.fromtimestamp(at), busy))
+            if samples:
+                history[card] = tuple(samples)
+        return history
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return {}
+
+
+def _is_int(value: object) -> bool:
+    """`True` for an int that is not a bool; JSON `true` parses as a bool
+    and a bool is an int to `isinstance`."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def read_history(path: Path = HISTORY_PATH) -> History:
+    """The history on disk, or an empty one. Never raises."""
+    try:
+        return loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def write_history(history: History, path: Path = HISTORY_PATH) -> None:
+    """Replace the file atomically. Raises OSError; the caller reports it."""
+    temp = path.with_name(f".{path.name}.tmp")
+    temp.write_text(dumps(history), encoding="utf-8")
+    os.replace(temp, path)

@@ -259,3 +259,120 @@ def test_format_fits_the_steady_partial_row_in_the_console_value_column():
 
     assert format_averages(entry) == "1h 100% · 3h 100% · 7h 100% · 24h 100% · 7d 100% (6d)"
     assert len(format_averages(entry)) <= 54
+
+
+# --- codec ---------------------------------------------------------------
+
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+from harbor_console.gpu_history import (  # noqa: E402
+    HISTORY_PATH,
+    dumps,
+    loads,
+    read_history,
+    write_history,
+)
+
+HISTORY = {
+    "card0": (Sample(NOW - HOUR, 10), Sample(NOW, 20)),
+    "card1": (Sample(NOW, 99),),
+}
+
+
+def test_history_lives_in_the_web_units_state_directory():
+    assert HISTORY_PATH.as_posix() == "/var/lib/harbor-console/gpu-history.json"
+
+
+def test_codec_round_trip():
+    assert loads(dumps(HISTORY)) == HISTORY
+
+
+def test_dumps_is_compact_json_of_epoch_busy_pairs():
+    payload = json.loads(dumps(HISTORY))
+
+    assert payload == {
+        "cards": {
+            "card0": [[int((NOW - HOUR).timestamp()), 10], [int(NOW.timestamp()), 20]],
+            "card1": [[int(NOW.timestamp()), 99]],
+        }
+    }
+    assert "\n" not in dumps(HISTORY)
+
+
+def test_dumps_drops_sub_second_precision_on_the_way_out():
+    history = {"card0": (Sample(NOW.replace(microsecond=500000), 1),)}
+
+    assert loads(dumps(history)) == {"card0": (Sample(NOW, 1),)}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "not json",
+        "[]",
+        "{}",
+        '{"cards": []}',
+        '{"cards": {"card0": "x"}}',
+        '{"cards": {"card0": [[1, 2, 3]]}}',
+        '{"cards": {"card0": [["1", 2]]}}',
+        '{"cards": {"card0": [[1.5, 2]]}}',
+        '{"cards": {"card0": [[1, true]]}}',
+        '{"cards": {"card0": [[1, 2]], "card1": [[1]]}}',
+        '{"cards": {"card0": [[1e20, 2]]}}',
+        '{"cards": {7: [[1, 2]]}}',
+    ],
+)
+def test_loads_returns_an_empty_history_for_anything_malformed(text):
+    assert loads(text) == {}
+
+
+def test_loads_keeps_samples_in_file_order():
+    text = '{"cards": {"card0": [[1000, 1], [500, 2]]}}'
+
+    assert [s.busy_percent for s in loads(text)["card0"]] == [1, 2]
+
+
+def test_loads_drops_a_card_with_no_samples():
+    assert loads('{"cards": {"card0": []}}') == {}
+
+
+def test_write_then_read(tmp_path):
+    path = tmp_path / "gpu-history.json"
+
+    write_history(HISTORY, path)
+
+    assert read_history(path) == HISTORY
+
+
+def test_write_leaves_no_temp_file_behind(tmp_path):
+    path = tmp_path / "gpu-history.json"
+
+    write_history(HISTORY, path)
+
+    assert [p.name for p in tmp_path.iterdir()] == ["gpu-history.json"]
+
+
+def test_write_raises_when_the_directory_is_missing(tmp_path):
+    with pytest.raises(OSError):
+        write_history(HISTORY, tmp_path / "missing" / "gpu-history.json")
+
+
+def test_read_is_empty_for_a_missing_file(tmp_path):
+    assert read_history(tmp_path / "missing.json") == {}
+
+
+def test_read_is_empty_for_garbage(tmp_path):
+    path = tmp_path / "gpu-history.json"
+    path.write_text("{{{", encoding="utf-8")
+
+    assert read_history(path) == {}
+
+
+def test_read_defaults_to_the_state_directory_path():
+    import inspect
+
+    assert inspect.signature(read_history).parameters["path"].default is HISTORY_PATH
+    assert inspect.signature(write_history).parameters["path"].default is HISTORY_PATH
