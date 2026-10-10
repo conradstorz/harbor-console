@@ -1,0 +1,113 @@
+"""A week of GPU busy samples, and the averages both surfaces show over it.
+
+Policy and codec, in the shape of `verdict.py`. The web prober is the one
+writer: each cycle it records one busy sample per card, prunes what is
+older than a week, and hands the averages to the snapshot and the verdict
+file. The console only ever sees the averages, inside the file it already
+reads, so the 1 Hz loop gains no write and no new read (ADR 22).
+
+Everything here is pure in `now`: the prober passes `snapshot.collected`,
+and tests pass fixed datetimes.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from harbor_console.gpu import GpuEntry
+
+#: Samples older than this are dropped on every record.
+RETENTION = timedelta(days=7)
+
+#: The averages shown, in row order: name and length in seconds.
+WINDOWS: tuple[tuple[str, int], ...] = (
+    ("1h", 3600),
+    ("3h", 3 * 3600),
+    ("7h", 7 * 3600),
+    ("24h", 86400),
+    ("7d", 7 * 86400),
+)
+
+_CARD_NUMBER = re.compile(r"(\d+)$")
+
+
+@dataclass(frozen=True)
+class Sample:
+    at: datetime
+    busy_percent: int
+
+
+#: Card name to its samples, oldest first.
+History = dict[str, tuple[Sample, ...]]
+
+
+@dataclass(frozen=True)
+class WindowAverage:
+    """One window's mean, and how much of the window the samples span.
+
+    `mean` is `None` when no sample fell inside the window. `covered_seconds`
+    is `now` minus the oldest sample inside the window, 0 when there is none:
+    the honest cheap measure of how much of the window the mean speaks for.
+    """
+
+    window: str
+    seconds: int
+    mean: int | None
+    covered_seconds: int
+
+
+@dataclass(frozen=True)
+class GpuAverages:
+    card: str
+    windows: tuple[WindowAverage, ...]
+
+
+def record(history: History, entries: tuple[GpuEntry, ...], now: datetime) -> History:
+    """`history` plus one sample at `now` per entry that reported a busy
+    percent, minus everything older than `RETENTION`. A new mapping; the
+    input is never touched.
+
+    An entry with no `card` (the `unavailable` sentinel) or no busy percent
+    (a driver that stayed silent this cycle) adds nothing: silence is never
+    a zero. A card with no samples left is dropped.
+    """
+    cutoff = now - RETENTION
+    updated: dict[str, tuple[Sample, ...]] = dict(history)
+    for entry in entries:
+        if not entry.card or entry.busy_percent is None:
+            continue
+        updated[entry.card] = updated.get(entry.card, ()) + (Sample(now, entry.busy_percent),)
+    pruned = {
+        card: tuple(sample for sample in samples if sample.at >= cutoff)
+        for card, samples in updated.items()
+    }
+    return {card: samples for card, samples in pruned.items() if samples}
+
+
+def averages(history: History, now: datetime) -> tuple[GpuAverages, ...]:
+    """Every window for every card in `history`, cards in number order."""
+    return tuple(
+        GpuAverages(
+            card,
+            tuple(_window(history[card], name, seconds, now) for name, seconds in WINDOWS),
+        )
+        for card in sorted(history, key=_card_order)
+    )
+
+
+def _window(samples: tuple[Sample, ...], name: str, seconds: int, now: datetime) -> WindowAverage:
+    start = now - timedelta(seconds=seconds)
+    inside = [sample for sample in samples if start <= sample.at <= now]
+    if not inside:
+        return WindowAverage(name, seconds, None, 0)
+    oldest = min(sample.at for sample in inside)
+    mean = round(sum(sample.busy_percent for sample in inside) / len(inside))
+    return WindowAverage(name, seconds, mean, int((now - oldest).total_seconds()))
+
+
+def _card_order(card: str) -> tuple[int, str]:
+    """`card2` before `card10`: numeric where there is a number, name otherwise."""
+    match = _CARD_NUMBER.search(card)
+    return (int(match.group(1)) if match else -1, card)
