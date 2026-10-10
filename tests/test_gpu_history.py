@@ -8,6 +8,7 @@ from harbor_console.gpu_history import (
     Sample,
     WindowAverage,
     averages,
+    history_key,
     record,
 )
 
@@ -66,6 +67,22 @@ def test_record_drops_a_card_with_nothing_left():
     assert record(history, (), NOW) == {}
 
 
+def test_record_keys_by_bus_id_when_present_and_by_card_otherwise():
+    with_bus = GpuEntry(
+        label="GPU card1", card="card1", bus_id="0000:02:00.0", driver="nvidia", busy_percent=40
+    )
+    without_bus = entry("card0", 10)
+
+    history = record({}, (with_bus, without_bus), NOW)
+
+    assert history == {
+        "0000:02:00.0": (Sample(NOW, 40),),
+        "card0": (Sample(NOW, 10),),
+    }
+    assert history_key(with_bus) == "0000:02:00.0"
+    assert history_key(without_bus) == "card0"
+
+
 def test_record_never_mutates_its_input():
     original = {"card0": (Sample(NOW - HOUR, 10),)}
     snapshot = {card: samples for card, samples in original.items()}
@@ -101,7 +118,7 @@ def test_averages_returns_one_entry_per_card_in_card_order():
         "card0": (Sample(NOW, 3),),
     }
 
-    assert [a.card for a in averages(history, NOW)] == ["card0", "card2", "card10"]
+    assert [a.key for a in averages(history, NOW)] == ["card0", "card2", "card10"]
 
 
 def test_averages_has_every_window_for_a_card():
@@ -323,10 +340,22 @@ def test_dumps_drops_sub_second_precision_on_the_way_out():
         '{"cards": {"card0": [[1, 2]], "card1": [[1]]}}',
         '{"cards": {"card0": [[1e20, 2]]}}',
         '{"cards": {7: [[1, 2]]}}',
+        '{"cards": {"card0": [[1, 101]]}}',
+        '{"cards": {"card0": [[1, -1]]}}',
+        '{"cards": {"card0": [[1, ' + "1" + "0" * 400 + ']]}}',
     ],
 )
 def test_loads_returns_an_empty_history_for_anything_malformed(text):
     assert loads(text) == {}
+
+
+def test_record_then_averages_treats_the_busy_range_as_inclusive():
+    history = {"card0": (Sample(NOW - timedelta(seconds=1), 100),)}
+    history = record(history, (entry("card0", 0),), NOW)
+
+    (result,) = averages(history, NOW)
+
+    assert result.windows[0].mean == 50
 
 
 def test_loads_keeps_samples_in_file_order():

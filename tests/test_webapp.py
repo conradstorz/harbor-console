@@ -658,7 +658,7 @@ def test_history_keeper_records_writes_and_returns_the_averages(tmp_path):
     result = keeper((BUSY,), NOW)
 
     assert read_history(path) == {"card1": (Sample(NOW, 40),)}
-    assert [a.card for a in result] == ["card1"]
+    assert [a.key for a in result] == ["card1"]
     assert result[0].windows[0] == WindowAverage("1h", 3600, 40, 0)
 
 

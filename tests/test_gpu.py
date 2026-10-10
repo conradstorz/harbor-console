@@ -360,6 +360,7 @@ def test_collect_fills_an_nvidia_card_from_nvml_by_bus_id(tmp_path):
         label="GPU card1 (RTX 3060)",
         driver="nvidia",
         card="card1",
+        bus_id="0000:02:00.0",
         busy_percent=7,
         vram_used=5 * 1024**3,
         vram_total=12 * 1024**3,
@@ -400,7 +401,9 @@ def test_collect_leaves_an_nvidia_card_bare_when_nvml_has_nothing(tmp_path):
 
     (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(None))
 
-    assert entry == GpuEntry(label="GPU card1 (nvidia)", driver="nvidia", card="card1")
+    assert entry == GpuEntry(
+        label="GPU card1 (nvidia)", driver="nvidia", card="card1", bus_id="0000:02:00.0"
+    )
     assert format_gpu(entry) == "no metrics exposed by nvidia"
 
 
@@ -434,3 +437,22 @@ def test_the_unavailable_sentinel_has_no_card(tmp_path):
 
     assert entry.note == NOTE_UNAVAILABLE
     assert entry.card == ""
+
+
+def test_collect_fills_bus_id_from_pci_slot_name_for_any_driver(tmp_path):
+    device = card(tmp_path, "card0", driver="amdgpu", gpu_busy_percent="12\n")
+    (device / "uevent").write_text(
+        "DRIVER=amdgpu\nPCI_ID=1002:6610\nPCI_SLOT_NAME=0000:03:00.0\n"
+    )
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.bus_id == "0000:03:00.0"
+
+
+def test_collect_leaves_bus_id_empty_without_pci_slot_name(tmp_path):
+    card(tmp_path, "card0", driver="radeon")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.bus_id == ""

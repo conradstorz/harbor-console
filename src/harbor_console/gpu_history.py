@@ -58,7 +58,8 @@ class Sample:
     busy_percent: int
 
 
-#: Card name to its samples, oldest first.
+#: History key (the card's PCI bus ID where known, else its node name, see
+#: `history_key`) to its samples, oldest first.
 History = dict[str, tuple[Sample, ...]]
 
 
@@ -79,8 +80,22 @@ class WindowAverage:
 
 @dataclass(frozen=True)
 class GpuAverages:
-    card: str
+    key: str
     windows: tuple[WindowAverage, ...]
+
+
+def history_key(entry: GpuEntry) -> str:
+    """The stable key history is kept under: the card's PCI slot where it has
+    one, else its DRM node name.
+
+    `card<N>` is assigned in probe order and can change across a reboot --
+    exactly what history must not be keyed by, since it is meant to outlive
+    one. The PCI slot is the card's address on the bus and does not move. A
+    card not on PCI (or whose `uevent` could not be read) has no bus ID, so
+    it falls back to its node name, with that name's instability as the
+    known limitation for that case.
+    """
+    return entry.bus_id or entry.card
 
 
 def record(history: History, entries: tuple[GpuEntry, ...], now: datetime) -> History:
@@ -88,31 +103,33 @@ def record(history: History, entries: tuple[GpuEntry, ...], now: datetime) -> Hi
     percent, minus everything older than `RETENTION`. A new mapping; the
     input is never touched.
 
-    An entry with no `card` (the `unavailable` sentinel) or no busy percent
-    (a driver that stayed silent this cycle) adds nothing: silence is never
-    a zero. A card with no samples left is dropped.
+    An entry with no key (the `unavailable` sentinel, which has neither a
+    `card` nor a `bus_id`) or no busy percent (a driver that stayed silent
+    this cycle) adds nothing: silence is never a zero. A card with no
+    samples left is dropped.
     """
     cutoff = now - RETENTION
     updated: dict[str, tuple[Sample, ...]] = dict(history)
     for entry in entries:
-        if not entry.card or entry.busy_percent is None:
+        key = history_key(entry)
+        if not key or entry.busy_percent is None:
             continue
-        updated[entry.card] = updated.get(entry.card, ()) + (Sample(now, entry.busy_percent),)
+        updated[key] = updated.get(key, ()) + (Sample(now, entry.busy_percent),)
     pruned = {
-        card: tuple(sample for sample in samples if sample.at >= cutoff)
-        for card, samples in updated.items()
+        key: tuple(sample for sample in samples if sample.at >= cutoff)
+        for key, samples in updated.items()
     }
-    return {card: samples for card, samples in pruned.items() if samples}
+    return {key: samples for key, samples in pruned.items() if samples}
 
 
 def averages(history: History, now: datetime) -> tuple[GpuAverages, ...]:
-    """Every window for every card in `history`, cards in number order."""
+    """Every window for every card in `history`, in a stable order."""
     return tuple(
         GpuAverages(
-            card,
-            tuple(_window(history[card], name, seconds, now) for name, seconds in WINDOWS),
+            key,
+            tuple(_window(history[key], name, seconds, now) for name, seconds in WINDOWS),
         )
-        for card in sorted(history, key=_card_order)
+        for key in sorted(history, key=_card_order)
     )
 
 
@@ -161,14 +178,16 @@ def _span(seconds: int) -> str:
 
 
 def dumps(history: History) -> str:
-    """`{"cards": {"card1": [[epoch_seconds, busy_percent], ...]}}`, on one
-    line: at ~20k pairs per card a week, the file is rewritten every cycle
-    and indentation would double it for nothing."""
+    """`{"cards": {"0000:02:00.0": [[epoch_seconds, busy_percent], ...]}}`,
+    on one line: at ~20k pairs per card a week, the file is rewritten every
+    cycle and indentation would double it for nothing. The top-level key
+    stays `"cards"` for the file shape; what each entry is keyed by is the
+    bus ID where `history_key` has one, the card's node name otherwise."""
     return json.dumps(
         {
             "cards": {
-                card: [[int(sample.at.timestamp()), sample.busy_percent] for sample in samples]
-                for card, samples in history.items()
+                key: [[int(sample.at.timestamp()), sample.busy_percent] for sample in samples]
+                for key, samples in history.items()
             }
         },
         separators=(",", ":"),
@@ -187,7 +206,7 @@ def loads(text: str) -> History:
         if not isinstance(cards, dict):
             return {}
         history: History = {}
-        for card, pairs in cards.items():
+        for key, pairs in cards.items():
             if not isinstance(pairs, list):
                 return {}
             samples = []
@@ -197,9 +216,11 @@ def loads(text: str) -> History:
                 at, busy = pair
                 if not (_is_int(at) and _is_int(busy)):
                     return {}
+                if not (0 <= busy <= 100):
+                    return {}
                 samples.append(Sample(datetime.fromtimestamp(at), busy))
             if samples:
-                history[card] = tuple(samples)
+                history[key] = tuple(samples)
         return history
     except (KeyError, TypeError, ValueError, OverflowError, OSError):
         return {}

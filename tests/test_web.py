@@ -585,6 +585,24 @@ def test_page_shows_the_busy_averages_under_the_matching_card():
     assert page.index("GPU card1 (amdgpu)") < page.index("1h 42%")
 
 
+def test_page_matches_averages_by_bus_id():
+    gpus = (
+        GpuEntry(
+            label="GPU card1 (amdgpu)",
+            card="card1",
+            bus_id="0000:02:00.0",
+            driver="amdgpu",
+            busy_percent=12,
+        ),
+    )
+    averages = (GpuAverages("0000:02:00.0", (WindowAverage("1h", 3600, 42, 3600),)),)
+
+    page = web.render_page(snapshot(gpus=gpus, gpu_averages=averages)).decode()
+
+    assert "<tr><td>GPU card1 (amdgpu)</td><td>busy 12%</td></tr>" in page
+    assert '<tr class="detail"><td>busy avg</td><td>1h 42%</td></tr>' in page
+
+
 def test_page_says_not_reported_for_a_card_without_averages():
     page = web.render_page(snapshot(gpus=KEYED_GPUS, gpu_averages=AVERAGES)).decode()
     radeon = page.index("GPU card0 (radeon)")

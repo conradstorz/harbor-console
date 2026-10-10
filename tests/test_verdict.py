@@ -133,7 +133,7 @@ def test_dumps_writes_the_averages_as_plain_json():
 
     assert payload["gpus"] == [
         {
-            "card": "card1",
+            "key": "card1",
             "windows": [
                 {"window": "1h", "seconds": 3600, "mean": 42, "covered_seconds": 3600},
                 {"window": "7d", "seconds": 604800, "mean": None, "covered_seconds": 0},
@@ -160,15 +160,34 @@ def test_loads_treats_a_missing_gpus_key_as_empty():
     [
         "none",
         [1],
-        [{"card": "card1"}],
-        [{"card": 1, "windows": []}],
-        [{"card": "card1", "windows": "x"}],
-        [{"card": "card1", "windows": [{"window": "1h"}]}],
-        [{"card": "card1", "windows": [{"window": "1h", "seconds": "3600", "mean": 1, "covered_seconds": 0}]}],
-        [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": "1", "covered_seconds": 0}]}],
-        [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": None}]}],
-        [{"card": "card1", "windows": [{"window": 1, "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
-        [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": True, "covered_seconds": 0}]}],
+        [{"key": "card1"}],
+        [{"key": 1, "windows": []}],
+        [{"key": "card1", "windows": "x"}],
+        [{"key": "card1", "windows": [{"window": "1h"}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": "3600", "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": "1", "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": None}]}],
+        [{"key": "card1", "windows": [{"window": 1, "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": True, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "bogus", "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 7200, "mean": 1, "covered_seconds": 0}]}],
+        [
+            {
+                "key": "card1",
+                "windows": [
+                    {
+                        "window": "1h",
+                        "seconds": 10**400,
+                        "mean": 1,
+                        "covered_seconds": 0,
+                    }
+                ],
+            }
+        ],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 101, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": -1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": -1}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": 3601}]}],
     ],
 )
 def test_loads_returns_none_for_malformed_gpus(gpus):

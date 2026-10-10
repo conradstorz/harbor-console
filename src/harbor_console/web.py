@@ -25,7 +25,7 @@ from harbor_console.checks import (
 )
 from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
 from harbor_console.gpu import format_gpu
-from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, format_averages
+from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, format_averages, history_key
 from harbor_console.inventory import REACH_LOOPBACK, Entry
 from harbor_console.snapshot import Snapshot
 from harbor_console.storage import format_entry
@@ -202,12 +202,13 @@ def _gpu_section(snapshot: Snapshot) -> str:
         )
     if not snapshot.gpus:
         return "<h2>GPU</h2><p>No GPU detected.</p>"
-    by_card = {a.card: a for a in snapshot.gpu_averages}
+    by_key = {a.key: a for a in snapshot.gpu_averages}
     rows = []
     for entry in snapshot.gpus:
         rows.append(f"<tr><td>{escape(entry.label)}</td><td>{escape(format_gpu(entry))}</td></tr>")
-        if entry.card:
-            found = by_card.get(entry.card)
+        key = history_key(entry)
+        if key:
+            found = by_key.get(key)
             text = NOT_REPORTED if found is None else format_averages(found)
             rows.append(
                 f'<tr class="detail"><td>{escape(AVERAGES_LABEL)}</td><td>{escape(text)}</td></tr>'

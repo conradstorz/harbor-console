@@ -50,7 +50,7 @@ one process, and the console does not have it).
     `now - seconds`, rounded to a whole percent, `None` when there are none;
     `covered_seconds` is `now` minus the oldest sample inside the window,
     `0` when there are none.
-  - `GpuAverages(card: str, windows: tuple[WindowAverage, ...])`.
+  - `GpuAverages(key: str, windows: tuple[WindowAverage, ...])`.
   - `WINDOWS = (("1h", 3600), ("3h", 3 * 3600), ("7h", 7 * 3600),
     ("24h", 86400), ("7d", 7 * 86400))`.
   - `averages(history, now) -> tuple[GpuAverages, ...]`: one entry per card
@@ -71,7 +71,7 @@ one process, and the console does not have it).
   returns `()`; `_default_prober` constructs one keeper and wires it.
 - `snapshot.py` -- gains `gpu_averages: tuple[GpuAverages, ...] = ()`.
 - `verdict.py` -- `Verdict` gains `gpus: tuple[GpuAverages, ...] = ()`,
-  serialised as `"gpus": [{"card": ..., "windows": [{"window": "1h",
+  serialised as `"gpus": [{"key": ..., "windows": [{"window": "1h",
   "seconds": 3600, "mean": 42, "covered_seconds": 3600}, ...]}]`. `loads`
   treats a missing `gpus` key as empty, so an old writer and a new reader
   coexist across a deploy; a present but malformed `gpus` makes the whole

@@ -185,6 +185,30 @@ def test_dashboard_shows_the_busy_averages_under_the_matching_card():
     assert "1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)" in lines[gpu_row + 1]
 
 
+def test_dashboard_matches_averages_by_bus_id():
+    gpus = (
+        GpuEntry(
+            label="GPU card1 (RTX 3060)",
+            card="card1",
+            bus_id="0000:02:00.0",
+            driver="nvidia",
+            busy_percent=7,
+        ),
+    )
+    averages = (
+        GpuAverages(
+            "0000:02:00.0",
+            (WindowAverage("1h", 3600, 42, 3600),),
+        ),
+    )
+
+    lines = render(METRICS, (), gpus, averages).splitlines()
+    gpu_row = next(i for i, line in enumerate(lines) if "GPU card1 (RTX 3060)" in line)
+
+    assert "busy avg" in lines[gpu_row + 1]
+    assert "1h 42%" in lines[gpu_row + 1]
+
+
 def test_dashboard_says_not_reported_for_a_card_without_averages():
     gpus = (GpuEntry(label="GPU card0 (radeon)", card="card0", driver="radeon", temp_c=35.0),)
 

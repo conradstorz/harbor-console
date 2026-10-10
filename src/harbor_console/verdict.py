@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from harbor_console.checks import STATE_FAILED, STATE_OK, STATE_UNKNOWN, Check
-from harbor_console.gpu_history import GpuAverages, WindowAverage
+from harbor_console.gpu_history import WINDOWS, GpuAverages, WindowAverage
 
 _VALID_STATES = (STATE_OK, STATE_FAILED, STATE_UNKNOWN)
 
@@ -53,7 +53,7 @@ def dumps(verdict: Verdict) -> str:
             ],
             "gpus": [
                 {
-                    "card": g.card,
+                    "key": g.key,
                     "windows": [
                         {
                             "window": w.window,
@@ -112,7 +112,7 @@ def _load_gpus(raw: object) -> tuple[GpuAverages, ...]:
         raise ValueError("gpus is not a list")
     entries = []
     for g in raw:
-        if not isinstance(g, dict) or not isinstance(g["card"], str) or not isinstance(g["windows"], list):
+        if not isinstance(g, dict) or not isinstance(g["key"], str) or not isinstance(g["windows"], list):
             raise ValueError("malformed gpu entry")
         windows = []
         for w in g["windows"]:
@@ -121,10 +121,14 @@ def _load_gpus(raw: object) -> tuple[GpuAverages, ...]:
             window, seconds, mean, covered = w["window"], w["seconds"], w["mean"], w["covered_seconds"]
             if not (isinstance(window, str) and _is_int(seconds) and _is_int(covered)):
                 raise ValueError("malformed window")
-            if mean is not None and not _is_int(mean):
+            if (window, seconds) not in WINDOWS:
+                raise ValueError("not a known window")
+            if mean is not None and not (_is_int(mean) and 0 <= mean <= 100):
+                raise ValueError("malformed window")
+            if not (0 <= covered <= seconds):
                 raise ValueError("malformed window")
             windows.append(WindowAverage(window, seconds, mean, covered))
-        entries.append(GpuAverages(g["card"], tuple(windows)))
+        entries.append(GpuAverages(g["key"], tuple(windows)))
     return tuple(entries)
 
 

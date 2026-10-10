@@ -18,7 +18,13 @@ from rich.text import Text
 
 from harbor_console.checks import STATE_FAILED, is_stale, platform_broken
 from harbor_console.gpu import GpuEntry, format_gpu
-from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, GpuAverages, format_averages
+from harbor_console.gpu_history import (
+    AVERAGES_LABEL,
+    NOT_REPORTED,
+    GpuAverages,
+    format_averages,
+    history_key,
+)
 from harbor_console.storage import StorageEntry, format_entry
 from harbor_console.verdict import Verdict
 
@@ -84,11 +90,12 @@ def build_dashboard(
     # An empty tuple is a host with no card, and that is a fact worth a row:
     # a blank where the GPU line should be reads as a render bug.
     if gpus:
-        by_card = {a.card: a for a in gpu_averages}
+        by_key = {a.key: a for a in gpu_averages}
         for gpu in gpus:
             table.add_row(gpu.label, format_gpu(gpu))
-            if gpu.card:
-                entry = by_card.get(gpu.card)
+            key = history_key(gpu)
+            if key:
+                entry = by_key.get(key)
                 table.add_row(AVERAGES_ROW_LABEL, NOT_REPORTED if entry is None else format_averages(entry))
     else:
         table.add_row("GPU", "none detected")
