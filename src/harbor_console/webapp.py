@@ -34,6 +34,15 @@ from harbor_console.directory import (
 )
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container, running_containers
 from harbor_console.gpu import GpuEntry, collect_gpus
+from harbor_console.gpu_history import (
+    HISTORY_PATH,
+    GpuAverages,
+    History,
+    averages,
+    read_history,
+    record,
+    write_history,
+)
 from harbor_console.inventory import build_inventory
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener, listening_sockets
 from harbor_console.probe import Health, probe
@@ -58,6 +67,16 @@ PROBE_INTERVAL_SECONDS = 30.0
 #: since this process runs as `harbor`, not root.
 TRAEFIK_DASHBOARD_USER = "harbor"
 TRAEFIK_DASHBOARD_PASSWORD_PATH = Path("/etc/traefik/dashboard-password")
+
+#: How the prober turns this cycle's GPU entries into averages: the keeper
+#: in production, a fake in tests, nothing before either is wired.
+HistoryKeeper = Callable[[tuple[GpuEntry, ...], datetime], tuple[GpuAverages, ...]]
+
+
+def no_history(entries: tuple[GpuEntry, ...], now: datetime) -> tuple[GpuAverages, ...]:
+    """The default: no history kept, no averages shown."""
+    return ()
+
 
 EXIT_OK = 0
 EXIT_REFUSED = 1
@@ -129,6 +148,7 @@ def collect_snapshot(
     certificate: Callable[[str], Certificate | CertificateUnavailable] = served_certificate,
     tailnet_address: str | None = None,
     own_port: int | None = WEB_PORT,
+    history: HistoryKeeper = no_history,
 ) -> Snapshot:
     """Gather every source once and fold it into one snapshot.
 
@@ -137,6 +157,7 @@ def collect_snapshot(
     policy intact and only flattened into the snapshot for the renderer.
     """
     metrics = dict(collector())
+    cards = gpus()
     found = listeners()
     running = containers()
     routed = routers()
@@ -174,7 +195,8 @@ def collect_snapshot(
         probed=True,
         tailnet_address=tailnet_address,
         storage=storage(),
-        gpus=gpus(),
+        gpus=cards,
+        gpu_averages=history(cards, now),
         own_route=own_route,
         certificate=served,
         checks=run_checks(
@@ -257,6 +279,7 @@ class VerdictPublisher:
             written=snapshot.collected,
             hostname=str(snapshot.metrics.get("hostname", "")),
             checks=snapshot.checks,
+            gpus=snapshot.gpu_averages,
         )
         try:
             self._writer(verdict, self._path)
@@ -267,6 +290,44 @@ class VerdictPublisher:
                 self._last_error = message
             return
         self._last_error = None
+
+
+class GpuHistoryKeeper:
+    """The one writer of the GPU busy history (ADR 22).
+
+    Loads the file once, then each cycle records this cycle's entries,
+    rewrites the file and returns the averages. A write that fails is
+    reported once per distinct error, like `VerdictPublisher`, and the
+    history still advances in memory: the page keeps its averages until the
+    disk recovers, and loses at most what was recorded while it was down.
+    Called only from the prober thread, so it needs no lock.
+    """
+
+    def __init__(
+        self,
+        path: Path = HISTORY_PATH,
+        reader: Callable[[Path], History] = read_history,
+        writer: Callable[[History, Path], None] = write_history,
+        report: Callable[[str], None] = _report,
+    ) -> None:
+        self._path = path
+        self._writer = writer
+        self._report = report
+        self._last_error: str | None = None
+        self._history = reader(path)
+
+    def __call__(self, entries: tuple[GpuEntry, ...], now: datetime) -> tuple[GpuAverages, ...]:
+        self._history = record(self._history, entries, now)
+        try:
+            self._writer(self._history, self._path)
+        except Exception as exc:  # noqa: BLE001 - every failure to write must reach the journal
+            message = f"could not write {self._path}: {exc}"
+            if message != self._last_error:
+                self._report(message)
+                self._last_error = message
+        else:
+            self._last_error = None
+        return averages(self._history, now)
 
 
 def main(
@@ -305,11 +366,14 @@ def main(
 
 
 def _default_prober(holder: SnapshotHolder, tailnet_address: str) -> None:
+    keeper = GpuHistoryKeeper()
+
     def collect() -> Snapshot:
         return collect_snapshot(
             datetime.now(),
             tailnet_address=tailnet_address,
             routers=lambda: traefik_routers(credentials=read_traefik_credentials()),
+            history=keeper,
         )
 
     thread = threading.Thread(
