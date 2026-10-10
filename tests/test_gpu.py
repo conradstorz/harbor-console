@@ -128,7 +128,7 @@ def test_collect_reads_a_radeon_card_with_only_a_temperature(tmp_path):
 
     (entry,) = collect_gpus(tmp_path)
 
-    assert entry == GpuEntry(label="GPU card0 (radeon)", driver="radeon", temp_c=35.0)
+    assert entry == GpuEntry(label="GPU card0 (radeon)", driver="radeon", card="card0", temp_c=35.0)
 
 
 def test_collect_reads_a_radeon_fan_as_a_percentage_of_pwm1_max(tmp_path):
@@ -178,6 +178,7 @@ def test_collect_reads_every_amdgpu_metric(tmp_path):
     assert entry == GpuEntry(
         label="GPU card0 (amdgpu)",
         driver="amdgpu",
+        card="card0",
         busy_percent=12,
         vram_used=1024**3,
         vram_total=8 * 1024**3,
@@ -214,7 +215,7 @@ def test_collect_keeps_a_card_whose_driver_exposes_nothing(tmp_path):
 
     (entry,) = collect_gpus(tmp_path)
 
-    assert entry == GpuEntry(label="GPU card0 (radeon)", driver="radeon")
+    assert entry == GpuEntry(label="GPU card0 (radeon)", driver="radeon", card="card0")
     assert format_gpu(entry) == "no metrics exposed by radeon"
 
 
@@ -223,7 +224,7 @@ def test_collect_labels_a_card_bare_when_uevent_is_missing(tmp_path):
 
     (entry,) = collect_gpus(tmp_path)
 
-    assert entry == GpuEntry(label="GPU card0")
+    assert entry == GpuEntry(label="GPU card0", card="card0")
 
 
 def test_collect_labels_a_card_bare_when_uevent_has_no_driver_line(tmp_path):
@@ -284,7 +285,7 @@ def test_collect_takes_a_hwmon_with_only_a_fan_when_no_hwmon_has_a_temperature(t
 def test_collect_keeps_a_card_whose_device_directory_is_missing(tmp_path):
     (tmp_path / "card0").mkdir()
 
-    assert collect_gpus(tmp_path) == (GpuEntry(label="GPU card0"),)
+    assert collect_gpus(tmp_path) == (GpuEntry(label="GPU card0", card="card0"),)
 
 
 def test_collect_ignores_a_hwmon_that_is_a_file(tmp_path):
@@ -358,6 +359,8 @@ def test_collect_fills_an_nvidia_card_from_nvml_by_bus_id(tmp_path):
     assert entry == GpuEntry(
         label="GPU card1 (RTX 3060)",
         driver="nvidia",
+        card="card1",
+        bus_id="0000:02:00.0",
         busy_percent=7,
         vram_used=5 * 1024**3,
         vram_total=12 * 1024**3,
@@ -398,7 +401,9 @@ def test_collect_leaves_an_nvidia_card_bare_when_nvml_has_nothing(tmp_path):
 
     (entry,) = collect_gpus(tmp_path, nvml=FakeNvmlMetrics(None))
 
-    assert entry == GpuEntry(label="GPU card1 (nvidia)", driver="nvidia")
+    assert entry == GpuEntry(
+        label="GPU card1 (nvidia)", driver="nvidia", card="card1", bus_id="0000:02:00.0"
+    )
     assert format_gpu(entry) == "no metrics exposed by nvidia"
 
 
@@ -418,3 +423,36 @@ def test_collect_defaults_nvml_to_the_real_query():
     from harbor_console.nvml import nvml_metrics
 
     assert inspect.signature(collect_gpus).parameters["nvml"].default is nvml_metrics
+
+
+def test_collect_fills_card_with_the_node_name(tmp_path):
+    card(tmp_path, "card0")
+    card(tmp_path, "card2", driver="amdgpu")
+
+    assert [e.card for e in collect_gpus(tmp_path)] == ["card0", "card2"]
+
+
+def test_the_unavailable_sentinel_has_no_card(tmp_path):
+    (entry,) = collect_gpus(tmp_path / "missing")
+
+    assert entry.note == NOTE_UNAVAILABLE
+    assert entry.card == ""
+
+
+def test_collect_fills_bus_id_from_pci_slot_name_for_any_driver(tmp_path):
+    device = card(tmp_path, "card0", driver="amdgpu", gpu_busy_percent="12\n")
+    (device / "uevent").write_text(
+        "DRIVER=amdgpu\nPCI_ID=1002:6610\nPCI_SLOT_NAME=0000:03:00.0\n"
+    )
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.bus_id == "0000:03:00.0"
+
+
+def test_collect_leaves_bus_id_empty_without_pci_slot_name(tmp_path):
+    card(tmp_path, "card0", driver="radeon")
+
+    (entry,) = collect_gpus(tmp_path)
+
+    assert entry.bus_id == ""

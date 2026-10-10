@@ -47,6 +47,13 @@ class GpuEntry:
     """One GPU, with whatever its driver chose to say about it."""
 
     label: str
+    #: The DRM node (`card1`): the one name for a card that survives NVML
+    #: going quiet for a cycle, so it is what history is keyed by. Empty on
+    #: the `unavailable` sentinel, which is not a card.
+    card: str = ""
+    #: The `PCI_SLOT_NAME` from `device/uevent` (`0000:02:00.0`). Empty when
+    #: the device is not on PCI or `uevent` is unreadable.
+    bus_id: str = ""
     driver: str = ""
     busy_percent: int | None = None
     #: Bytes. Rendered only when both are known and total is non-zero.
@@ -187,8 +194,11 @@ def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
     uevent = _uevent(device)
     driver = uevent.get("DRIVER", "")
     sensor = _hwmon(device)
+    bus_id = uevent.get("PCI_SLOT_NAME", "")
     entry = GpuEntry(
         label=_label(node.name, driver),
+        card=node.name,
+        bus_id=bus_id,
         driver=driver,
         busy_percent=_read_int(device / "gpu_busy_percent"),
         vram_used=_read_int(device / "mem_info_vram_used"),
@@ -196,7 +206,6 @@ def _card_entry(node: Path, nvml: NvmlQuery) -> GpuEntry:
         temp_c=_temperature(sensor),
         fan_percent=_fan_percent(sensor),
     )
-    bus_id = uevent.get("PCI_SLOT_NAME")
     if driver != _NVIDIA or not bus_id:
         return entry
     metrics = nvml(bus_id)

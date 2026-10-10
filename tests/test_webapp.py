@@ -1,5 +1,5 @@
 import inspect
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import timezone as _tz
 from http.server import ThreadingHTTPServer
 
@@ -16,6 +16,7 @@ from harbor_console.checks import (
 from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINER
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.gpu import GpuEntry
+from harbor_console.gpu_history import GpuAverages, Sample, WindowAverage, read_history, write_history
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
@@ -620,3 +621,137 @@ def test_the_default_prober_publishes_to_the_verdict_path():
         inspect.signature(webapp.VerdictPublisher.__init__).parameters["path"].default
         is webapp.VERDICT_PATH
     )
+
+
+# --- GPU history ----------------------------------------------------------
+
+BUSY = GpuEntry(label="GPU card1 (RTX 3060)", card="card1", driver="nvidia", busy_percent=40)
+
+
+def test_collect_snapshot_hands_the_gpus_and_now_to_the_history_keeper():
+    seen = {}
+
+    def keeper(entries, now):
+        seen["entries"], seen["now"] = entries, now
+        return (GpuAverages("card1", ()),)
+
+    snapshot = collect(gpus=lambda: (BUSY,), history=keeper)
+
+    assert seen == {"entries": (BUSY,), "now": NOW}
+    assert snapshot.gpu_averages == (GpuAverages("card1", ()),)
+
+
+def test_collect_snapshot_defaults_to_no_history():
+    assert inspect.signature(webapp.collect_snapshot).parameters["history"].default is webapp.no_history
+    assert webapp.no_history((BUSY,), NOW) == ()
+    assert collect(gpus=lambda: (BUSY,)).gpu_averages == ()
+
+
+def test_the_starting_snapshot_has_no_averages():
+    assert webapp.starting_snapshot("hpz440", NOW).gpu_averages == ()
+
+
+def test_history_keeper_records_writes_and_returns_the_averages(tmp_path):
+    path = tmp_path / "gpu-history.json"
+    keeper = webapp.GpuHistoryKeeper(path)
+
+    result = keeper((BUSY,), NOW)
+
+    assert read_history(path) == {"card1": (Sample(NOW, 40),)}
+    assert [a.key for a in result] == ["card1"]
+    assert result[0].windows[0] == WindowAverage("1h", 3600, 40, 0)
+
+
+def test_history_keeper_loads_what_an_earlier_life_wrote(tmp_path):
+    path = tmp_path / "gpu-history.json"
+    earlier = NOW - timedelta(minutes=30)
+    write_history({"card1": (Sample(earlier, 20),)}, path)
+
+    result = webapp.GpuHistoryKeeper(path)((BUSY,), NOW)
+
+    assert result[0].windows[0] == WindowAverage("1h", 3600, 30, 30 * 60)
+    assert read_history(path) == {"card1": (Sample(earlier, 20), Sample(NOW, 40))}
+
+
+def test_history_keeper_starts_empty_when_the_file_is_missing_or_garbage(tmp_path):
+    path = tmp_path / "gpu-history.json"
+    path.write_text("{{{", encoding="utf-8")
+
+    result = webapp.GpuHistoryKeeper(path)((BUSY,), NOW)
+
+    assert result[0].windows[0].mean == 40
+    assert read_history(path) == {"card1": (Sample(NOW, 40),)}
+
+
+def test_history_keeper_reports_a_write_failure_once_per_distinct_error(tmp_path):
+    reported = []
+    keeper = webapp.GpuHistoryKeeper(tmp_path / "missing" / "gpu-history.json", report=reported.append)
+
+    keeper((BUSY,), NOW)
+    keeper((BUSY,), NOW + timedelta(seconds=30))
+
+    assert len(reported) == 1
+    assert "gpu-history.json" in reported[0]
+
+
+def test_history_keeper_reports_again_after_a_different_error(tmp_path):
+    reported = []
+    errors = iter([OSError("first"), OSError("second")])
+
+    def writer(_history, _path):
+        raise next(errors)
+
+    keeper = webapp.GpuHistoryKeeper(tmp_path / "gpu-history.json", writer=writer, report=reported.append)
+
+    keeper((BUSY,), NOW)
+    keeper((BUSY,), NOW)
+
+    assert len(reported) == 2
+
+
+def test_history_keeper_keeps_averaging_in_memory_while_the_disk_fails(tmp_path):
+    def writer(_history, _path):
+        raise OSError("read-only file system")
+
+    keeper = webapp.GpuHistoryKeeper(tmp_path / "gpu-history.json", writer=writer, report=lambda _m: None)
+
+    keeper((BUSY,), NOW)
+    result = keeper((GpuEntry(label="g", card="card1", busy_percent=60),), NOW + timedelta(seconds=30))
+
+    assert result[0].windows[0].mean == 50
+
+
+def test_history_keeper_reports_a_recurrence_after_the_disk_recovered(tmp_path):
+    reported = []
+    path = tmp_path / "gpu-history.json"
+    errors = iter([OSError("disk full"), None, OSError("disk full")])
+
+    def writer(history, _path):
+        error = next(errors)
+        if error is not None:
+            raise error
+        write_history(history, path)
+
+    keeper = webapp.GpuHistoryKeeper(path, writer=writer, report=reported.append)
+
+    keeper((BUSY,), NOW)
+    keeper((BUSY,), NOW)
+    keeper((BUSY,), NOW)
+
+    assert len(reported) == 2
+
+
+def test_history_keeper_defaults_to_the_state_directory_path():
+    from harbor_console.gpu_history import HISTORY_PATH
+
+    assert inspect.signature(webapp.GpuHistoryKeeper.__init__).parameters["path"].default is HISTORY_PATH
+
+
+def test_verdict_publisher_carries_the_averages(tmp_path):
+    path = tmp_path / "checks.json"
+    averages = (GpuAverages("card1", (WindowAverage("1h", 3600, 40, 0),)),)
+    snapshot = Snapshot(collected=datetime(2026, 9, 2, 1, 2, 3), metrics=METRICS, gpu_averages=averages)
+
+    webapp.VerdictPublisher(path)(snapshot)
+
+    assert read_verdict(path).gpus == averages

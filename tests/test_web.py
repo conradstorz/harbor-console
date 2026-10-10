@@ -12,6 +12,7 @@ from harbor_console.directory import (
     Row,
 )
 from harbor_console.gpu import GpuEntry
+from harbor_console.gpu_history import GpuAverages, WindowAverage
 from harbor_console.inventory import REACH_ANY, REACH_LOOPBACK, REACH_TAILNET, Entry
 from harbor_console.probe import Detail, Health
 from harbor_console.snapshot import Snapshot
@@ -553,3 +554,72 @@ def test_the_handler_judges_staleness_with_the_real_clock():
 
     assert status == 200
     assert b"PLATFORM BROKEN" in body
+
+
+AVERAGES = (
+    GpuAverages(
+        "card1",
+        (
+            WindowAverage("1h", 3600, 42, 3600),
+            WindowAverage("3h", 3 * 3600, 38, 3 * 3600),
+            WindowAverage("7h", 7 * 3600, 30, 7 * 3600),
+            WindowAverage("24h", 86400, 25, 86400),
+            WindowAverage("7d", 7 * 86400, 18, 2 * 86400),
+        ),
+    ),
+)
+KEYED_GPUS = (
+    GpuEntry(label="GPU card0 (radeon)", card="card0", driver="radeon", temp_c=35.0),
+    GpuEntry(label="GPU card1 (amdgpu)", card="card1", driver="amdgpu", busy_percent=12),
+)
+
+
+def test_page_shows_the_busy_averages_under_the_matching_card():
+    page = web.render_page(snapshot(gpus=KEYED_GPUS, gpu_averages=AVERAGES)).decode()
+
+    assert "<tr><td>GPU card1 (amdgpu)</td><td>busy 12%</td></tr>" in page
+    assert (
+        '<tr class="detail"><td>busy avg</td><td>1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)</td></tr>'
+        in page
+    )
+    assert page.index("GPU card1 (amdgpu)") < page.index("1h 42%")
+
+
+def test_page_matches_averages_by_bus_id():
+    gpus = (
+        GpuEntry(
+            label="GPU card1 (amdgpu)",
+            card="card1",
+            bus_id="0000:02:00.0",
+            driver="amdgpu",
+            busy_percent=12,
+        ),
+    )
+    averages = (GpuAverages("0000:02:00.0", (WindowAverage("1h", 3600, 42, 3600),)),)
+
+    page = web.render_page(snapshot(gpus=gpus, gpu_averages=averages)).decode()
+
+    assert "<tr><td>GPU card1 (amdgpu)</td><td>busy 12%</td></tr>" in page
+    assert '<tr class="detail"><td>busy avg</td><td>1h 42%</td></tr>' in page
+
+
+def test_page_says_not_reported_for_a_card_without_averages():
+    page = web.render_page(snapshot(gpus=KEYED_GPUS, gpu_averages=AVERAGES)).decode()
+    radeon = page.index("GPU card0 (radeon)")
+    amdgpu = page.index("GPU card1 (amdgpu)")
+
+    assert "<td>not reported</td>" in page[radeon:amdgpu]
+
+
+def test_page_gives_the_unavailable_sentinel_no_averages_row():
+    page = web.render_page(snapshot(gpus=(GpuEntry(label="GPU", note="unavailable"),))).decode()
+
+    assert "unavailable" in page
+    assert "busy avg" not in page
+
+
+def test_page_with_no_gpus_has_no_averages_row():
+    page = web.render_page(snapshot(probed=True, gpus=(), gpu_averages=AVERAGES)).decode()
+
+    assert "No GPU detected" in page
+    assert "busy avg" not in page

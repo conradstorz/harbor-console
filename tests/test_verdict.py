@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 
 from harbor_console.checks import STATE_FAILED, STATE_OK, Check
+from harbor_console.gpu_history import GpuAverages, WindowAverage
 from harbor_console.verdict import (
     VERDICT_PATH,
     Verdict,
@@ -20,6 +21,22 @@ VERDICT = Verdict(
         Check("docker", STATE_OK, "Docker answered"),
         Check("own-route", STATE_FAILED, "https://harbor.hpz440.ohr3023.org/ did not answer"),
     ),
+)
+
+AVERAGES = (
+    GpuAverages(
+        "card1",
+        (
+            WindowAverage("1h", 3600, 42, 3600),
+            WindowAverage("7d", 7 * 86400, None, 0),
+        ),
+    ),
+)
+WITH_GPUS = Verdict(
+    written=VERDICT.written,
+    hostname=VERDICT.hostname,
+    checks=VERDICT.checks,
+    gpus=AVERAGES,
 )
 
 
@@ -105,3 +122,76 @@ def test_read_with_the_default_path_degrades_when_the_file_is_missing():
     # The default must be a real Path: a PurePosixPath has no read_text and
     # would raise AttributeError here, which read_verdict does not catch.
     assert read_verdict() is None
+
+
+def test_round_trip_with_gpu_averages():
+    assert loads(dumps(WITH_GPUS)) == WITH_GPUS
+
+
+def test_dumps_writes_the_averages_as_plain_json():
+    payload = json.loads(dumps(WITH_GPUS))
+
+    assert payload["gpus"] == [
+        {
+            "key": "card1",
+            "windows": [
+                {"window": "1h", "seconds": 3600, "mean": 42, "covered_seconds": 3600},
+                {"window": "7d", "seconds": 604800, "mean": None, "covered_seconds": 0},
+            ],
+        }
+    ]
+
+
+def test_a_verdict_without_gpus_has_none():
+    assert VERDICT.gpus == ()
+    assert json.loads(dumps(VERDICT))["gpus"] == []
+
+
+def test_loads_treats_a_missing_gpus_key_as_empty():
+    """An older writer and a newer reader coexist across a deploy."""
+    payload = json.loads(dumps(VERDICT))
+    del payload["gpus"]
+
+    assert loads(json.dumps(payload)) == VERDICT
+
+
+@pytest.mark.parametrize(
+    "gpus",
+    [
+        "none",
+        [1],
+        [{"key": "card1"}],
+        [{"key": 1, "windows": []}],
+        [{"key": "card1", "windows": "x"}],
+        [{"key": "card1", "windows": [{"window": "1h"}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": "3600", "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": "1", "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": None}]}],
+        [{"key": "card1", "windows": [{"window": 1, "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": True, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "bogus", "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 7200, "mean": 1, "covered_seconds": 0}]}],
+        [
+            {
+                "key": "card1",
+                "windows": [
+                    {
+                        "window": "1h",
+                        "seconds": 10**400,
+                        "mean": 1,
+                        "covered_seconds": 0,
+                    }
+                ],
+            }
+        ],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 101, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": -1, "covered_seconds": 0}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": -1}]}],
+        [{"key": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": 3601}]}],
+    ],
+)
+def test_loads_returns_none_for_malformed_gpus(gpus):
+    payload = json.loads(dumps(VERDICT))
+    payload["gpus"] = gpus
+
+    assert loads(json.dumps(payload)) is None

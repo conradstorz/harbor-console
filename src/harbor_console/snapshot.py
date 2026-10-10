@@ -14,6 +14,7 @@ from harbor_console.checks import Check
 from harbor_console.directory import Finding, Row
 from harbor_console.docker import Container
 from harbor_console.gpu import GpuEntry
+from harbor_console.gpu_history import GpuAverages
 from harbor_console.inventory import Entry
 from harbor_console.probe import Health
 from harbor_console.storage import StorageEntry
@@ -57,6 +58,10 @@ class Snapshot:
     #: One entry per DRM card. Empty is a host with no GPU; `probed` is what
     #: distinguishes that from a cycle that has not run.
     gpus: tuple[GpuEntry, ...] = ()
+    #: The busy averages the prober keeps per card (ADR 22). Empty until
+    #: the first cycle, and empty for a card whose driver never reports a
+    #: busy percent.
+    gpu_averages: tuple[GpuAverages, ...] = ()
     #: The page probed at its own route through Traefik -- the path ADR 17
     #: and ADR 19 broke, and the one route the directory does not cover
     #: because the page is not a container. None when not attempted (no

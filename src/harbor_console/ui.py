@@ -18,6 +18,13 @@ from rich.text import Text
 
 from harbor_console.checks import STATE_FAILED, is_stale, platform_broken
 from harbor_console.gpu import GpuEntry, format_gpu
+from harbor_console.gpu_history import (
+    AVERAGES_LABEL,
+    NOT_REPORTED,
+    GpuAverages,
+    format_averages,
+    history_key,
+)
 from harbor_console.storage import StorageEntry, format_entry
 from harbor_console.verdict import Verdict
 
@@ -27,6 +34,8 @@ BANNER_ROWS = 3
 #: the headroom.
 BANNER_WIDTH = 80
 BANNER_STYLE = "bold white on red"
+#: Indented so it reads as belonging to the GPU row above it.
+AVERAGES_ROW_LABEL = f"  {AVERAGES_LABEL}"
 
 
 def build_banner(verdict: Verdict | None, now: datetime, missing_since: datetime) -> Text | None:
@@ -63,8 +72,10 @@ def build_dashboard(
     storage: tuple[StorageEntry, ...] = (),
     gpus: tuple[GpuEntry, ...] = (),
     banner: Text | None = None,
+    gpu_averages: tuple[GpuAverages, ...] = (),
 ) -> Panel | Group:
-    """Build a renderable dashboard panel from collected metrics, storage and GPUs."""
+    """Build a renderable dashboard panel from collected metrics, storage,
+    GPUs and the busy averages the status page reported for them."""
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("Metric", no_wrap=True)
     table.add_column("Value")
@@ -79,8 +90,13 @@ def build_dashboard(
     # An empty tuple is a host with no card, and that is a fact worth a row:
     # a blank where the GPU line should be reads as a render bug.
     if gpus:
+        by_key = {a.key: a for a in gpu_averages}
         for gpu in gpus:
             table.add_row(gpu.label, format_gpu(gpu))
+            key = history_key(gpu)
+            if key:
+                entry = by_key.get(key)
+                table.add_row(AVERAGES_ROW_LABEL, NOT_REPORTED if entry is None else format_averages(entry))
     else:
         table.add_row("GPU", "none detected")
     table.add_row("IPv4 address", str(metrics["ipv4_address"]))

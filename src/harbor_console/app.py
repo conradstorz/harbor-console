@@ -9,6 +9,7 @@ from datetime import datetime
 from rich.live import Live
 
 from harbor_console.gpu import GpuEntry, collect_gpus
+from harbor_console.gpu_history import GpuAverages
 from harbor_console.storage import StorageEntry, collect_storage
 from harbor_console.system import collect_system_metrics
 from harbor_console.ui import build_banner, build_dashboard
@@ -20,7 +21,13 @@ StorageCollector = Callable[[], tuple[StorageEntry, ...]]
 GpuCollector = Callable[[], tuple[GpuEntry, ...]]
 VerdictReader = Callable[[], Verdict | None]
 DashboardBuilder = Callable[
-    [dict[str, str | float | int], tuple[StorageEntry, ...], tuple[GpuEntry, ...], object],
+    [
+        dict[str, str | float | int],
+        tuple[StorageEntry, ...],
+        tuple[GpuEntry, ...],
+        object,
+        tuple[GpuAverages, ...],
+    ],
     object,
 ]
 
@@ -40,13 +47,17 @@ def run(
     The verdict is read from a file once per tick and never probed here:
     this loop runs at 1 Hz on tty1 and must never wait on a socket. A
     missing file is judged against when this loop started (`build_banner`).
+    The same read carries the GPU busy averages the prober keeps; the
+    console computes none of its own (ADR 22).
     """
     started = clock()
 
     def frame() -> object:
         now = clock()
-        banner = build_banner(verdict_reader(), now, started)
-        return renderer(collector(), storage_collector(), gpu_collector(), banner)
+        verdict = verdict_reader()
+        banner = build_banner(verdict, now, started)
+        averages = verdict.gpus if verdict is not None else ()
+        return renderer(collector(), storage_collector(), gpu_collector(), banner, averages)
 
     try:
         with Live(frame(), refresh_per_second=4, screen=True) as live:

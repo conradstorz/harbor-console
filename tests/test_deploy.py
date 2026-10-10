@@ -83,3 +83,15 @@ def test_the_installer_ends_with_the_platform_checks():
     assert text.index("rm -f /run/harbor-console/checks.json") < text.index(
         "systemctl restart harbor-console-web.service"
     )
+
+
+def test_the_web_unit_owns_a_state_directory_for_the_gpu_history():
+    text = (REPO / "deploy" / "harbor-console-web.service").read_text(encoding="utf-8")
+
+    assert "StateDirectory=harbor-console" in text
+
+
+def test_uninstall_removes_the_state_directory():
+    text = (REPO / "deploy" / "uninstall.sh").read_text(encoding="utf-8")
+
+    assert "/var/lib/harbor-console" in text
