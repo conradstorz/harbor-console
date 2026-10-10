@@ -105,7 +105,9 @@ the file it already reads.
   history, and the next cycle starts it fresh. Nothing is reported: there is
   nothing an operator could do about it, and the write path reports its own
   failures.
-- `uninstall.sh` removes `/var/lib/harbor-console`.
+- `uninstall.sh --purge` removes `/var/lib/harbor-console`, as it does the
+  install directory and the `harbor` user; a plain uninstall keeps the week
+  of history for a reinstall.
 
 ## Averaging rules
 
@@ -130,9 +132,10 @@ the file it already reads.
     coverage.
   - Coverage is appended in parentheses when `covered_seconds` is under 95%
     of the window: minutes under an hour (`40m`), whole hours under a day
-    (`5h`), days otherwise (`2d`), each `floor`ed. The very first cycle has
-    one sample at `now`, so every window shows `(0m)`; accepted, it lasts
-    one cycle.
+    (`5h`), days otherwise (`2d`), each `floor`ed. A fresh history flags
+    every window for its first 57 minutes (95% of an hour), and two or more
+    windows for its first day; the Width paragraph below describes what
+    that costs.
   - Width. Unflagged, the row is at most 48 cells (`1h 100% · 3h 100% ·
     7h 100% · 24h 100% · 7d 100%`). With only the 7 d window flagged, the
     state the row is in from one day after a fresh history until the week

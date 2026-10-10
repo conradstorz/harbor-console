@@ -65,3 +65,6 @@ Busy percent only. The other GPU metrics stay instantaneous.
   a disk write per second in the console); in-memory history (no process
   lives a week); downsampling (20k integers a week is small, and a plain
   mean over plain samples is the rule anyone can check by hand).
+- `uninstall.sh` leaves the history in place unless asked to purge, the same
+  as the install directory and the service user, so a reinstall does not
+  start from an empty week.

@@ -18,7 +18,7 @@ from rich.text import Text
 
 from harbor_console.checks import STATE_FAILED, is_stale, platform_broken
 from harbor_console.gpu import GpuEntry, format_gpu
-from harbor_console.gpu_history import GpuAverages, format_averages
+from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, GpuAverages, format_averages
 from harbor_console.storage import StorageEntry, format_entry
 from harbor_console.verdict import Verdict
 
@@ -29,9 +29,7 @@ BANNER_ROWS = 3
 BANNER_WIDTH = 80
 BANNER_STYLE = "bold white on red"
 #: Indented so it reads as belonging to the GPU row above it.
-AVERAGES_LABEL = "  busy avg"
-#: No verdict, or a verdict without this card: the prober has not said.
-NOT_REPORTED = "not reported"
+AVERAGES_ROW_LABEL = f"  {AVERAGES_LABEL}"
 
 
 def build_banner(verdict: Verdict | None, now: datetime, missing_since: datetime) -> Text | None:
@@ -91,7 +89,7 @@ def build_dashboard(
             table.add_row(gpu.label, format_gpu(gpu))
             if gpu.card:
                 entry = by_card.get(gpu.card)
-                table.add_row(AVERAGES_LABEL, NOT_REPORTED if entry is None else format_averages(entry))
+                table.add_row(AVERAGES_ROW_LABEL, NOT_REPORTED if entry is None else format_averages(entry))
     else:
         table.add_row("GPU", "none detected")
     table.add_row("IPv4 address", str(metrics["ipv4_address"]))

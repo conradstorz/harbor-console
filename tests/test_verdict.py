@@ -168,6 +168,7 @@ def test_loads_treats_a_missing_gpus_key_as_empty():
         [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": "1", "covered_seconds": 0}]}],
         [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": 1, "covered_seconds": None}]}],
         [{"card": "card1", "windows": [{"window": 1, "seconds": 3600, "mean": 1, "covered_seconds": 0}]}],
+        [{"card": "card1", "windows": [{"window": "1h", "seconds": 3600, "mean": True, "covered_seconds": 0}]}],
     ],
 )
 def test_loads_returns_none_for_malformed_gpus(gpus):

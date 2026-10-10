@@ -40,6 +40,11 @@ FULL_COVERAGE = 0.95
 #: What a window with no samples shows in place of a percentage.
 NO_MEAN = "—"
 
+#: The averages row's label. Shared by both renderers.
+AVERAGES_LABEL = "busy avg"
+#: What a card with no verdict entry shows in place of averages.
+NOT_REPORTED = "not reported"
+
 #: Under the web unit's `StateDirectory`: the one place this project keeps
 #: anything across a restart or a reboot (ADR 22). No flag moves it.
 HISTORY_PATH = Path("/var/lib/harbor-console/gpu-history.json")
@@ -176,12 +181,14 @@ def loads(text: str) -> History:
     cycle starts a new one."""
     try:
         payload = json.loads(text)
+        if not isinstance(payload, dict):
+            return {}
         cards = payload["cards"]
-        if not isinstance(payload, dict) or not isinstance(cards, dict):
+        if not isinstance(cards, dict):
             return {}
         history: History = {}
         for card, pairs in cards.items():
-            if not isinstance(card, str) or not isinstance(pairs, list):
+            if not isinstance(pairs, list):
                 return {}
             samples = []
             for pair in pairs:

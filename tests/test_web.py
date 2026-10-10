@@ -578,7 +578,10 @@ def test_page_shows_the_busy_averages_under_the_matching_card():
     page = web.render_page(snapshot(gpus=KEYED_GPUS, gpu_averages=AVERAGES)).decode()
 
     assert "<tr><td>GPU card1 (amdgpu)</td><td>busy 12%</td></tr>" in page
-    assert "<tr><td>  busy avg</td><td>1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)</td></tr>" in page
+    assert (
+        '<tr class="detail"><td>busy avg</td><td>1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)</td></tr>'
+        in page
+    )
     assert page.index("GPU card1 (amdgpu)") < page.index("1h 42%")
 
 

@@ -721,23 +721,24 @@ def test_history_keeper_keeps_averaging_in_memory_while_the_disk_fails(tmp_path)
     assert result[0].windows[0].mean == 50
 
 
-def test_history_keeper_reports_nothing_once_the_disk_recovers(tmp_path):
+def test_history_keeper_reports_a_recurrence_after_the_disk_recovered(tmp_path):
     reported = []
-    errors = iter([OSError("first")])
+    path = tmp_path / "gpu-history.json"
+    errors = iter([OSError("disk full"), None, OSError("disk full")])
 
-    def writer(history, path):
-        try:
-            raise next(errors)
-        except StopIteration:
-            write_history(history, path)
+    def writer(history, _path):
+        error = next(errors)
+        if error is not None:
+            raise error
+        write_history(history, path)
 
-    keeper = webapp.GpuHistoryKeeper(tmp_path / "gpu-history.json", writer=writer, report=reported.append)
+    keeper = webapp.GpuHistoryKeeper(path, writer=writer, report=reported.append)
 
     keeper((BUSY,), NOW)
     keeper((BUSY,), NOW)
     keeper((BUSY,), NOW)
 
-    assert len(reported) == 1
+    assert len(reported) == 2
 
 
 def test_history_keeper_defaults_to_the_state_directory_path():
