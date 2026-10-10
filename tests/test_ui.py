@@ -2,6 +2,7 @@ from rich.console import Console
 
 import harbor_console.system as system
 from harbor_console.gpu import GpuEntry
+from harbor_console.gpu_history import GpuAverages, WindowAverage
 from harbor_console.storage import StorageEntry
 from harbor_console.ui import build_dashboard
 
@@ -18,10 +19,10 @@ METRICS = {
 }
 
 
-def render(metrics, storage=(), gpus=()):
+def render(metrics, storage=(), gpus=(), gpu_averages=()):
     """The panel as text. Wide enough that no cell wraps."""
     console = Console(width=120, record=True)
-    console.print(build_dashboard(metrics, storage, gpus))
+    console.print(build_dashboard(metrics, storage, gpus, None, gpu_averages))
     return console.export_text()
 
 
@@ -158,6 +159,98 @@ def test_dashboard_keeps_the_fullest_gpu_row_on_one_line_at_80_columns():
 
     assert any("GPU card1 (RTX 3060)" in line and "fan 100%" in line for line in lines)
     assert any("Docker containers" in line and "17" in line for line in lines)
+
+
+AVERAGES = (
+    GpuAverages(
+        "card1",
+        (
+            WindowAverage("1h", 3600, 42, 3600),
+            WindowAverage("3h", 3 * 3600, 38, 3 * 3600),
+            WindowAverage("7h", 7 * 3600, 30, 7 * 3600),
+            WindowAverage("24h", 86400, 25, 86400),
+            WindowAverage("7d", 7 * 86400, 18, 2 * 86400),
+        ),
+    ),
+)
+
+
+def test_dashboard_shows_the_busy_averages_under_the_matching_card():
+    gpus = (GpuEntry(label="GPU card1 (RTX 3060)", card="card1", driver="nvidia", busy_percent=7),)
+
+    lines = render(METRICS, (), gpus, AVERAGES).splitlines()
+    gpu_row = next(i for i, line in enumerate(lines) if "GPU card1 (RTX 3060)" in line)
+
+    assert "busy avg" in lines[gpu_row + 1]
+    assert "1h 42% · 3h 38% · 7h 30% · 24h 25% · 7d 18% (2d)" in lines[gpu_row + 1]
+
+
+def test_dashboard_says_not_reported_for_a_card_without_averages():
+    gpus = (GpuEntry(label="GPU card0 (radeon)", card="card0", driver="radeon", temp_c=35.0),)
+
+    lines = render(METRICS, (), gpus, AVERAGES).splitlines()
+    gpu_row = next(i for i, line in enumerate(lines) if "GPU card0 (radeon)" in line)
+
+    assert "busy avg" in lines[gpu_row + 1]
+    assert "not reported" in lines[gpu_row + 1]
+
+
+def test_dashboard_says_not_reported_when_there_is_no_verdict_at_all():
+    gpus = (GpuEntry(label="GPU card1 (RTX 3060)", card="card1", driver="nvidia", busy_percent=7),)
+
+    page = render(METRICS, (), gpus)
+
+    assert "busy avg" in page
+    assert "not reported" in page
+
+
+def test_dashboard_gives_the_unavailable_sentinel_no_averages_row():
+    gpus = (GpuEntry(label="GPU", note="unavailable"),)
+
+    page = render(METRICS, (), gpus, AVERAGES)
+
+    assert "unavailable" in page
+    assert "busy avg" not in page
+
+
+def test_dashboard_gives_no_averages_row_when_there_are_no_gpus():
+    page = render(METRICS, (), (), AVERAGES)
+
+    assert "none detected" in page
+    assert "busy avg" not in page
+
+
+def test_dashboard_keeps_the_steady_averages_row_on_one_line_at_80_columns():
+    gpus = (GpuEntry(label="GPU card1 (RTX 3060)", card="card1", driver="nvidia", busy_percent=100),)
+    full = (
+        GpuAverages(
+            "card1",
+            (
+                WindowAverage("1h", 3600, 100, 3600),
+                WindowAverage("3h", 3 * 3600, 100, 3 * 3600),
+                WindowAverage("7h", 7 * 3600, 100, 7 * 3600),
+                WindowAverage("24h", 86400, 100, 86400),
+                WindowAverage("7d", 7 * 86400, 100, 6 * 86400),
+            ),
+        ),
+    )
+
+    console = Console(width=80, record=True)
+    console.print(build_dashboard(METRICS, (), gpus, None, full))
+    lines = console.export_text().splitlines()
+
+    assert any("busy avg" in line and "7d 100% (6d)" in line for line in lines)
+
+
+def test_dashboard_without_averages_renders_as_before():
+    gpus = (GpuEntry(label="GPU card0 (radeon)", card="card0", driver="radeon", temp_c=35.0),)
+    console = Console(width=120, record=True)
+
+    console.print(build_dashboard(METRICS, (), gpus))
+    page = console.export_text()
+
+    assert "GPU card0 (radeon)" in page
+    assert "busy avg" in page
 
 
 from datetime import datetime, timedelta

@@ -23,7 +23,7 @@ def test_run_updates_dashboard_and_exits_cleanly(monkeypatch):
         calls["count"] += 1
         return {"tick": calls["count"]}
 
-    def renderer(metrics, _storage, _gpus, _banner):
+    def renderer(metrics, _storage, _gpus, _banner, _averages):
         return f"render-{metrics['tick']}"
 
     def fake_sleep(_interval):
@@ -47,7 +47,7 @@ def test_run_updates_dashboard_and_exits_cleanly(monkeypatch):
 def test_run_passes_storage_to_the_renderer(monkeypatch):
     seen = {}
 
-    def renderer(metrics, storage, _gpus, _banner):
+    def renderer(metrics, storage, _gpus, _banner, _averages):
         seen["storage"] = storage
         return "rendered"
 
@@ -71,7 +71,7 @@ def test_run_passes_storage_to_the_renderer(monkeypatch):
 def test_run_passes_gpus_to_the_renderer(monkeypatch):
     seen = {}
 
-    def renderer(metrics, _storage, gpus, _banner):
+    def renderer(metrics, _storage, gpus, _banner, _averages):
         seen["gpus"] = gpus
         return "rendered"
 
@@ -109,7 +109,7 @@ def test_run_reads_the_verdict_every_tick_and_passes_a_banner(monkeypatch):
     now = datetime(2026, 10, 9, 17, 21, 46)
     broken = Verdict(now, "h", (Check("docker", STATE_FAILED, "could not be read"),))
 
-    def renderer(_metrics, _storage, _gpus, banner):
+    def renderer(_metrics, _storage, _gpus, banner, _averages):
         seen["banner"] = banner
         return "rendered"
 
@@ -134,7 +134,7 @@ def test_run_reads_the_verdict_every_tick_and_passes_a_banner(monkeypatch):
 def test_run_passes_no_banner_when_healthy(monkeypatch):
     seen = {}
 
-    def renderer(_metrics, _storage, _gpus, banner):
+    def renderer(_metrics, _storage, _gpus, banner, _averages):
         seen["banner"] = banner
         return "rendered"
 
@@ -162,3 +162,58 @@ def test_run_defaults_to_the_real_verdict_reader():
     from harbor_console.verdict import read_verdict
 
     assert inspect.signature(app.run).parameters["verdict_reader"].default is read_verdict
+
+
+def test_run_passes_the_verdicts_averages_to_the_renderer(monkeypatch):
+    from harbor_console.gpu_history import GpuAverages
+
+    seen = {}
+    now = datetime(2026, 10, 9, 17, 21, 46)
+    averages = (GpuAverages("card1", ()),)
+    verdict = Verdict(now, "h", (), gpus=averages)
+
+    def renderer(_metrics, _storage, _gpus, _banner, gpu_averages):
+        seen["averages"] = gpu_averages
+        return "rendered"
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "Live", DummyLive)
+
+    app.run(
+        collector=lambda: {"tick": 1},
+        renderer=renderer,
+        sleep=fake_sleep,
+        storage_collector=lambda: (),
+        gpu_collector=lambda: (),
+        verdict_reader=lambda: verdict,
+        clock=lambda: now,
+    )
+
+    assert seen["averages"] == averages
+
+
+def test_run_passes_no_averages_without_a_verdict(monkeypatch):
+    seen = {}
+
+    def renderer(_metrics, _storage, _gpus, _banner, gpu_averages):
+        seen["averages"] = gpu_averages
+        return "rendered"
+
+    def fake_sleep(_interval):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "Live", DummyLive)
+
+    app.run(
+        collector=lambda: {"tick": 1},
+        renderer=renderer,
+        sleep=fake_sleep,
+        storage_collector=lambda: (),
+        gpu_collector=lambda: (),
+        verdict_reader=lambda: None,
+        clock=lambda: datetime(2026, 10, 9, 17, 21, 46),
+    )
+
+    assert seen["averages"] == ()
