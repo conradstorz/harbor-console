@@ -227,7 +227,7 @@ def test_format_shows_the_span_in_minutes_hours_or_days_floored():
         (window("24h", 86400, 1, covered=3600), "24h 1% (1h)"),
         (window("7d", 7 * 86400, 1, covered=23 * 3600 + 3599), "7d 1% (23h)"),
         (window("7d", 7 * 86400, 1, covered=86400), "7d 1% (1d)"),
-        (window("7d", 7 * 86400, 1, covered=6 * 86400), "7d 1% (6d)"),
+        (window("7d", 7 * 86400, 1, covered=574559), "7d 1% (6d)"),
     ]
 
     for w, expected in cases:
