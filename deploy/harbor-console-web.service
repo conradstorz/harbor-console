@@ -32,9 +32,10 @@ PrivateTmp=yes
 # service stopping.
 RuntimeDirectory=harbor-console
 RuntimeDirectoryPreserve=yes
-# /var/lib/harbor-console, owned by harbor: the GPU busy history the
-# prober keeps for a week (ADR 22). The one thing this project keeps
-# across a restart or a reboot; the prober is its only writer.
+# /var/lib/harbor-console, owned by harbor: the GPU busy history and the
+# memory history (ADR 22, ADR 23) the prober keeps for a week. The only
+# things this project keeps across a restart or a reboot; the prober is
+# their only writer.
 StateDirectory=harbor-console
 StandardOutput=journal
 StandardError=journal
