@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from harbor_console.gpu_history import WINDOWS
 from harbor_console.memory_pressure import MemoryReading
 
 #: Samples older than this are dropped on every record.
@@ -153,3 +154,150 @@ def write_history(history: History, path: Path = HISTORY_PATH) -> None:
     temp = path.with_name(f".{path.name}.tmp")
     temp.write_text(dumps(history), encoding="utf-8")
     os.replace(temp, path)
+
+
+EVENT_LOW = "low"
+EVENT_OOM = "oom"
+
+
+@dataclass(frozen=True)
+class MemoryWindow:
+    """One window. `None` is unknown: no sample, or no pair of consecutive
+    samples that both read that counter. `covered_seconds` is `now` minus
+    the oldest sample inside the window, as in `gpu_history`."""
+
+    window: str
+    seconds: int
+    min_available: float | None
+    low_episodes: int
+    stall_some_seconds: float | None
+    stall_full_seconds: float | None
+    oom_kills: int | None
+    covered_seconds: int
+
+
+@dataclass(frozen=True)
+class MemoryEvent:
+    """A low episode (`at` its first sample, `duration_seconds` to its last,
+    `count` 1) or a cycle whose OOM counter rose (`at` that sample,
+    `count` the kills, `min_available` None)."""
+
+    kind: str
+    at: datetime
+    duration_seconds: int
+    min_available: float | None
+    count: int
+
+
+@dataclass(frozen=True)
+class MemorySummary:
+    windows: tuple[MemoryWindow, ...]
+    events: tuple[MemoryEvent, ...]
+
+
+def summarize(history: History, now: datetime) -> MemorySummary:
+    episodes = _episodes(history)
+    some = _deltas(history, "stall_some_us")
+    full = _deltas(history, "stall_full_us")
+    ooms = _deltas(history, "oom_kills")
+    windows = tuple(
+        _window(history, episodes, some, full, ooms, name, seconds, now) for name, seconds in WINDOWS
+    )
+    week_start = now - timedelta(seconds=WINDOWS[-1][1])
+    events = [
+        MemoryEvent(
+            EVENT_LOW,
+            run[0].at,
+            int((run[-1].at - run[0].at).total_seconds()),
+            min(s.available_percent for s in run if s.available_percent is not None),
+            1,
+        )
+        for run in episodes
+        if any(week_start <= s.at <= now for s in run)
+    ]
+    events += [
+        MemoryEvent(EVENT_OOM, when, 0, None, kills)
+        for when, kills in ooms
+        if kills > 0 and week_start <= when <= now
+    ]
+    events.sort(key=lambda e: e.at, reverse=True)
+    return MemorySummary(windows, tuple(events[:RECENT_EVENTS]))
+
+
+def _is_low(sample: Sample) -> bool:
+    return sample.available_percent is not None and sample.available_percent < LOW_AVAILABLE_PERCENT
+
+
+def _episodes(history: History) -> list[tuple[Sample, ...]]:
+    """Maximal runs of consecutive low samples no more than `MAX_SAMPLE_GAP`
+    apart. A sample that is not low, or did not read, ends a run."""
+    runs: list[tuple[Sample, ...]] = []
+    current: list[Sample] = []
+    for sample in history:
+        if not _is_low(sample):
+            if current:
+                runs.append(tuple(current))
+            current = []
+        elif current and sample.at - current[-1].at <= MAX_SAMPLE_GAP:
+            current.append(sample)
+        else:
+            if current:
+                runs.append(tuple(current))
+            current = [sample]
+    if current:
+        runs.append(tuple(current))
+    return runs
+
+
+def _deltas(history: History, field: str) -> list[tuple[datetime, int]]:
+    """Per pair of consecutive samples that both read `field`: what the
+    counter added between them, credited at the later sample. A reboot
+    (boots further apart than `BOOT_TOLERANCE`, or a counter that went
+    down) restarts the counter from zero, so the delta is the later value."""
+    deltas = []
+    for earlier, later in zip(history, history[1:]):
+        before, after = getattr(earlier, field), getattr(later, field)
+        if before is None or after is None:
+            continue
+        rebooted = after < before or (
+            earlier.boot is not None
+            and later.boot is not None
+            and abs(later.boot - earlier.boot) > BOOT_TOLERANCE
+        )
+        deltas.append((later.at, after if rebooted else after - before))
+    return deltas
+
+
+def _window(
+    history: History,
+    episodes: list[tuple[Sample, ...]],
+    some: list[tuple[datetime, int]],
+    full: list[tuple[datetime, int]],
+    ooms: list[tuple[datetime, int]],
+    name: str,
+    seconds: int,
+    now: datetime,
+) -> MemoryWindow:
+    start = now - timedelta(seconds=seconds)
+
+    def inside(when: datetime) -> bool:
+        return start <= when <= now
+
+    samples = [s for s in history if inside(s.at)]
+    available = [s.available_percent for s in samples if s.available_percent is not None]
+
+    def total(deltas: list[tuple[datetime, int]]) -> int | None:
+        picked = [d for when, d in deltas if inside(when)]
+        return sum(picked) if picked else None
+
+    some_us, full_us = total(some), total(full)
+    return MemoryWindow(
+        window=name,
+        seconds=seconds,
+        min_available=min(available) if available else None,
+        low_episodes=sum(1 for run in episodes if any(inside(s.at) for s in run)),
+        stall_some_seconds=None if some_us is None else some_us / 1_000_000,
+        stall_full_seconds=None if full_us is None else full_us / 1_000_000,
+        oom_kills=total(ooms),
+        covered_seconds=int((now - min(s.at for s in samples)).total_seconds()) if samples else 0,
+    )
