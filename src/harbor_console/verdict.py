@@ -25,6 +25,7 @@ from pathlib import Path
 
 from harbor_console.checks import STATE_FAILED, STATE_OK, STATE_UNKNOWN, Check
 from harbor_console.gpu_history import WINDOWS, GpuAverages, WindowAverage
+from harbor_console.memory_history import MemorySummary, summary_from_json, summary_to_json
 
 _VALID_STATES = (STATE_OK, STATE_FAILED, STATE_UNKNOWN)
 
@@ -35,12 +36,14 @@ VERDICT_PATH = Path("/run/harbor-console/checks.json")
 class Verdict:
     """One cycle's checks, stamped with when the prober wrote them, and the
     GPU busy averages the prober keeps (ADR 22): the console shows them
-    under each card and computes nothing."""
+    under each card and computes nothing, and the memory history summary
+    (ADR 23), which the console turns into one line."""
 
     written: datetime
     hostname: str
     checks: tuple[Check, ...]
     gpus: tuple[GpuAverages, ...] = ()
+    memory: MemorySummary | None = None
 
 
 def dumps(verdict: Verdict) -> str:
@@ -66,6 +69,7 @@ def dumps(verdict: Verdict) -> str:
                 }
                 for g in verdict.gpus
             ],
+            "memory": None if verdict.memory is None else summary_to_json(verdict.memory),
         },
         indent=2,
     )
@@ -99,9 +103,11 @@ def loads(text: str) -> Verdict | None:
             checks.append(Check(name=name, state=state, reason=reason))
         checks = tuple(checks)
         gpus = _load_gpus(payload.get("gpus", []))
-    except (KeyError, TypeError, ValueError):
+        raw_memory = payload.get("memory")
+        memory = None if raw_memory is None else summary_from_json(raw_memory)
+    except (KeyError, TypeError, ValueError, OverflowError):
         return None
-    return Verdict(written=written, hostname=hostname, checks=checks, gpus=gpus)
+    return Verdict(written=written, hostname=hostname, checks=checks, gpus=gpus, memory=memory)
 
 
 def _load_gpus(raw: object) -> tuple[GpuAverages, ...]:

@@ -1,10 +1,12 @@
 import json
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 
 from harbor_console.checks import STATE_FAILED, STATE_OK, Check
-from harbor_console.gpu_history import GpuAverages, WindowAverage
+from harbor_console.gpu_history import WINDOWS, GpuAverages, WindowAverage
+from harbor_console.memory_history import EVENT_OOM, MemoryEvent, MemorySummary, MemoryWindow
 from harbor_console.verdict import (
     VERDICT_PATH,
     Verdict,
@@ -194,4 +196,45 @@ def test_loads_returns_none_for_malformed_gpus(gpus):
     payload = json.loads(dumps(VERDICT))
     payload["gpus"] = gpus
 
+    assert loads(json.dumps(payload)) is None
+
+
+# Every window, in WINDOWS order: summary_from_json rejects anything else.
+WITH_MEMORY = replace(
+    VERDICT,
+    memory=MemorySummary(
+        tuple(
+            MemoryWindow(name, seconds, 6.2, 1, 3.5, 1.25, 0, seconds)
+            for name, seconds in WINDOWS
+        ),
+        (MemoryEvent(EVENT_OOM, VERDICT.written - timedelta(minutes=5), 0, None, 1),),
+    ),
+)
+
+
+def test_round_trip_with_memory():
+    assert loads(dumps(WITH_MEMORY)) == WITH_MEMORY
+
+
+def test_no_memory_is_written_as_null_and_read_back_as_none():
+    payload = json.loads(dumps(VERDICT))
+    assert payload["memory"] is None
+    assert loads(dumps(VERDICT)).memory is None
+
+
+def test_a_verdict_without_the_memory_key_still_loads():
+    payload = json.loads(dumps(VERDICT))
+    del payload["memory"]
+    assert loads(json.dumps(payload)) == VERDICT
+
+
+def test_malformed_memory_makes_the_whole_verdict_none():
+    payload = json.loads(dumps(WITH_MEMORY))
+    payload["memory"]["windows"][0]["low_episodes"] = "many"
+    assert loads(json.dumps(payload)) is None
+
+
+def test_an_absurdly_large_integer_in_memory_makes_the_verdict_none():
+    payload = json.loads(dumps(WITH_MEMORY))
+    payload["memory"]["windows"][0]["stall_full_seconds"] = int("9" * 400)
     assert loads(json.dumps(payload)) is None
