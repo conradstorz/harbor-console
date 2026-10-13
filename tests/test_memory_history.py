@@ -2,17 +2,27 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from harbor_console.memory_history import (
     EVENT_LOW,
     EVENT_OOM,
     RETENTION,
     MemoryEvent,
+    MemorySummary,
+    MemoryWindow,
     Sample,
     dumps,
+    format_console_line,
+    format_duration,
+    format_event,
     loads,
     read_history,
     record,
     summarize,
+    summary_from_json,
+    summary_to_json,
+    window_cells,
     write_history,
 )
 from harbor_console.memory_pressure import MemoryReading
@@ -203,3 +213,112 @@ def test_events_are_newest_first_and_capped():
     assert len(events) == 5
     assert [e.at for e in events] == sorted((e.at for e in events), reverse=True)
     assert events[0].at == at(0)
+
+
+WEEK = 7 * 86400
+
+
+def full_week(**overrides) -> MemoryWindow:
+    values = dict(
+        window="7d", seconds=WEEK, min_available=6.2, low_episodes=3,
+        stall_some_seconds=30.0, stall_full_seconds=12.4, oom_kills=1, covered_seconds=WEEK,
+    )
+    values.update(overrides)
+    return MemoryWindow(**values)
+
+
+def summary_with(week: MemoryWindow, events=()) -> MemorySummary:
+    others = tuple(
+        MemoryWindow(name, secs, None, 0, None, None, None, 0)
+        for name, secs in [("1h", 3600), ("3h", 10800), ("7h", 25200), ("24h", 86400)]
+    )
+    return MemorySummary(others + (week,), tuple(events))
+
+
+def test_format_duration_units():
+    assert [format_duration(s) for s in (0, 12.4, 59, 60, 3599, 3600, 86399, 86400, 200000)] == [
+        "0s", "12s", "59s", "1m", "59m", "1h", "23h", "1d", "2d",
+    ]
+
+
+def test_console_line_with_an_event():
+    event = MemoryEvent(EVENT_LOW, NOW - timedelta(hours=2), 600, 6.2, 1)
+    assert format_console_line(summary_with(full_week(), [event]), NOW) == (
+        "7d: 3 low · last 2h ago · stall 12s · oom 1"
+    )
+
+
+def test_console_line_without_events_omits_last():
+    week = full_week(low_episodes=0, stall_full_seconds=0.0, oom_kills=0)
+    assert format_console_line(summary_with(week), NOW) == "7d: 0 low · stall 0s · oom 0"
+
+
+def test_console_line_without_a_clock_omits_last():
+    event = MemoryEvent(EVENT_OOM, NOW, 0, None, 1)
+    assert "last" not in format_console_line(summary_with(full_week(), [event]), None)
+
+
+def test_console_line_unknown_counters_are_dashes():
+    week = full_week(stall_full_seconds=None, oom_kills=None)
+    assert format_console_line(summary_with(week), NOW) == "7d: 3 low · stall — · oom —"
+
+
+def test_console_line_flags_a_partly_covered_week():
+    week = full_week(covered_seconds=2 * 86400 + 5)
+    assert format_console_line(summary_with(week), NOW).startswith("7d (2d): ")
+
+
+def test_console_line_never_reports_a_negative_age():
+    event = MemoryEvent(EVENT_OOM, NOW + timedelta(minutes=5), 0, None, 1)
+    assert "last 0s ago" in format_console_line(summary_with(full_week(), [event]), NOW)
+
+
+def test_fullest_console_line_fits_the_value_column():
+    week = full_week(low_episodes=99, stall_full_seconds=3599, oom_kills=99, covered_seconds=6 * 86400 + 1)
+    event = MemoryEvent(EVENT_LOW, NOW - timedelta(hours=23, minutes=59), 0, 1.0, 1)
+    line = format_console_line(summary_with(week, [event]), NOW)
+    assert line == "7d (6d): 99 low · last 23h ago · stall 59m · oom 99"
+    assert len(line) <= 54
+
+
+def test_window_cells():
+    assert window_cells(full_week()) == ("7d", "6.2%", "3", "30s", "12s", "1")
+    assert window_cells(MemoryWindow("1h", 3600, None, 0, None, None, None, 0)) == (
+        "1h", "—", "0", "—", "—", "—",
+    )
+    assert window_cells(MemoryWindow("1h", 3600, 50.0, 0, 0.0, 0.0, 0, 1200))[0] == "1h (20m)"
+
+
+def test_format_event():
+    low = MemoryEvent(EVENT_LOW, datetime(2026, 10, 13, 14, 2), 720, 6.2, 1)
+    oom = MemoryEvent(EVENT_OOM, datetime(2026, 10, 13, 14, 14), 0, None, 1)
+    assert format_event(low) == "2026-10-13 14:02 low 12m, min 6.2%"
+    assert format_event(oom) == "2026-10-13 14:14 oom ×1"
+
+
+def test_summary_json_round_trip():
+    events = [
+        MemoryEvent(EVENT_LOW, NOW - timedelta(hours=2), 600, 6.2, 1),
+        MemoryEvent(EVENT_OOM, NOW, 0, None, 2),
+    ]
+    summary = summary_with(full_week(), events)
+    assert summary_from_json(summary_to_json(summary)) == summary
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d.update(windows="x"),
+        lambda d: d["windows"][0].update(window="2h"),
+        lambda d: d["windows"][0].update(low_episodes=-1),
+        lambda d: d["windows"][0].update(min_available=120),
+        lambda d: d["windows"][0].update(oom_kills=True),
+        lambda d: d["events"].append({"kind": "boom", "at": NOW.isoformat(), "duration_seconds": 0, "min_available": None, "count": 1}),
+        lambda d: d.pop("events"),
+    ],
+)
+def test_summary_from_json_rejects_malformed(mutate):
+    raw = summary_to_json(summary_with(full_week()))
+    mutate(raw)
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        summary_from_json(raw)

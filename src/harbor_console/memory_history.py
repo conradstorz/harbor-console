@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from harbor_console.gpu_history import WINDOWS
+from harbor_console.gpu_history import FULL_COVERAGE, NO_MEAN, WINDOWS
 from harbor_console.memory_pressure import MemoryReading
 
 #: Samples older than this are dropped on every record.
@@ -301,3 +301,165 @@ def _window(
         oom_kills=total(ooms),
         covered_seconds=int((now - min(s.at for s in samples)).total_seconds()) if samples else 0,
     )
+
+
+#: The console row's label.
+CONSOLE_LABEL = "Mem events"
+#: The page table's columns, in `window_cells` order.
+WINDOW_HEADERS = ("window", "min avail", "low", "stall some", "stall full", "oom")
+#: The page's events list when the week has none.
+NO_EVENTS = "No low-memory events this week."
+
+
+def format_duration(seconds: float) -> str:
+    """`45s`, `12m`, `5h`, `2d`: floored to the coarsest whole unit."""
+    whole = int(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    if whole < 86400:
+        return f"{whole // 3600}h"
+    return f"{whole // 86400}d"
+
+
+def _window_name(w: MemoryWindow) -> str:
+    """The window, with the span its samples cover when that is under 95%
+    of it. A window with no samples (covered 0) carries no span: its cells
+    already say `—`, as the GPU row does."""
+    if 0 < w.covered_seconds < FULL_COVERAGE * w.seconds:
+        return f"{w.window} ({format_duration(w.covered_seconds)})"
+    return w.window
+
+
+def _seconds_or_unknown(value: float | None) -> str:
+    return NO_MEAN if value is None else format_duration(value)
+
+
+def _count_or_unknown(value: int | None) -> str:
+    return NO_MEAN if value is None else str(value)
+
+
+def format_console_line(summary: MemorySummary, now: datetime | None) -> str:
+    """`7d: 3 low · last 2h ago · stall 12s · oom 1`, from the week.
+
+    `stall` is the `full` stall, the one where every task waited. `last …
+    ago` is the newest event of either kind, against the reader's own
+    clock, and is omitted with no event or no clock.
+    """
+    week = summary.windows[-1]
+    parts = [f"{_window_name(week)}: {week.low_episodes} low"]
+    if summary.events and now is not None:
+        age = max(0.0, (now - summary.events[0].at).total_seconds())
+        parts.append(f"last {format_duration(age)} ago")
+    parts.append(f"stall {_seconds_or_unknown(week.stall_full_seconds)}")
+    parts.append(f"oom {_count_or_unknown(week.oom_kills)}")
+    return " · ".join(parts)
+
+
+def window_cells(w: MemoryWindow) -> tuple[str, str, str, str, str, str]:
+    """One page-table row, in `WINDOW_HEADERS` order."""
+    return (
+        _window_name(w),
+        NO_MEAN if w.min_available is None else f"{w.min_available:.1f}%",
+        str(w.low_episodes),
+        _seconds_or_unknown(w.stall_some_seconds),
+        _seconds_or_unknown(w.stall_full_seconds),
+        _count_or_unknown(w.oom_kills),
+    )
+
+
+def format_event(event: MemoryEvent) -> str:
+    """`2026-10-13 14:02 low 12m, min 6.2%` or `2026-10-13 14:14 oom ×1`."""
+    stamp = event.at.strftime("%Y-%m-%d %H:%M")
+    if event.kind == EVENT_OOM:
+        return f"{stamp} oom ×{event.count}"
+    minimum = NO_MEAN if event.min_available is None else f"{event.min_available:.1f}%"
+    return f"{stamp} low {format_duration(event.duration_seconds)}, min {minimum}"
+
+
+def summary_to_json(summary: MemorySummary) -> dict:
+    """The verdict file's `memory` value."""
+    return {
+        "windows": [
+            {
+                "window": w.window,
+                "seconds": w.seconds,
+                "min_available": w.min_available,
+                "low_episodes": w.low_episodes,
+                "stall_some_seconds": w.stall_some_seconds,
+                "stall_full_seconds": w.stall_full_seconds,
+                "oom_kills": w.oom_kills,
+                "covered_seconds": w.covered_seconds,
+            }
+            for w in summary.windows
+        ],
+        "events": [
+            {
+                "kind": e.kind,
+                "at": e.at.isoformat(),
+                "duration_seconds": e.duration_seconds,
+                "min_available": e.min_available,
+                "count": e.count,
+            }
+            for e in summary.events
+        ],
+    }
+
+
+def summary_from_json(raw: object) -> MemorySummary:
+    """The inverse of `summary_to_json`. Raises on anything malformed; the
+    verdict codec turns that into "no verdict"."""
+    if not isinstance(raw, dict) or not isinstance(raw["windows"], list) or not isinstance(raw["events"], list):
+        raise ValueError("malformed memory summary")
+    windows = []
+    for w in raw["windows"]:
+        if not isinstance(w, dict):
+            raise ValueError("malformed memory window")
+        name, seconds, covered = w["window"], w["seconds"], w["covered_seconds"]
+        if not (isinstance(name, str) and _is_int(seconds) and _is_int(covered)):
+            raise ValueError("malformed memory window")
+        if (name, seconds) not in WINDOWS or not 0 <= covered <= seconds:
+            raise ValueError("malformed memory window")
+        minimum = w["min_available"]
+        if minimum is not None and not (_is_number(minimum) and 0 <= minimum <= 100):
+            raise ValueError("malformed memory window")
+        low = w["low_episodes"]
+        if not (_is_int(low) and low >= 0):
+            raise ValueError("malformed memory window")
+        some, full, oom = w["stall_some_seconds"], w["stall_full_seconds"], w["oom_kills"]
+        if not all(v is None or (_is_number(v) and v >= 0) for v in (some, full)):
+            raise ValueError("malformed memory window")
+        if oom is not None and not (_is_int(oom) and oom >= 0):
+            raise ValueError("malformed memory window")
+        windows.append(
+            MemoryWindow(
+                name,
+                seconds,
+                None if minimum is None else float(minimum),
+                low,
+                None if some is None else float(some),
+                None if full is None else float(full),
+                oom,
+                covered,
+            )
+        )
+    events = []
+    for e in raw["events"]:
+        if not isinstance(e, dict) or e["kind"] not in (EVENT_LOW, EVENT_OOM):
+            raise ValueError("malformed memory event")
+        duration, count, minimum = e["duration_seconds"], e["count"], e["min_available"]
+        if not (_is_int(duration) and duration >= 0 and _is_int(count) and count >= 0):
+            raise ValueError("malformed memory event")
+        if minimum is not None and not (_is_number(minimum) and 0 <= minimum <= 100):
+            raise ValueError("malformed memory event")
+        events.append(
+            MemoryEvent(
+                e["kind"],
+                datetime.fromisoformat(str(e["at"])),
+                duration,
+                None if minimum is None else float(minimum),
+                count,
+            )
+        )
+    return MemorySummary(tuple(windows), tuple(events))
