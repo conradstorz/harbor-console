@@ -382,3 +382,32 @@ def test_dashboard_without_a_banner_is_unchanged():
     lines = console.export_text().splitlines()
 
     assert "Harbor Console" in lines[0]
+
+
+from harbor_console.memory_history import EVENT_OOM, MemoryEvent, MemorySummary, MemoryWindow
+
+UI_NOW = datetime(2026, 10, 13, 12, 0)
+WEEK_SUMMARY = MemorySummary(
+    (MemoryWindow("7d", 7 * 86400, 6.2, 3, 30.0, 12.0, 1, 7 * 86400),),
+    (MemoryEvent(EVENT_OOM, UI_NOW - timedelta(hours=2), 0, None, 1),),
+)
+
+
+def render_text(renderable):
+    console = Console(width=120, record=True)
+    console.print(renderable)
+    return console.export_text()
+
+
+def test_dashboard_shows_the_memory_events_line_under_swap():
+    text = render_text(build_dashboard(METRICS, memory_summary=WEEK_SUMMARY, now=UI_NOW))
+    lines = text.splitlines()
+    swap = next(i for i, line in enumerate(lines) if "Swap" in line)
+    assert "Mem events" in lines[swap + 1]
+    assert "7d: 3 low · last 2h ago · stall 12s · oom 1" in lines[swap + 1]
+
+
+def test_dashboard_without_a_summary_says_not_reported():
+    text = render_text(build_dashboard(METRICS))
+    line = next(line for line in text.splitlines() if "Mem events" in line)
+    assert "not reported" in line
