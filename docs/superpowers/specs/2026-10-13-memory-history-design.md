@@ -94,7 +94,8 @@ two codecs and supersedes ADR 22 instead of extending it).
 - `verdict.py` -- `Verdict` gains `memory: MemorySummary | None = None`,
   serialised with the windows and events. A missing `memory` key loads as
   `None` (old writer, new reader across a deploy); a present but malformed
-  one makes the whole verdict `None`, as for `gpus`. `VerdictPublisher`
+  one loads as `memory=None` with the checks and GPU averages intact (a
+  malformed `gpus` still makes the whole verdict `None`). `VerdictPublisher`
   copies `snapshot.memory_summary` in.
 - `app.py` / `ui.py` -- `build_dashboard` gains `memory_summary:
   MemorySummary | None = None` and `now: datetime | None = None`; `app.run`
@@ -212,7 +213,7 @@ Plain values, fixed datetimes, no real time, sockets or disk except
   unknown counters, the flagged 7 d window and the width-pinned fullest row;
   codec round trip and `loads` on garbage.
 - `tests/test_verdict.py`: round trip with `memory`; missing key is `None`;
-  malformed is `None` for the whole verdict.
+  malformed loads as `memory=None` with the checks intact.
 - `tests/test_webapp.py`: `HistoryKeeper` for both histories (load, record,
   write, failed write reported once and summary still returned);
   `collect_snapshot` passes the reading and `now` and stores the summary;

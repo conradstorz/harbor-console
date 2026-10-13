@@ -209,7 +209,7 @@ def summarize(history: History, now: datetime) -> MemorySummary:
         MemoryEvent(
             EVENT_LOW,
             run[0].at,
-            int((run[-1].at - run[0].at).total_seconds()),
+            max(0, int((run[-1].at - run[0].at).total_seconds())),
             min(s.available_percent for s in run if s.available_percent is not None),
             1,
         )
@@ -231,7 +231,9 @@ def _is_low(sample: Sample) -> bool:
 
 def _episodes(history: History) -> list[tuple[Sample, ...]]:
     """Maximal runs of consecutive low samples no more than `MAX_SAMPLE_GAP`
-    apart. A sample that is not low, or did not read, ends a run."""
+    apart. A sample that is not low, or did not read, ends a run, and so does
+    a gap that is not positive: the clock stepped back, and an episode must
+    not run backwards."""
     runs: list[tuple[Sample, ...]] = []
     current: list[Sample] = []
     for sample in history:
@@ -239,7 +241,7 @@ def _episodes(history: History) -> list[tuple[Sample, ...]]:
             if current:
                 runs.append(tuple(current))
             current = []
-        elif current and sample.at - current[-1].at <= MAX_SAMPLE_GAP:
+        elif current and timedelta(0) < sample.at - current[-1].at <= MAX_SAMPLE_GAP:
             current.append(sample)
         else:
             if current:
@@ -300,7 +302,9 @@ def _window(
         stall_some_seconds=None if some_us is None else some_us / 1_000_000,
         stall_full_seconds=None if full_us is None else full_us / 1_000_000,
         oom_kills=total(ooms),
-        covered_seconds=int((now - min(s.at for s in samples)).total_seconds()) if samples else 0,
+        covered_seconds=(
+            max(0, min(seconds, int((now - min(s.at for s in samples)).total_seconds()))) if samples else 0
+        ),
     )
 
 

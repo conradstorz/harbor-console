@@ -103,11 +103,21 @@ def loads(text: str) -> Verdict | None:
             checks.append(Check(name=name, state=state, reason=reason))
         checks = tuple(checks)
         gpus = _load_gpus(payload.get("gpus", []))
-        raw_memory = payload.get("memory")
-        memory = None if raw_memory is None else summary_from_json(raw_memory)
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+    memory = _load_memory(payload.get("memory"))
     return Verdict(written=written, hostname=hostname, checks=checks, gpus=gpus, memory=memory)
+
+
+def _load_memory(raw: object) -> MemorySummary | None:
+    """The `memory` summary, or None for a missing or malformed one: a bad
+    summary costs the console its memory line, never the checks."""
+    if raw is None:
+        return None
+    try:
+        return summary_from_json(raw)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
 
 
 def _load_gpus(raw: object) -> tuple[GpuAverages, ...]:

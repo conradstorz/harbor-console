@@ -335,3 +335,37 @@ def test_summary_from_json_rejects_malformed(mutate):
     mutate(raw)
     with pytest.raises((ValueError, KeyError, TypeError)):
         summary_from_json(raw)
+
+
+def test_a_clock_step_back_ends_the_episode_and_never_goes_negative():
+    history = (sample(at(300), available=5.0), sample(at(400), available=5.0), sample(at(370), available=5.0))
+    summary = summarize(history, NOW)
+    assert all(e.duration_seconds >= 0 for e in summary.events)
+    assert window(summary, "1h").low_episodes == 2
+
+
+def test_a_stall_counter_that_went_down_is_a_reboot():
+    history = (sample(at(30), full=9_000_000, boot=1), sample(at(0), full=2_000_000, boot=1))
+    assert window(summarize(history, NOW), "1h").stall_full_seconds == 2.0
+
+
+def _round_trips(history) -> None:
+    summary = summarize(history, NOW)
+    assert summary_from_json(summary_to_json(summary)) == summary
+
+
+def test_the_writer_never_emits_a_summary_its_reader_rejects():
+    _round_trips(())
+    # a backward clock step in the middle of a low episode
+    _round_trips((sample(at(300), available=5.0), sample(at(400), available=4.0), sample(at(370), available=3.0)))
+    # a sample after now
+    _round_trips((sample(at(60), available=5.0), sample(NOW + timedelta(minutes=5), available=4.0, oom=3)))
+    # old samples followed by new ones, with counters going down
+    _round_trips(
+        (
+            sample(at(9 * 86400), available=2.0, full=100, oom=5),
+            sample(at(86400), available=1.0, full=5, oom=0),
+            sample(at(30), available=8.0, full=50, oom=2),
+            sample(at(0), available=None, full=None, oom=None),
+        )
+    )

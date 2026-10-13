@@ -83,3 +83,9 @@ def test_undecodable_bytes_are_unknown():
         raise UnicodeDecodeError("ascii", b"\xff", 0, 1, "bad")
 
     assert collect_memory_reading(read) == MemoryReading()
+
+
+def test_available_above_total_is_capped_at_one_hundred():
+    files = dict(FILES)
+    files[MEMINFO] = "MemTotal: 100 kB\nMemAvailable: 150 kB\n"
+    assert collect_memory_reading(reader(files)).available_percent == 100.0

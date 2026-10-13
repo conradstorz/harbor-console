@@ -228,13 +228,13 @@ def test_a_verdict_without_the_memory_key_still_loads():
     assert loads(json.dumps(payload)) == VERDICT
 
 
-def test_malformed_memory_makes_the_whole_verdict_none():
+def test_malformed_memory_is_dropped_on_its_own():
     payload = json.loads(dumps(WITH_MEMORY))
     payload["memory"]["windows"][0]["low_episodes"] = "many"
-    assert loads(json.dumps(payload)) is None
+    assert loads(json.dumps(payload)) == replace(WITH_MEMORY, memory=None)
 
 
-def test_an_absurdly_large_integer_in_memory_makes_the_verdict_none():
+def test_an_absurdly_large_integer_in_memory_is_dropped_on_its_own():
     payload = json.loads(dumps(WITH_MEMORY))
     payload["memory"]["windows"][0]["stall_full_seconds"] = int("9" * 400)
-    assert loads(json.dumps(payload)) is None
+    assert loads(json.dumps(payload)) == replace(WITH_MEMORY, memory=None)

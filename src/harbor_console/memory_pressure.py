@@ -97,7 +97,7 @@ def _available_percent(text: str | None) -> float | None:
     available = _non_negative(fields.get("MemAvailable", ""))
     if total is None or available is None or total == 0:
         return None
-    return round(available * 100 / total, 1)
+    return min(100.0, round(available * 100 / total, 1))
 
 
 def _stall_total(text: str | None, kind: str) -> int | None:

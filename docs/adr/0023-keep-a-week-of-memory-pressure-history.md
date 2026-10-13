@@ -52,10 +52,17 @@ OOM kill is a workload event, not a platform fault (ADR 21).
 - The verdict file carries checks, GPU averages and the memory summary.
 - The verdict decoder is strict about the memory summary: the exact window
   set, finite numbers, and naive, ordered event times. A malformed summary
-  makes the whole verdict read as "not reported" -- the banner says so --
-  rather than crashing the console or showing a number nobody can trust.
-- About 20k samples a week, under 1 MB, rewritten every cycle: about 3 GB
+  is dropped on its own -- the console line says `not reported` -- while the
+  checks and the GPU averages still load, rather than crashing the console,
+  showing a number nobody can trust, or taking the platform banner with it.
+  The writer clamps what it emits (available memory to 0-100, durations and
+  coverage to non-negative) so it cannot produce a summary its reader rejects.
+- About 20k samples a week, about 1 MB, rewritten every cycle: about 3 GB
   a day, negligible on an SSD, accepted for the same reason as ADR 22.
+- After a prober outage without a reboot, the stall and OOM deltas that
+  accumulated during the outage are credited at the first sample after the
+  restart, so a short window can over-count, and an event's time is when it
+  was seen, not when it happened.
 - The console spends one more of ADR 20's three spare rows. With one GPU
   on hpz440 that leaves one; while the banner is up the panel's bottom is
   cropped further, and ADR 20's remedy (a smaller font) still applies.
