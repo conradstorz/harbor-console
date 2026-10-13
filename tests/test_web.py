@@ -623,3 +623,33 @@ def test_page_with_no_gpus_has_no_averages_row():
 
     assert "No GPU detected" in page
     assert "busy avg" not in page
+
+
+from datetime import timedelta
+
+from harbor_console.memory_history import EVENT_LOW, MemoryEvent, MemorySummary, MemoryWindow
+
+
+def _memory_page(summary) -> str:
+    return web.render_page(snapshot(memory_summary=summary)).decode("utf-8")
+
+
+def test_memory_section_before_the_first_record():
+    assert "Not reported yet." in _memory_page(None)
+
+
+def test_memory_section_table_and_events():
+    summary = MemorySummary(
+        (MemoryWindow("1h", 3600, 6.2, 1, 3.0, 1.0, 0, 3600),),
+        (MemoryEvent(EVENT_LOW, NOW - timedelta(minutes=30), 720, 6.2, 1),),
+    )
+    html = _memory_page(summary)
+    assert "<h2>Memory events</h2>" in html
+    assert "<th>min avail</th>" in html
+    assert "<td>6.2%</td>" in html
+    assert "low 12m, min 6.2%" in html
+
+
+def test_memory_section_with_no_events_says_so():
+    summary = MemorySummary((MemoryWindow("1h", 3600, 50.0, 0, 0.0, 0.0, 0, 3600),), ())
+    assert "No low-memory events this week." in _memory_page(summary)
