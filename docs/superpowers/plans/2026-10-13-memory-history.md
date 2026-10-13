@@ -1173,13 +1173,17 @@ Assisted-by: Claude Opus 5.5 (Claude Code)"
 - Consumes: `MemorySummary`, `summary_to_json`, `summary_from_json` from Task 4.
 - Produces: `Snapshot.memory_summary: MemorySummary | None = None`; `Verdict.memory: MemorySummary | None = None`; the verdict JSON gains `"memory": {...} | null`.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_verdict.py`; reuse its existing `VERDICT` constant, and import `replace` from `dataclasses`, `timedelta`, and from `harbor_console.memory_history` import `EVENT_OOM, MemoryEvent, MemorySummary, MemoryWindow`)
+- [ ] **Step 1: Write the failing tests** (append to `tests/test_verdict.py`; reuse its existing `VERDICT` constant, and import `replace` from `dataclasses`, `timedelta`, `WINDOWS` from `harbor_console.gpu_history` (the file may already import it), and from `harbor_console.memory_history` import `EVENT_OOM, MemoryEvent, MemorySummary, MemoryWindow`. If `VERDICT.written` is timezone-aware, the event's `at` must be naive: use `VERDICT.written.replace(tzinfo=None)`.)
 
 ```python
+# Every window, in WINDOWS order: summary_from_json rejects anything else.
 WITH_MEMORY = replace(
     VERDICT,
     memory=MemorySummary(
-        (MemoryWindow("1h", 3600, 6.2, 1, 3.5, 1.25, 0, 3600),),
+        tuple(
+            MemoryWindow(name, seconds, 6.2, 1, 3.5, 1.25, 0, seconds)
+            for name, seconds in WINDOWS
+        ),
         (MemoryEvent(EVENT_OOM, VERDICT.written - timedelta(minutes=5), 0, None, 1),),
     ),
 )

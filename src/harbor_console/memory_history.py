@@ -17,6 +17,7 @@ Everything here is pure in `now`.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -138,7 +139,7 @@ def _is_int(value: object) -> bool:
 
 
 def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def read_history(path: Path = HISTORY_PATH) -> History:
@@ -444,6 +445,8 @@ def summary_from_json(raw: object) -> MemorySummary:
                 covered,
             )
         )
+    if tuple((w.window, w.seconds) for w in windows) != tuple(WINDOWS):
+        raise ValueError("memory windows are not the fixed set")
     events = []
     for e in raw["events"]:
         if not isinstance(e, dict) or e["kind"] not in (EVENT_LOW, EVENT_OOM):
@@ -453,10 +456,15 @@ def summary_from_json(raw: object) -> MemorySummary:
             raise ValueError("malformed memory event")
         if minimum is not None and not (_is_number(minimum) and 0 <= minimum <= 100):
             raise ValueError("malformed memory event")
+        if not isinstance(e["at"], str):
+            raise ValueError("malformed memory event")
+        at = datetime.fromisoformat(e["at"])
+        if at.tzinfo is not None or (events and at > events[-1].at):
+            raise ValueError("malformed memory event")
         events.append(
             MemoryEvent(
                 e["kind"],
-                datetime.fromisoformat(str(e["at"])),
+                at,
                 duration,
                 None if minimum is None else float(minimum),
                 count,

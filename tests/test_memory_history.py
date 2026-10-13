@@ -298,8 +298,8 @@ def test_format_event():
 
 def test_summary_json_round_trip():
     events = [
-        MemoryEvent(EVENT_LOW, NOW - timedelta(hours=2), 600, 6.2, 1),
         MemoryEvent(EVENT_OOM, NOW, 0, None, 2),
+        MemoryEvent(EVENT_LOW, NOW - timedelta(hours=2), 600, 6.2, 1),
     ]
     summary = summary_with(full_week(), events)
     assert summary_from_json(summary_to_json(summary)) == summary
@@ -315,10 +315,23 @@ def test_summary_json_round_trip():
         lambda d: d["windows"][0].update(oom_kills=True),
         lambda d: d["events"].append({"kind": "boom", "at": NOW.isoformat(), "duration_seconds": 0, "min_available": None, "count": 1}),
         lambda d: d.pop("events"),
+        lambda d: d.update(windows=[]),
+        lambda d: d["windows"].pop(0),
+        lambda d: d["windows"].reverse(),
+        lambda d: d["windows"][-1].update(stall_full_seconds=float("inf")),
+        lambda d: d["windows"][-1].update(stall_some_seconds=float("nan")),
+        lambda d: d["windows"][-1].update(min_available=float("nan")),
+        lambda d: d["events"][0].update(at=12345),
+        lambda d: d["events"][0].update(at="2026-10-13T14:00:00+00:00"),
+        lambda d: d["events"].reverse(),
     ],
 )
 def test_summary_from_json_rejects_malformed(mutate):
-    raw = summary_to_json(summary_with(full_week()))
+    events = [
+        MemoryEvent(EVENT_OOM, NOW, 0, None, 2),
+        MemoryEvent(EVENT_LOW, NOW - timedelta(hours=2), 600, 6.2, 1),
+    ]
+    raw = summary_to_json(summary_with(full_week(), events))
     mutate(raw)
     with pytest.raises((ValueError, KeyError, TypeError)):
         summary_from_json(raw)
