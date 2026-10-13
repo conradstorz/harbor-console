@@ -79,9 +79,11 @@ two codecs and supersedes ADR 22 instead of extending it).
   - `dumps`, `loads` (never raises; garbage is an empty history),
     `read_history` (never raises), `write_history` (atomic temp file then
     `os.replace`; raises `OSError`, the caller reports).
-- `webapp.py` -- `GpuHistoryKeeper` becomes `HistoryKeeper`, parametrised
-  by its `record` and `summarize` functions, its reader and writer, so the
-  GPU and memory histories share one keeper: load once in `__init__`,
+- `webapp.py` -- the body of `GpuHistoryKeeper` moves into a generic
+  `HistoryFile[H, I, S]`, parametrised by its `record` and `summarize`
+  functions, its reader and writer; `GpuHistoryKeeper` and a new
+  `MemoryHistoryKeeper` are thin subclasses supplying the defaults, so the
+  existing keeper tests stand unchanged. One keeper behaviour for both: load once in `__init__`,
   record/write/summarize per call, a failed write reported once per distinct
   error and never raised, the in-memory history still advancing.
   `collect_snapshot` gains `memory_history: Callable[[MemoryReading,
@@ -95,7 +97,9 @@ two codecs and supersedes ADR 22 instead of extending it).
   one makes the whole verdict `None`, as for `gpus`. `VerdictPublisher`
   copies `snapshot.memory_summary` in.
 - `app.py` / `ui.py` -- `build_dashboard` gains `memory_summary:
-  MemorySummary | None = None`; `app.run` passes the verdict's `memory`.
+  MemorySummary | None = None` and `now: datetime | None = None`; `app.run`
+  passes the verdict's `memory` and its own clock. Without `now` the line
+  omits `last … ago` rather than reading a clock of its own.
 - `web.py` -- a memory-events section, see Rendering.
 
 The console keeps zero writes and zero new reads.
@@ -131,8 +135,11 @@ Constants in `memory_history.py`, no configuration:
   its first (0 for a single sample), `min_available` the lowest value in it.
   It counts toward a window when any of its samples is inside the window.
 - **Counter deltas.** For each pair of consecutive samples where both have
-  the counter: if both have `boot` and the boots differ, or the counter went
-  down, the host rebooted and the delta is the later value (counted from
+  the counter: if both have `boot` and the boots differ by more than
+  `BOOT_TOLERANCE = 60 s` (the kernel derives `btime` from the wall clock
+  minus uptime, so NTP can move it by a second or two without a reboot, and
+  a false reboot would credit a whole since-boot counter as one delta), or
+  the counter went down, the host rebooted and the delta is the later value (counted from
   zero since boot); otherwise it is later minus earlier. The delta is
   credited at the later sample's time, and counts toward a window when that
   time is inside it. A window with no usable pair has `None` for that
