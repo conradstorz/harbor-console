@@ -45,6 +45,9 @@ from harbor_console.gpu_history import (
 )
 from harbor_console.inventory import build_inventory
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener, listening_sockets
+from harbor_console import memory_history
+from harbor_console.memory_history import MemorySummary
+from harbor_console.memory_pressure import MemoryReading, collect_memory_reading
 from harbor_console.probe import Health, probe
 from harbor_console.snapshot import Snapshot
 from harbor_console.storage import StorageEntry, collect_storage
@@ -76,6 +79,16 @@ HistoryKeeper = Callable[[tuple[GpuEntry, ...], datetime], tuple[GpuAverages, ..
 def no_history(entries: tuple[GpuEntry, ...], now: datetime) -> tuple[GpuAverages, ...]:
     """The default: no history kept, no averages shown."""
     return ()
+
+
+#: How the prober turns this cycle's memory reading into a summary: the
+#: keeper in production, a fake in tests, nothing before either is wired.
+MemoryKeeper = Callable[[MemoryReading, datetime], MemorySummary | None]
+
+
+def no_memory_history(reading: MemoryReading, now: datetime) -> MemorySummary | None:
+    """The default: no history kept, nothing to show."""
+    return None
 
 
 EXIT_OK = 0
@@ -149,6 +162,8 @@ def collect_snapshot(
     tailnet_address: str | None = None,
     own_port: int | None = WEB_PORT,
     history: HistoryKeeper = no_history,
+    memory: Callable[[], MemoryReading] = collect_memory_reading,
+    memory_keeper: MemoryKeeper = no_memory_history,
 ) -> Snapshot:
     """Gather every source once and fold it into one snapshot.
 
@@ -197,6 +212,7 @@ def collect_snapshot(
         storage=storage(),
         gpus=cards,
         gpu_averages=history(cards, now),
+        memory_summary=memory_keeper(memory(), now),
         own_route=own_route,
         certificate=served,
         checks=run_checks(
@@ -280,6 +296,7 @@ class VerdictPublisher:
             hostname=str(snapshot.metrics.get("hostname", "")),
             checks=snapshot.checks,
             gpus=snapshot.gpu_averages,
+            memory=snapshot.memory_summary,
         )
         try:
             self._writer(verdict, self._path)
@@ -292,32 +309,36 @@ class VerdictPublisher:
         self._last_error = None
 
 
-class GpuHistoryKeeper:
-    """The one writer of the GPU busy history (ADR 22).
+class HistoryFile[H, I, S]:
+    """One persistent history and its one writer (ADR 22, ADR 23).
 
-    Loads the file once, then each cycle records this cycle's entries,
-    rewrites the file and returns the averages. A write that fails is
+    Loads the file once, then each cycle records this cycle's input,
+    rewrites the file and returns the summary. A write that fails is
     reported once per distinct error, like `VerdictPublisher`, and the
-    history still advances in memory: the page keeps its averages until the
+    history still advances in memory: the page keeps its summary until the
     disk recovers, and loses at most what was recorded while it was down.
     Called only from the prober thread, so it needs no lock.
     """
 
     def __init__(
         self,
-        path: Path = HISTORY_PATH,
-        reader: Callable[[Path], History] = read_history,
-        writer: Callable[[History, Path], None] = write_history,
+        path: Path,
+        reader: Callable[[Path], H],
+        writer: Callable[[H, Path], None],
+        record: Callable[[H, I, datetime], H],
+        summarize: Callable[[H, datetime], S],
         report: Callable[[str], None] = _report,
     ) -> None:
         self._path = path
         self._writer = writer
+        self._record = record
+        self._summarize = summarize
         self._report = report
         self._last_error: str | None = None
         self._history = reader(path)
 
-    def __call__(self, entries: tuple[GpuEntry, ...], now: datetime) -> tuple[GpuAverages, ...]:
-        self._history = record(self._history, entries, now)
+    def __call__(self, item: I, now: datetime) -> S:
+        self._history = self._record(self._history, item, now)
         try:
             self._writer(self._history, self._path)
         except Exception as exc:  # noqa: BLE001 - every failure to write must reach the journal
@@ -327,7 +348,33 @@ class GpuHistoryKeeper:
                 self._last_error = message
         else:
             self._last_error = None
-        return averages(self._history, now)
+        return self._summarize(self._history, now)
+
+
+class GpuHistoryKeeper(HistoryFile[History, tuple[GpuEntry, ...], tuple[GpuAverages, ...]]):
+    """The GPU busy history (ADR 22)."""
+
+    def __init__(
+        self,
+        path: Path = HISTORY_PATH,
+        reader: Callable[[Path], History] = read_history,
+        writer: Callable[[History, Path], None] = write_history,
+        report: Callable[[str], None] = _report,
+    ) -> None:
+        super().__init__(path, reader, writer, record, averages, report)
+
+
+class MemoryHistoryKeeper(HistoryFile[memory_history.History, MemoryReading, MemorySummary]):
+    """The memory history (ADR 23)."""
+
+    def __init__(
+        self,
+        path: Path = memory_history.HISTORY_PATH,
+        reader: Callable[[Path], memory_history.History] = memory_history.read_history,
+        writer: Callable[[memory_history.History, Path], None] = memory_history.write_history,
+        report: Callable[[str], None] = _report,
+    ) -> None:
+        super().__init__(path, reader, writer, memory_history.record, memory_history.summarize, report)
 
 
 def main(
@@ -367,6 +414,7 @@ def main(
 
 def _default_prober(holder: SnapshotHolder, tailnet_address: str) -> None:
     keeper = GpuHistoryKeeper()
+    memory_keeper = MemoryHistoryKeeper()
 
     def collect() -> Snapshot:
         return collect_snapshot(
@@ -374,6 +422,7 @@ def _default_prober(holder: SnapshotHolder, tailnet_address: str) -> None:
             tailnet_address=tailnet_address,
             routers=lambda: traefik_routers(credentials=read_traefik_credentials()),
             history=keeper,
+            memory_keeper=memory_keeper,
         )
 
     thread = threading.Thread(
