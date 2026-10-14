@@ -75,7 +75,7 @@ fi
 if [[ ${PURGE} -eq 1 ]]; then
   echo "==> Purging ${INSTALL_DIR}"
   rm -rf "${INSTALL_DIR}"
-  echo "==> Removing /var/lib/harbor-console (GPU busy history)"
+  echo "==> Removing /var/lib/harbor-console (GPU and memory history)"
   rm -rf /var/lib/harbor-console
   if id -u harbor >/dev/null 2>&1; then
     echo "==> Removing 'harbor' service user"

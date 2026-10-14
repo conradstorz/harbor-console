@@ -25,6 +25,7 @@ from harbor_console.gpu_history import (
     format_averages,
     history_key,
 )
+from harbor_console.memory_history import CONSOLE_LABEL, MemorySummary, format_console_line
 from harbor_console.storage import StorageEntry, format_entry
 from harbor_console.verdict import Verdict
 
@@ -73,9 +74,12 @@ def build_dashboard(
     gpus: tuple[GpuEntry, ...] = (),
     banner: Text | None = None,
     gpu_averages: tuple[GpuAverages, ...] = (),
+    memory_summary: MemorySummary | None = None,
+    now: datetime | None = None,
 ) -> Panel | Group:
     """Build a renderable dashboard panel from collected metrics, storage,
-    GPUs and the busy averages the status page reported for them."""
+    GPUs and the busy averages the status page reported for them, and the memory events
+    line from the status page's history (ADR 23)."""
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("Metric", no_wrap=True)
     table.add_column("Value")
@@ -85,6 +89,10 @@ def build_dashboard(
     table.add_row("CPU utilization", f"{float(metrics['cpu_utilization']):.1f}%")
     table.add_row("Memory", str(metrics["memory_summary"]))
     table.add_row("Swap", str(metrics["swap_summary"]))
+    table.add_row(
+        CONSOLE_LABEL,
+        NOT_REPORTED if memory_summary is None else format_console_line(memory_summary, now),
+    )
     for entry in storage:
         table.add_row(entry.label, format_entry(entry))
     # An empty tuple is a host with no card, and that is a fact worth a row:

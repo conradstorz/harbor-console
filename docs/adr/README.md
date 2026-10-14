@@ -31,6 +31,9 @@ the reasoning, including reasoning we later moved away from.
 | 0018 | [Show the full listening inventory, not only what a rule anticipates](0018-show-the-full-listening-inventory.md) | Accepted |
 | 0019 | [Reserve a fixed `harbor` address for Traefik](0019-reserve-a-fixed-harbor-address-for-traefik.md) | Accepted |
 | 0020 | [Size the console for the room: Terminus 32x16 at 1280x720](0020-size-the-console-for-the-room.md) | Accepted |
+| 0021 | [Colour the platform banner, and nothing else](0021-colour-the-platform-banner-and-nothing-else.md) | Accepted |
+| 0022 | [Keep a week of GPU busy history in the web unit's state directory](0022-keep-a-week-of-gpu-busy-history.md) | Accepted |
+| 0023 | [Keep a week of memory pressure history beside the GPU history](0023-keep-a-week-of-memory-pressure-history.md) | Accepted |
 
 ## Adding a new ADR
 

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from datetime import timezone as _tz
 from http.server import ThreadingHTTPServer
 
-from harbor_console import web, webapp
+from harbor_console import memory_history, web, webapp
 from harbor_console.certificate import Certificate, CertificateUnavailable
 from harbor_console.checks import (
     CHECK_CERTIFICATE,
@@ -17,6 +17,7 @@ from harbor_console.directory import KIND_HTTP, ROUTE_ERROR, UNDECLARED_CONTAINE
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.gpu import GpuEntry
 from harbor_console.gpu_history import GpuAverages, Sample, WindowAverage, read_history, write_history
+from harbor_console.memory_pressure import MemoryReading
 from harbor_console.listening import LISTENING_UNAVAILABLE, Listener
 from harbor_console.probe import Health
 from harbor_console.snapshot import Snapshot
@@ -755,3 +756,68 @@ def test_verdict_publisher_carries_the_averages(tmp_path):
     webapp.VerdictPublisher(path)(snapshot)
 
     assert read_verdict(path).gpus == averages
+
+
+LOW_READING = MemoryReading(available_percent=5.0, stall_some_us=0, stall_full_us=0, oom_kills=0, boot=1)
+
+
+def test_collect_snapshot_passes_the_reading_and_now_to_the_memory_keeper():
+    seen = []
+
+    def keeper(reading, now):
+        seen.append((reading, now))
+        return memory_history.summarize((), now)
+
+    snapshot = collect(memory=lambda: LOW_READING, memory_keeper=keeper)
+    assert seen == [(LOW_READING, snapshot.collected)]
+    assert snapshot.memory_summary == memory_history.summarize((), snapshot.collected)
+
+
+def test_collect_snapshot_without_a_memory_keeper_has_no_summary():
+    assert collect(memory=lambda: LOW_READING).memory_summary is None
+
+
+def test_memory_keeper_records_writes_and_summarizes(tmp_path):
+    path = tmp_path / "memory-history.json"
+    keeper = webapp.MemoryHistoryKeeper(path)
+    summary = keeper(LOW_READING, NOW)
+    assert summary.windows[0].low_episodes == 1
+    assert len(memory_history.read_history(path)) == 1
+
+
+def test_memory_keeper_loads_what_is_on_disk(tmp_path):
+    path = tmp_path / "memory-history.json"
+    earlier = memory_history.record((), LOW_READING, NOW - timedelta(seconds=30))
+    memory_history.write_history(earlier, path)
+    keeper = webapp.MemoryHistoryKeeper(path)
+    keeper(LOW_READING, NOW)
+    assert len(memory_history.read_history(path)) == 2
+
+
+def test_memory_keeper_reports_a_failed_write_once_and_still_summarizes(tmp_path):
+    reported = []
+
+    def writer(_history, _path):
+        raise OSError("disk full")
+
+    keeper = webapp.MemoryHistoryKeeper(tmp_path / "memory-history.json", writer=writer, report=reported.append)
+    first = keeper(LOW_READING, NOW)
+    second = keeper(LOW_READING, NOW + timedelta(seconds=30))
+    assert len(reported) == 1
+    assert first.windows[0].low_episodes == 1
+    assert second.windows[0].covered_seconds == 30
+
+
+def test_memory_keeper_defaults_to_the_state_directory():
+    assert (
+        inspect.signature(webapp.MemoryHistoryKeeper.__init__).parameters["path"].default
+        is memory_history.HISTORY_PATH
+    )
+
+
+def test_verdict_publisher_carries_the_memory_summary(tmp_path):
+    written = []
+    summary = memory_history.summarize((), NOW)
+    publisher = webapp.VerdictPublisher(tmp_path / "checks.json", writer=lambda v, _p: written.append(v))
+    publisher(Snapshot(collected=NOW, metrics={"hostname": "h"}, memory_summary=summary))
+    assert written[0].memory == summary

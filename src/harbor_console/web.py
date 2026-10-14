@@ -27,6 +27,7 @@ from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, R
 from harbor_console.gpu import format_gpu
 from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, format_averages, history_key
 from harbor_console.inventory import REACH_LOOPBACK, Entry
+from harbor_console.memory_history import NO_EVENTS, WINDOW_HEADERS, format_event, window_cells
 from harbor_console.snapshot import Snapshot
 from harbor_console.storage import format_entry
 
@@ -90,6 +91,7 @@ def render_page(snapshot: Snapshot, now: datetime | None = None) -> bytes:
         f'<div class="host-section">{_host_table(snapshot)}</div>'
         f'<div class="storage-section">{_storage_section(snapshot)}</div>'
         f'<div class="gpu-section">{_gpu_section(snapshot)}</div>'
+        f'<div class="memory-section">{_memory_section(snapshot)}</div>'
         "</div>"
     )
     parts.append(_directory_table(snapshot))
@@ -214,6 +216,25 @@ def _gpu_section(snapshot: Snapshot) -> str:
                 f'<tr class="detail"><td>{escape(AVERAGES_LABEL)}</td><td>{escape(text)}</td></tr>'
             )
     return "<h2>GPU</h2><table>" + "".join(rows) + "</table>"
+
+
+def _memory_section(snapshot: Snapshot) -> str:
+    """Low episodes, stall time and OOM kills per window, and the week's
+    most recent events (ADR 23). `Not reported yet.` before the prober has
+    recorded a sample: absence of evidence is not an empty week."""
+    if snapshot.memory_summary is None:
+        return "<h2>Memory events</h2><p>Not reported yet.</p>"
+    summary = snapshot.memory_summary
+    head = "".join(f"<th>{escape(h)}</th>" for h in WINDOW_HEADERS)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{escape(cell)}</td>" for cell in window_cells(w)) + "</tr>"
+        for w in summary.windows
+    )
+    if summary.events:
+        events = "<ul>" + "".join(f"<li>{escape(format_event(e))}</li>" for e in summary.events) + "</ul>"
+    else:
+        events = f"<p>{escape(NO_EVENTS)}</p>"
+    return f"<h2>Memory events</h2><table><tr>{head}</tr>{body}</table>{events}"
 
 
 def _target_cell(row: Row) -> str:

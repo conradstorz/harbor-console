@@ -16,6 +16,7 @@ from harbor_console.docker import Container
 from harbor_console.gpu import GpuEntry
 from harbor_console.gpu_history import GpuAverages
 from harbor_console.inventory import Entry
+from harbor_console.memory_history import MemorySummary
 from harbor_console.probe import Health
 from harbor_console.storage import StorageEntry
 
@@ -62,6 +63,10 @@ class Snapshot:
     #: the first cycle, and empty for a card whose driver never reports a
     #: busy percent.
     gpu_averages: tuple[GpuAverages, ...] = ()
+    #: The memory history the prober keeps (ADR 23): low episodes, stall
+    #: time and OOM kills per window, and the recent events. None until the
+    #: first cycle has recorded a sample.
+    memory_summary: MemorySummary | None = None
     #: The page probed at its own route through Traefik -- the path ADR 17
     #: and ADR 19 broke, and the one route the directory does not cover
     #: because the page is not a container. None when not attempted (no
