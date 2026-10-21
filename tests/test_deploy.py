@@ -95,3 +95,28 @@ def test_uninstall_removes_the_state_directory():
     text = (REPO / "deploy" / "uninstall.sh").read_text(encoding="utf-8")
 
     assert "/var/lib/harbor-console" in text
+
+
+HOSTED_COMPOSE = REPO / "deploy" / "hosted" / "compose.yaml"
+
+
+def watchtower_image() -> tuple[str, tuple[int, int, int]]:
+    text = HOSTED_COMPOSE.read_text(encoding="utf-8")
+    match = re.search(
+        r"^\s*image:\s*([\w./-]+/watchtower):(\d+)\.(\d+)\.(\d+)\s*$", text, re.MULTILINE
+    )
+    assert match, "deploy/hosted/compose.yaml must pin `image: <repo>/watchtower:<x.y.z>`"
+    return match.group(1), (int(match.group(2)), int(match.group(3)), int(match.group(4)))
+
+
+def test_watchtower_is_the_maintained_fork_and_negotiates_the_docker_api_version():
+    # containrrr/watchtower was archived on 2025-12-17; its last image (v1.7.1,
+    # 2023-11-11) pins Docker API 1.25, which Engine 29 refuses, so after the
+    # 2026-10-08 upgrade on hpz440 it crash-looped 637 times with no row or
+    # finding to show for it. nicholas-fedor/watchtower is the maintained fork,
+    # same flags, same env vars, same opt-in label, and autonegotiates the API
+    # version; 1.23.1 was verified against API 1.56 on 2026-10-21. Pinned to a
+    # release so an update is a deliberate commit, like the Traefik pin.
+    repo, version = watchtower_image()
+    assert repo == "nickfedor/watchtower"
+    assert version >= (1, 23, 1)

@@ -685,7 +685,7 @@ services:
       traefik.docker.network: admin
 
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower:1.23.1
     container_name: watchtower
     restart: always
     environment:
@@ -748,6 +748,18 @@ Four things worth calling out:
   interface of its own, and simply needs to exist on the host's Docker
   socket to do its job. It shows up on the harbor-console page as an
   `INTERNAL` row so it's visibly accounted for, without a route.
+- **The image is `nickfedor/watchtower`, pinned, not `containrrr/watchtower`.**
+  The original project was archived on 2025-12-17, and its last image
+  (v1.7.1, November 2023) pins Docker API 1.25. Docker Engine 29 refuses
+  anything below 1.40, so from the 2026-10-08 engine upgrade the container
+  exited within a second of every start (`client version 1.25 is too old`)
+  and `restart: always` turned that into a crash loop: 637 restarts before
+  anyone noticed, because an `INTERNAL` row has no route or port to probe
+  and the page did not yet read Docker's own state for it. The fork by
+  Nicholas Fedor keeps the same flags, env vars and
+  `com.centurylinklabs.watchtower.enable` opt-in label and negotiates the
+  API version; `tests/test_deploy.py` guards the pin the way it guards
+  Traefik's, so moving it is a deliberate commit.
 
 ## Layer 3: Docker networking (the part that ties it together)
 
