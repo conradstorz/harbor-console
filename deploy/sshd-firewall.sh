@@ -103,22 +103,16 @@ arm_timer() {
   log "auto-rollback armed: fires in ${GRACE_MIN} min unless you run '$0 confirm'"
 }
 
-# Delete every rule carrying one of our comments, so re-adding puts them back
-# at the top in the right order. Rules are numbered only while ufw is active;
-# when inactive, delete by specification instead.
+# Delete any rule equivalent to one of ours, so re-adding puts them back at
+# the top in the right order. Delete by specification, not by comment: ufw
+# matches rules with the comment ignored, so a pre-existing comment-less
+# `allow from <LAN> to any port 22 proto tcp` makes `insert 1` report ours as
+# "existing" and skip it -- which on hpz440 left the deny above the only LAN
+# allow and would have cut LAN ssh off, had the post-check not rolled back.
 remove_our_rules() {
-  local n
-  if ufw_active; then
-    # highest number first, so deleting does not renumber what is still to go
-    for n in $(ufw status numbered | grep -E "# ($COMMENT_LAN|$COMMENT_TAILNET|$COMMENT_DENY)$" \
-                 | sed -n 's/^\[ *\([0-9]*\)\].*/\1/p' | sort -rn); do
-      ufw --force delete "$n" >/dev/null || true
-    done
-  else
-    ufw delete allow in from "$LAN_CIDR" to any port "$PORT" proto tcp >/dev/null 2>&1 || true
-    ufw delete allow in on "$TAILNET_IF" to any port "$PORT" proto tcp >/dev/null 2>&1 || true
-    ufw delete deny in to any port "$PORT" proto tcp >/dev/null 2>&1 || true
-  fi
+  ufw delete allow in from "$LAN_CIDR" to any port "$PORT" proto tcp >/dev/null 2>&1 || true
+  ufw delete allow in on "$TAILNET_IF" to any port "$PORT" proto tcp >/dev/null 2>&1 || true
+  ufw delete deny in to any port "$PORT" proto tcp >/dev/null 2>&1 || true
 }
 
 # Final order must be: 1 allow LAN, 2 allow tailnet, 3 deny. `insert 1` is
