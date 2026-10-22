@@ -120,3 +120,21 @@ def test_watchtower_is_the_maintained_fork_and_negotiates_the_docker_api_version
     repo, version = watchtower_image()
     assert repo == "nickfedor/watchtower"
     assert version >= (1, 23, 1)
+
+
+def compose_services(path: Path) -> list[str]:
+    """Top-level service names: two-space-indented keys under `services:`."""
+    text = path.read_text(encoding="utf-8")
+    body = text.split("services:", 1)[1]
+    body = re.split(r"^\S", body, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.findall(r"^  ([A-Za-z][\w-]*):\s*$", body, re.MULTILINE)
+
+
+def test_every_container_this_repo_deploys_declares_itself_platform():
+    # ADR 24: the platform-containers check judges only containers that
+    # carry harbor.platform=true. A service added here without it is a
+    # container the check silently ignores.
+    for path, expected in ((TRAEFIK_COMPOSE, ["traefik"]), (HOSTED_COMPOSE, ["portainer", "watchtower"])):
+        text = path.read_text(encoding="utf-8")
+        assert compose_services(path) == expected, path
+        assert text.count('harbor.platform: "true"') == len(expected), path

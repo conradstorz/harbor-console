@@ -683,6 +683,7 @@ services:
       traefik.http.routers.portainer.rule: Host(`portainer.hpz440.ohr3023.org`)
       traefik.http.services.portainer.loadbalancer.server.port: "9000"
       traefik.docker.network: admin
+      harbor.platform: "true"
 
   watchtower:
     image: nickfedor/watchtower:1.23.1
@@ -696,6 +697,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       harbor.kind: internal
+      harbor.platform: "true"
 
 volumes:
   portainer_data:
