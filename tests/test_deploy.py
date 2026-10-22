@@ -197,3 +197,34 @@ def test_the_update_timer_fires_every_five_minutes_and_only_the_timer_is_install
     assert "Type=oneshot\n" in service
     assert "ExecStart=/bin/bash /opt/harbor-console/deploy/update.sh\n" in service
     assert "[Install]" not in service, "the timer starts the service; it is never enabled itself"
+
+
+UNINSTALL = REPO / "deploy" / "uninstall.sh"
+
+
+def test_the_installer_installs_the_updater_and_enables_only_its_timer():
+    text = INSTALL.read_text(encoding="utf-8")
+
+    assert "harbor-console-update.service" in text
+    assert "systemctl enable --now harbor-console-update.timer" in text
+    assert "systemctl enable harbor-console-update.service" not in text
+    assert "harbor-console-update.service.d/checkout.conf" in text
+    assert "Environment=HARBOR_CHECKOUT=${REPO_ROOT}" in text
+    assert 'Environment=PATH=${uv_dir}:' in text
+    assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
+    assert text.index("deployed-commit") < text.index('harbor-console-check" 2>&1')
+
+
+def test_the_installer_writes_the_dropin_before_the_daemon_reload_that_enables_the_timer():
+    text = INSTALL.read_text(encoding="utf-8")
+
+    assert text.index("checkout.conf") < text.index("systemctl enable --now harbor-console-update.timer")
+
+
+def test_uninstall_removes_the_updater():
+    text = UNINSTALL.read_text(encoding="utf-8")
+
+    assert "harbor-console-update.timer" in text
+    assert "harbor-console-update.service" in text
+    assert "harbor-console-update.service.d" in text
+    assert "/var/lib/harbor-console-update" in text
