@@ -25,8 +25,8 @@ missing is something that runs it.
 We will run a root systemd timer on the host, `harbor-console-update.timer`,
 every five minutes. It starts a oneshot service that runs
 `deploy/update.sh` from the installed copy. The script fetches
-`origin/main` as the checkout's owner, exits quietly when `HEAD` already
-matches, refuses when the checkout is not on `main`, has modified tracked
+`origin/main` as the checkout's owner, exits quietly when `origin/main` is
+both checked out and recorded as installed, refuses when the checkout is not on `main`, has modified tracked
 files, or has commits the remote lacks, and otherwise `git pull --ff-only`
 and hands off to `install.sh`. It never resets, never force-pulls, never
 discards work.
