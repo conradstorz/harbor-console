@@ -74,6 +74,7 @@ from harbor_console.checks import (
     CHECK_DOCKER_PROVIDER,
     CHECK_EDGE_LISTENING,
     CHECK_OWN_ROUTE,
+    CHECK_PLATFORM_CONTAINERS,
     CHECK_TRAEFIK_API,
     run_checks,
 )
@@ -118,7 +119,7 @@ def checks(**overrides):
     return {check.name: check for check in run_checks(**kwargs)}
 
 
-def test_run_checks_reports_six_checks_in_a_fixed_order():
+def test_run_checks_reports_seven_checks_in_a_fixed_order():
     names = [check.name for check in run_checks(
         now=NOW, docker_available=True, traefik_available=True, containers=(),
         routers=(), own_route=None, certificate=None, listeners=(),
@@ -128,6 +129,7 @@ def test_run_checks_reports_six_checks_in_a_fixed_order():
     assert names == [
         CHECK_DOCKER, CHECK_TRAEFIK_API, CHECK_DOCKER_PROVIDER,
         CHECK_OWN_ROUTE, CHECK_CERTIFICATE, CHECK_EDGE_LISTENING,
+        CHECK_PLATFORM_CONTAINERS,
     ]
 
 
@@ -252,3 +254,68 @@ def test_edge_listening_is_unknown_without_the_socket_table():
 
 def test_edge_listening_is_unknown_without_a_tailnet_address():
     assert checks(tailnet_address=None)[CHECK_EDGE_LISTENING].state == STATE_UNKNOWN
+
+
+PLATFORM = Container(
+    "watchtower", (), {"harbor.kind": "internal", "harbor.platform": "true"}, frozenset()
+)
+
+
+def test_platform_containers_passes_when_every_labelled_container_is_well():
+    check = checks(containers=(ROUTED, PLATFORM))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_OK
+    assert check.reason == "1 platform container running"
+
+
+def test_platform_containers_passes_when_nothing_declares_the_label():
+    check = checks(containers=(ROUTED, INTERNAL))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_OK
+    assert check.reason == "no container declares harbor.platform"
+
+
+def test_platform_containers_fails_when_a_labelled_container_is_restarting():
+    looping = Container(
+        "watchtower", (), {"harbor.kind": "internal", "harbor.platform": "true"}, frozenset(),
+        status="restarting", restarts=637, exit_code=1,
+    )
+
+    check = checks(containers=(ROUTED, looping))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_FAILED
+    assert check.reason == "container 'watchtower' is restarting (637 restarts, last exit 1)"
+
+
+def test_platform_containers_fails_when_a_labelled_container_is_unhealthy():
+    sick = Container(
+        "portainer", (), {"harbor.platform": "true"}, frozenset(), health="unhealthy"
+    )
+
+    check = checks(containers=(sick,))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_FAILED
+    assert check.reason == "container 'portainer' fails its own healthcheck"
+
+
+def test_platform_containers_names_the_first_broken_one_by_name():
+    second = Container("watchtower", (), {"harbor.platform": "true"}, frozenset(), status="restarting")
+    first = Container("portainer", (), {"harbor.platform": "true"}, frozenset(), health="unhealthy")
+
+    check = checks(containers=(second, first))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.reason.startswith("container 'portainer'")
+
+
+def test_platform_containers_ignores_an_unlabelled_restarting_container():
+    stray = Container("dev", (), {}, frozenset(), status="restarting", restarts=9)
+
+    check = checks(containers=(ROUTED, stray))[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_OK
+
+
+def test_platform_containers_is_unknown_without_docker():
+    check = checks(docker_available=False, containers=())[CHECK_PLATFORM_CONTAINERS]
+
+    assert check.state == STATE_UNKNOWN
