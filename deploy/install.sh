@@ -451,10 +451,10 @@ DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit
 # ownership"), and root almost never owns the checkout. Written atomically
 # so a crash mid-write cannot leave a truncated record.
 checkout_owner=$(stat -c %U "${REPO_ROOT}")
-if deployed_commit=$(runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null)    && [[ ${deployed_commit} =~ ^[0-9a-f]{40}$ ]]; then
+deployed_commit=$(runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
+if [[ ${deployed_commit} =~ ^[0-9a-f]{40}$ ]]; then
   install -d -m 0755 "$(dirname "${DEPLOYED_FILE}")"
-  printf '%s
-' "${deployed_commit}" > "${DEPLOYED_FILE}.tmp"
+  printf '%s\n' "${deployed_commit}" > "${DEPLOYED_FILE}.tmp"
   mv -f "${DEPLOYED_FILE}.tmp" "${DEPLOYED_FILE}"
 else
   echo "warning: could not read the commit of ${REPO_ROOT} (not a git checkout, or not readable as ${checkout_owner}); the updater cannot tell this install is current and will re-run it (ADR 25)." >&2
