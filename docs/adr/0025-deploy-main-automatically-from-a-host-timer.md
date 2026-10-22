@@ -78,6 +78,9 @@ whatever checkout the installer was last run from.
   unit's `StateDirectory`: that one belongs to the unprivileged `harbor`
   user, and root writing a file into a directory another user owns is a
   symlink away from an arbitrary overwrite.
+- This is the project's third persistent file, after the GPU and memory
+  histories (ADR 22, ADR 23): one line, root-owned, under
+  `/var/lib/harbor-console-update/`, removed by `uninstall.sh`.
 - A broken `update.sh` on `main` cannot deploy itself: the service runs the
   installed copy, which only `install.sh` replaces. One manual run from the
   checkout repairs it.

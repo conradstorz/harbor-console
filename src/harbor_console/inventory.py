@@ -1,7 +1,7 @@
 """Every listening socket, classified by who can reach it and what accounts for it.
 
 Pure: listeners, containers and the host's tailnet address in; one entry per
-socket out. The page's four findings answer "where do the declarations and the
+socket out. The page's six findings answer "where do the declarations and the
 host disagree"; this answers the prior question, "what is listening at all",
 which is the one a rule cannot be trusted with -- a filter applied before
 anyone can look is unfalsifiable by inspection.
