@@ -31,7 +31,21 @@ require_cmd() {
 }
 
 require_root
-require_cmd uv "Install it first: https://docs.astral.sh/uv/"
+
+# ADR 25: one installer at a time. update.sh takes this lock and execs this
+# script with HARBOR_UPDATE_LOCKED set; a human's run takes it here and
+# waits for an in-flight automatic update to finish rather than running
+# rsync --delete and the unit restarts alongside it.
+UPDATE_LOCK=/run/harbor-console-update.lock
+if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then
+  exec 9>"${UPDATE_LOCK}"
+  if ! flock -n 9; then
+    echo "==> Waiting for the running harbor-console update to finish"
+    flock 9
+  fi
+fi
+
+require_cmd uv"Install it first: https://docs.astral.sh/uv/"
 require_cmd rsync "Install it with your package manager (e.g. apt install rsync)."
 
 if ! getent group docker >/dev/null 2>&1; then
@@ -247,11 +261,6 @@ for unit in "${UNIT_NAMES[@]}"; do
   systemctl restart "${unit}"
 done
 
-# enable --now is right here, unlike above: a timer already running keeps
-# its schedule, and the service it fires is the one that runs this script.
-echo "==> Enabling harbor-console-update.timer (deploys main every five minutes, ADR 25)"
-systemctl enable --now harbor-console-update.timer
-
 # The edge starts only after the units have moved: until harbor-console-web is
 # restarted on the new code it still holds the tailnet address on :80, which is
 # the port Traefik is about to publish.
@@ -459,6 +468,12 @@ if [[ ${deployed_commit} =~ ^[0-9a-f]{40}$ ]]; then
 else
   echo "warning: could not read the commit of ${REPO_ROOT} (not a git checkout, or not readable as ${checkout_owner}); the updater cannot tell this install is current and will re-run it (ADR 25)." >&2
 fi
+
+# ADR 25. After the record, not before: a tick that fires the moment the
+# timer is enabled must find this install already recorded, or it will
+# start a second one. A timer already running keeps its schedule.
+echo "==> Enabling harbor-console-update.timer (deploys main every five minutes, ADR 25)"
+systemctl enable --now harbor-console-update.timer
 
 check_status=2
 check_output=""

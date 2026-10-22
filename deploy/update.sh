@@ -31,6 +31,7 @@ fi
 # held on fd 9 through the exec below, so the installer runs under it too.
 exec 9>"${LOCK}"
 if ! flock -n 9; then
+  echo "another update or install holds ${LOCK}; skipping this tick"
   exit 0
 fi
 
@@ -79,5 +80,8 @@ else
   echo "installing ${remote_head:0:9}: the checkout is current but the last install did not record it (${deployed:-none})"
 fi
 
+# Tell install.sh the lock is already held on fd 9, so it does not try to
+# take it again and deadlock on itself.
+export HARBOR_UPDATE_LOCKED=1
 # install.sh is the deploy; its exit code is the acceptance check's.
 exec bash "${CHECKOUT}/deploy/install.sh"

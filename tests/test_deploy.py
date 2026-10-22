@@ -184,6 +184,7 @@ def test_the_updater_hands_off_to_the_installer_from_the_checkout():
 
     assert 'bash "${CHECKOUT}/deploy/install.sh"' in text
     assert "HARBOR_CHECKOUT" in text
+    assert "export HARBOR_UPDATE_LOCKED=1" in text
 
 
 def test_the_update_timer_fires_every_five_minutes_and_only_the_timer_is_installed():
@@ -214,6 +215,9 @@ def test_the_installer_installs_the_updater_and_enables_only_its_timer():
     assert 'runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD' in text
     assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
     assert text.index("deployed-commit") < text.index('harbor-console-check" 2>&1')
+    assert text.index("deployed-commit") < text.index("systemctl enable --now harbor-console-update.timer")
+    assert 'UPDATE_LOCK=/run/harbor-console-update.lock' in text
+    assert 'if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then' in text
 
 
 def test_the_installer_writes_the_dropin_before_the_daemon_reload_that_enables_the_timer():
@@ -229,3 +233,4 @@ def test_uninstall_removes_the_updater():
     assert "harbor-console-update.service" in text
     assert "harbor-console-update.service.d" in text
     assert "/var/lib/harbor-console-update" in text
+    assert "flock 9" in text

@@ -17,6 +17,10 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
+# ADR 25: do not tear down under a running automatic update.
+exec 9>/run/harbor-console-update.lock
+flock 9
+
 # compose.yaml interpolates TAILNET_ADDRESS and ACME_EMAIL under `${VAR:?}`
 # guards, so `docker compose down` fails outright when `.env` is missing --
 # which is exactly the half-removed state this script has to survive. Supply
