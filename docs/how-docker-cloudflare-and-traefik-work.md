@@ -864,6 +864,27 @@ Compose's own `env_file:` mechanism (used to hand `CF_DNS_API_TOKEN` to the
 Traefik container) was never affected by this — it parses `KEY=value` pairs
 directly and has no equivalent execution step.
 
+## Deploys are automatic (ADR 25)
+
+`harbor-console-update.timer` runs `deploy/update.sh` as root every five
+minutes. It fetches `origin/main` as the owner of the checkout `install.sh`
+was last run from, and when `main` has moved, fast-forwards and runs
+`install.sh`. It refuses, loudly and without touching anything, if the
+checkout is not on `main`, has modified tracked files, or has commits the
+remote does not; it never resets.
+
+It decides from `/var/lib/harbor-console-update/deployed-commit`, which `install.sh` writes when its install steps finish, so a deploy that failed partway is retried on the next tick.
+
+```bash
+ssh gte@hpz440 'systemctl list-timers harbor-console-update.timer --no-pager'
+ssh gte@hpz440 'journalctl -u harbor-console-update.service -n 50 --no-pager'
+```
+
+A quiet journal is a current checkout. A `failed` unit with a refusal
+message means someone has to look at the checkout; the old code keeps
+running meanwhile. To move the timer to a different checkout, run
+`install.sh` from that checkout once.
+
 ## Troubleshooting
 
 **The page is unreachable at `https://harbor.hpz440.ohr3023.org/` but works

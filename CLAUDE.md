@@ -59,7 +59,7 @@ The web surface is fourteen modules at the top level, and keeps the same split:
 - `web.py` — **renders** the HTML page from a snapshot and serves it over stdlib `http.server`. No collection, no probing, and no endpoint but the page itself.
 - `webapp.py` — **coordinates**: the background prober thread and the HTTP server, as the `harbor-console-web` systemd entry point.
 
-Five behaviours of that service are load-bearing and easy to undo by accident:
+Six behaviours of that service are load-bearing and easy to undo by accident:
 
 - **The page binds the host's Tailscale address on fixed port 8100.** The port is a constant in `webapp.py`, not configuration: Traefik's file-provider route for `harbor.hpz440.ohr3023.org` points at it, and there is deliberately no flag, no environment variable and no file that moves it ([ADR 15](docs/adr/0015-reverse-proxy-and-label-declared-services.md)).
 - **`harbor-console-web` has one startup refusal, and only one: no tailnet address.** It happens before anything is bound, exits non-zero, and leaves the reason in journald for systemd to retry against. The four refusals of the ledger era went with the ledger. (Port 8100 already in use fails the bind and exits the same way, but that is the environment rather than a second rule.)
@@ -83,6 +83,7 @@ Five behaviours of that service are load-bearing and easy to undo by accident:
   is repeated views of bytes already counted, not a mount dropped because of
   what it is.
 - **The verdict file is the only thing the console reads from the web service, the console never probes, and the web prober is the only writer of the GPU and memory histories.** The 1 Hz tty1 loop reads `/run/harbor-console/checks.json` and nothing else new; a missing or stale file is itself the banner ("status page has not reported"). Moving the console onto a socket, or giving it a collector that can block, undoes ADR 4's "never crashes, never stalls" ([ADR 21](docs/adr/0021-colour-the-platform-banner-and-nothing-else.md)). The GPU busy averages ride in the same file (ADR 22), and so does the memory summary (ADR 23); the console never samples, averages or writes history of its own.
+- **Deploys are automatic.** `harbor-console-update.timer` runs `deploy/update.sh` as root every five minutes; it fast-forwards the checkout `install.sh` was last run from and re-runs `install.sh` when `main` has moved, and refuses without touching anything when the checkout is dirty, off `main`, or ahead of the remote ([ADR 25](docs/adr/0025-deploy-main-automatically-from-a-host-timer.md)). A merge to `main` is live on hpz440 within about five minutes; there is no separate deploy step to remember.
 
 The two processes share the core and have independent lifetimes — logging in at tty1 must not take the web page down, and vice versa. The web view is a second renderer over the same collectors, not a second application.
 
