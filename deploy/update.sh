@@ -44,7 +44,11 @@ git_as_owner() {
 # against origin/main instead of the checkout's HEAD, so a pull whose
 # install then failed is retried on the next tick rather than counted as
 # deployed. Missing means never installed by a version that records it.
-DEPLOYED_FILE=/var/lib/harbor-console/deployed-commit
+# Under its own root-owned directory, not the web unit's StateDirectory:
+# that one belongs to the unprivileged harbor user, and root writing a
+# file into a directory another user owns is how a symlink becomes an
+# arbitrary overwrite.
+DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit
 deployed=$(cat "${DEPLOYED_FILE}" 2>/dev/null || true)
 
 branch=$(git_as_owner rev-parse --abbrev-ref HEAD)

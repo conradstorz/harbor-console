@@ -175,7 +175,7 @@ def test_the_updater_bounds_its_network_calls_and_retries_a_failed_install():
 
     assert "timeout 120 runuser" in text and "fetch --quiet origin main" in text
     assert "timeout 300 runuser" in text and "pull --quiet --ff-only origin main" in text
-    assert "DEPLOYED_FILE=/var/lib/harbor-console/deployed-commit" in text
+    assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
     assert '"${deployed}" == "${remote_head}"' in text
 
 
