@@ -10,7 +10,7 @@
 # is a human's problem and this script says so and stops.
 set -euo pipefail
 
-LOCK=/run/lock/harbor-console-update.lock
+LOCK=/run/harbor-console-update.lock
 CHECKOUT="${HARBOR_CHECKOUT:-}"
 
 if [[ ${EUID} -ne 0 ]]; then
@@ -39,6 +39,14 @@ git_as_owner() {
   runuser -u "${owner}" -- git -C "${CHECKOUT}" "$@"
 }
 
+# What install.sh last finished installing (written by install.sh itself,
+# after every install step and before its acceptance check). Compared
+# against origin/main instead of the checkout's HEAD, so a pull whose
+# install then failed is retried on the next tick rather than counted as
+# deployed. Missing means never installed by a version that records it.
+DEPLOYED_FILE=/var/lib/harbor-console/deployed-commit
+deployed=$(cat "${DEPLOYED_FILE}" 2>/dev/null || true)
+
 branch=$(git_as_owner rev-parse --abbrev-ref HEAD)
 if [[ "${branch}" != "main" ]]; then
   echo "Error: ${CHECKOUT} is on '${branch}', not main; not deploying" >&2
@@ -49,19 +57,23 @@ if [[ -n "$(git_as_owner status --porcelain --untracked-files=no)" ]]; then
   exit 1
 fi
 
-git_as_owner fetch --quiet origin main
+# Bounded: a stalled connection must not hold the lock forever; the timer cannot start a unit that is still activating.
+timeout 120 runuser -u "${owner}" -- git -C "${CHECKOUT}" fetch --quiet origin main
 local_head=$(git_as_owner rev-parse HEAD)
 remote_head=$(git_as_owner rev-parse origin/main)
-if [[ "${local_head}" == "${remote_head}" ]]; then
+if [[ "${local_head}" == "${remote_head}" && "${deployed}" == "${remote_head}" ]]; then
   exit 0
 fi
-if ! git_as_owner merge-base --is-ancestor "${local_head}" "${remote_head}"; then
-  echo "Error: ${CHECKOUT} has commits origin/main does not (HEAD ${local_head:0:9}, origin/main ${remote_head:0:9}); refusing to touch it" >&2
-  exit 1
+if [[ "${local_head}" != "${remote_head}" ]]; then
+  if ! git_as_owner merge-base --is-ancestor "${local_head}" "${remote_head}"; then
+    echo "Error: ${CHECKOUT} has commits origin/main does not (HEAD ${local_head:0:9}, origin/main ${remote_head:0:9}); refusing to touch it" >&2
+    exit 1
+  fi
+  echo "updating ${local_head:0:9} -> ${remote_head:0:9}"
+  timeout 300 runuser -u "${owner}" -- git -C "${CHECKOUT}" pull --quiet --ff-only origin main
+else
+  echo "installing ${remote_head:0:9}: the checkout is current but the last install did not record it (${deployed:-none})"
 fi
-
-echo "updating ${local_head:0:9} -> ${remote_head:0:9}"
-git_as_owner pull --quiet --ff-only origin main
 
 # install.sh is the deploy; its exit code is the acceptance check's.
 exec bash "${CHECKOUT}/deploy/install.sh"

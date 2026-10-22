@@ -150,16 +150,33 @@ def test_the_updater_only_ever_fast_forwards_as_the_checkouts_owner():
     # whoever owns the checkout so root never touches its objects. Anything
     # that could discard local work is a plan failure, not a flag.
     text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    # Command invocations only: not prose in an echo, not the `.git` directory test.
+    git_lines = [
+        line
+        for line in code
+        if re.search(r"(^|[\s(])(git|git_as_owner)(\s|$)", line) and not line.lstrip().startswith("echo")
+    ]
 
-    assert "--ff-only" in text
-    assert "runuser -u" in text
-    assert "merge-base --is-ancestor" in text
-    assert "--untracked-files=no" in text
+    for line in git_lines:
+        assert "runuser -u" in line or "git_as_owner" in line, line
+        for forbidden in (" reset", " clean", " rebase", " checkout", " switch", " -f ", " --force", " --hard"):
+            assert forbidden not in line, line
+    assert any("pull --quiet --ff-only" in line for line in git_lines)
+    assert any("merge-base --is-ancestor" in line for line in git_lines)
+    assert any("--untracked-files=no" in line for line in git_lines)
     assert "flock -n" in text
-    assert "reset --hard" not in text
-    assert "--force" not in text
-    assert "checkout --" not in text
+    assert "LOCK=/run/harbor-console-update.lock" in text
     assert "\r" not in text, "update.sh must be LF; CRLF shell does not run"
+
+
+def test_the_updater_bounds_its_network_calls_and_retries_a_failed_install():
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "timeout 120 runuser" in text and "fetch --quiet origin main" in text
+    assert "timeout 300 runuser" in text and "pull --quiet --ff-only origin main" in text
+    assert "DEPLOYED_FILE=/var/lib/harbor-console/deployed-commit" in text
+    assert '"${deployed}" == "${remote_head}"' in text
 
 
 def test_the_updater_hands_off_to_the_installer_from_the_checkout():
