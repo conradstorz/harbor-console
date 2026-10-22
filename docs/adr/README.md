@@ -34,6 +34,8 @@ the reasoning, including reasoning we later moved away from.
 | 0021 | [Colour the platform banner, and nothing else](0021-colour-the-platform-banner-and-nothing-else.md) | Accepted |
 | 0022 | [Keep a week of GPU busy history in the web unit's state directory](0022-keep-a-week-of-gpu-busy-history.md) | Accepted |
 | 0023 | [Keep a week of memory pressure history beside the GPU history](0023-keep-a-week-of-memory-pressure-history.md) | Accepted |
+| 0024 | [The repository's own containers are platform](0024-the-repositorys-own-containers-are-platform.md) | Accepted |
+| 0025 | [Deploy main automatically from a host timer](0025-deploy-main-automatically-from-a-host-timer.md) | Accepted |
 
 ## Adding a new ADR
 

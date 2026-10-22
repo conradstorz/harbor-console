@@ -8,6 +8,10 @@ UNIT_DIR=/etc/systemd/system
 # Both units are installed together: they share one checkout, one venv and one
 # service user, so a partial deploy is a state nobody wants to debug.
 UNIT_NAMES=(harbor-console.service harbor-console-web.service)
+# ADR 25: the auto-update pair. Installed with the others, but only the timer
+# is enabled; the service is what the timer starts.
+UPDATE_UNITS=(harbor-console-update.service harbor-console-update.timer)
+UPDATE_DROPIN_DIR="${UNIT_DIR}/harbor-console-update.service.d"
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
@@ -27,6 +31,20 @@ require_cmd() {
 }
 
 require_root
+
+# ADR 25: one installer at a time. update.sh takes this lock and execs this
+# script with HARBOR_UPDATE_LOCKED set; a human's run takes it here and
+# waits for an in-flight automatic update to finish rather than running
+# rsync --delete and the unit restarts alongside it.
+UPDATE_LOCK=/run/harbor-console-update.lock
+if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then
+  exec 9>"${UPDATE_LOCK}"
+  if ! flock -n 9; then
+    echo "==> Waiting for the running harbor-console update to finish"
+    flock 9
+  fi
+fi
+
 require_cmd uv "Install it first: https://docs.astral.sh/uv/"
 require_cmd rsync "Install it with your package manager (e.g. apt install rsync)."
 
@@ -142,11 +160,33 @@ usermod -aG docker harbor
 
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"
+# ADR 25: deploy/ is run by root (update.sh from the timer, and the compose
+# files by install.sh). It must not be writable by the service account the
+# web page runs as; the rest of the tree stays harbor's so uv's venv works.
+# The top-level directory is root's too, or harbor could move deploy/ aside
+# and put its own update.sh where the timer runs one as root.
+chown -R root:root "${INSTALL_DIR}/deploy"
+chown root:root "${INSTALL_DIR}"
 
-for unit in "${UNIT_NAMES[@]}"; do
+for unit in "${UNIT_NAMES[@]}" "${UPDATE_UNITS[@]}"; do
   echo "==> Installing systemd unit to ${UNIT_DIR}/${unit}"
   install -m 0644 "${SCRIPT_DIR}/${unit}" "${UNIT_DIR}/${unit}"
 done
+
+# ADR 25: the updater follows whatever checkout this script was run from,
+# and finds uv wherever root found it just now. Rewritten on every install,
+# so running the installer from a different checkout moves the timer to it.
+# Running it from /opt/harbor-console itself (the rsync target, not a git
+# checkout) leaves update.sh refusing with a clear error until it is run
+# from a checkout again.
+uv_dir=$(dirname "$(command -v uv)")
+echo "==> Pointing the updater at ${REPO_ROOT}"
+install -d -m 0755 "${UPDATE_DROPIN_DIR}"
+cat > "${UNIT_DIR}/harbor-console-update.service.d/checkout.conf" <<EOF
+[Service]
+Environment="HARBOR_CHECKOUT=${REPO_ROOT}"
+Environment="PATH=${uv_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EOF
 systemctl daemon-reload
 
 echo "==> Masking getty@tty1 (disables the login prompt on tty1 only)"
@@ -415,6 +455,33 @@ echo "==> Restarting harbor-console-web against the finished edge, then waiting 
 # the first poll could accept a pre-deploy verdict that is still fresh.
 rm -f /run/harbor-console/checks.json
 systemctl restart harbor-console-web.service
+
+# ADR 25: what the updater compares origin/main against. Written here, after
+# every install step and before the acceptance check, because the check
+# judges the platform, not the install: a certificate problem must not make
+# the updater re-run the whole install every five minutes. A failure above
+# this line leaves the old record in place and the updater retries.
+DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit
+# As the checkout's owner, the way update.sh runs every git command: git
+# since 2.35.2 refuses a repository owned by someone else ("dubious
+# ownership"), and root almost never owns the checkout. Written atomically
+# so a crash mid-write cannot leave a truncated record.
+checkout_owner=$(stat -c %U "${REPO_ROOT}")
+deployed_commit=$(runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
+if [[ ${deployed_commit} =~ ^[0-9a-f]{40}$ ]]; then
+  install -d -m 0755 "$(dirname "${DEPLOYED_FILE}")"
+  printf '%s\n' "${deployed_commit}" > "${DEPLOYED_FILE}.tmp"
+  mv -f "${DEPLOYED_FILE}.tmp" "${DEPLOYED_FILE}"
+else
+  echo "warning: could not read the commit of ${REPO_ROOT} (not a git checkout, or not readable as ${checkout_owner}); the updater cannot tell this install is current and will re-run it (ADR 25)." >&2
+fi
+
+# ADR 25. After the record, not before: a tick that fires the moment the
+# timer is enabled must find this install already recorded, or it will
+# start a second one. A timer already running keeps its schedule.
+echo "==> Enabling harbor-console-update.timer (deploys main every five minutes, ADR 25)"
+systemctl enable --now harbor-console-update.timer
+
 check_status=2
 check_output=""
 for attempt in $(seq 1 12); do
@@ -438,6 +505,7 @@ echo
 for unit in "${UNIT_NAMES[@]}"; do
   systemctl status "${unit}" --no-pager || true
 done
+systemctl list-timers harbor-console-update.timer --no-pager || true
 echo
 echo "${check_output}"
 if [[ ${check_status} -ne 0 ]]; then

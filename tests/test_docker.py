@@ -158,3 +158,46 @@ def test_one_malformed_entry_is_skipped_not_fatal():
 
     assert [c.name for c in result] == ["fine", "ok"]
     assert result[1].published == ()
+
+
+def test_parses_state_restart_count_exit_code_and_health():
+    entry = inspect_entry("watchtower", labels={"harbor.kind": "internal"})
+    entry["State"] = {"Status": "restarting", "ExitCode": 1, "Health": {"Status": "unhealthy"}}
+    entry["RestartCount"] = 637
+
+    (container,) = running_containers(run=fake_run("abc\n", [entry]))
+
+    assert container.status == "restarting"
+    assert container.restarts == 637
+    assert container.exit_code == 1
+    assert container.health == "unhealthy"
+
+
+def test_state_fields_default_when_the_entry_has_no_state():
+    (container,) = running_containers(run=fake_run("abc\n", [inspect_entry("gte-db-1")]))
+
+    assert (container.status, container.restarts, container.exit_code, container.health) == (
+        "running", 0, None, None,
+    )
+
+
+def test_state_fields_default_when_malformed():
+    entry = inspect_entry("gte-db-1")
+    entry["State"] = {"Status": 7, "ExitCode": "boom", "Health": "nope"}
+    entry["RestartCount"] = "many"
+
+    (container,) = running_containers(run=fake_run("abc\n", [entry]))
+
+    assert (container.status, container.restarts, container.exit_code, container.health) == (
+        "running", 0, None, None,
+    )
+
+
+def test_health_is_none_when_the_image_has_no_healthcheck():
+    entry = inspect_entry("traefik")
+    entry["State"] = {"Status": "running", "ExitCode": 0}
+
+    (container,) = running_containers(run=fake_run("abc\n", [entry]))
+
+    assert container.health is None
+    assert container.exit_code == 0

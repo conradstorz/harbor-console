@@ -129,6 +129,9 @@ services:
         priority: 100
     labels:
       harbor.kind: edge
+      # ADR 24: a container this repository deploys is platform; a crash
+      # loop or failed healthcheck here trips the banner, not just a row.
+      harbor.platform: "true"
       harbor.description: "Reverse proxy; every HTTPS route on this host"
 
 volumes:

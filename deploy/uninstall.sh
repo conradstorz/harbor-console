@@ -17,6 +17,10 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
+# ADR 25: do not tear down under a running automatic update.
+exec 9>/run/harbor-console-update.lock
+flock 9
+
 # compose.yaml interpolates TAILNET_ADDRESS and ACME_EMAIL under `${VAR:?}`
 # guards, so `docker compose down` fails outright when `.env` is missing --
 # which is exactly the half-removed state this script has to survive. Supply
@@ -31,6 +35,10 @@ if [[ -f "${INSTALL_DIR}/deploy/traefik/compose.yaml" ]]; then
   fi
 fi
 
+echo "==> Stopping and disabling harbor-console-update.timer (ADR 25)"
+systemctl disable --now harbor-console-update.timer 2>/dev/null || true
+systemctl stop harbor-console-update.service 2>/dev/null || true
+
 for unit in "${UNIT_NAMES[@]}"; do
   echo "==> Stopping and disabling ${unit}"
   systemctl disable --now "${unit}" 2>/dev/null || true
@@ -40,6 +48,12 @@ for unit in "${UNIT_NAMES[@]}"; do
   echo "==> Removing ${UNIT_DIR}/${unit}"
   rm -f "${UNIT_DIR}/${unit}"
 done
+for unit in harbor-console-update.service harbor-console-update.timer; do
+  echo "==> Removing ${UNIT_DIR}/${unit}"
+  rm -f "${UNIT_DIR}/${unit}"
+done
+rm -rf "${UNIT_DIR}/harbor-console-update.service.d"
+rm -rf /var/lib/harbor-console-update
 systemctl daemon-reload
 
 echo "==> Restoring the login prompt on tty1"

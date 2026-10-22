@@ -68,12 +68,14 @@ Decide:
 
 - `directory.py` — the policy, and pure: containers, routers, listeners and
   probe results in; rows and findings out. One row per declared container —
-  `http`, `tcp`, `internal` or `edge` — and four findings:
+  `http`, `tcp`, `internal` or `edge` — and six findings:
   `undeclared-container` for a container carrying no declaration at all,
   `bypasses-proxy` for a published host port no `harbor.kind=tcp` label
   accounts for, `route-error` for a router Traefik rejects or never saw, and
   `undeclared-tailnet-listener` for a host process holding a tailnet port that
-  no container publishes. Traefik is the truth for whether a route is live;
+  no container publishes, `crash-looping` for a container Docker reports as
+  restarting, and `unhealthy` for a container failing its own healthcheck.
+  Traefik is the truth for whether a route is live;
   this module only joins its verdict to the container that asked for it.
 
 The contract:

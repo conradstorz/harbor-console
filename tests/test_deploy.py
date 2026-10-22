@@ -120,3 +120,133 @@ def test_watchtower_is_the_maintained_fork_and_negotiates_the_docker_api_version
     repo, version = watchtower_image()
     assert repo == "nickfedor/watchtower"
     assert version >= (1, 23, 1)
+
+
+def compose_services(path: Path) -> list[str]:
+    """Top-level service names: two-space-indented keys under `services:`."""
+    text = path.read_text(encoding="utf-8")
+    body = text.split("services:", 1)[1]
+    body = re.split(r"^\S", body, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.findall(r"^  ([A-Za-z][\w-]*):\s*$", body, re.MULTILINE)
+
+
+def test_every_container_this_repo_deploys_declares_itself_platform():
+    # ADR 24: the platform-containers check judges only containers that
+    # carry harbor.platform=true. A service added here without it is a
+    # container the check silently ignores.
+    for path, expected in ((TRAEFIK_COMPOSE, ["traefik"]), (HOSTED_COMPOSE, ["portainer", "watchtower"])):
+        text = path.read_text(encoding="utf-8")
+        assert compose_services(path) == expected, path
+        assert text.count('harbor.platform: "true"') == len(expected), path
+
+
+UPDATE_SCRIPT = REPO / "deploy" / "update.sh"
+UPDATE_SERVICE = REPO / "deploy" / "harbor-console-update.service"
+UPDATE_TIMER = REPO / "deploy" / "harbor-console-update.timer"
+
+
+def test_the_updater_only_ever_fast_forwards_as_the_checkouts_owner():
+    # ADR 25. The one write to the checkout is a fast-forward pull, run as
+    # whoever owns the checkout so root never touches its objects. Anything
+    # that could discard local work is a plan failure, not a flag.
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    # Command invocations only: not prose in an echo, not the `.git` directory test.
+    git_lines = [
+        line
+        for line in code
+        if re.search(r"(^|[\s(])(git|git_as_owner)(\s|$)", line) and not line.lstrip().startswith("echo")
+    ]
+
+    for line in git_lines:
+        assert "runuser -u" in line or "git_as_owner" in line, line
+        for forbidden in (" reset", " clean", " rebase", " checkout", " switch", " -f ", " --force", " --hard"):
+            assert forbidden not in line, line
+    assert any("pull --quiet --ff-only" in line for line in git_lines)
+    assert any("merge-base --is-ancestor" in line for line in git_lines)
+    assert any("--untracked-files=no" in line for line in git_lines)
+    assert "flock -n" in text
+    assert "LOCK=/run/harbor-console-update.lock" in text
+    assert "\r" not in text, "update.sh must be LF; CRLF shell does not run"
+
+
+def test_the_updater_bounds_its_network_calls_and_retries_a_failed_install():
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "timeout 120 runuser" in text and "fetch --quiet origin main" in text
+    assert "timeout 300 runuser" in text and "pull --quiet --ff-only origin main" in text
+    assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
+    assert '"${deployed}" == "${remote_head}"' in text
+
+
+def test_the_updater_hands_off_to_the_installer_from_the_checkout():
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'bash "${CHECKOUT}/deploy/install.sh"' in text
+    assert "HARBOR_CHECKOUT" in text
+    assert "export HARBOR_UPDATE_LOCKED=1" in text
+    assert "grep -qx sudo" in text
+
+
+def test_the_update_timer_fires_every_five_minutes_and_only_the_timer_is_installed():
+    timer = UPDATE_TIMER.read_text(encoding="utf-8")
+    service = UPDATE_SERVICE.read_text(encoding="utf-8")
+
+    assert "OnBootSec=5min\n" in timer
+    assert "OnUnitActiveSec=5min\n" in timer
+    assert "Persistent=false\n" in timer
+    assert "WantedBy=timers.target\n" in timer
+    assert "Type=oneshot\n" in service
+    assert "ExecStart=/bin/bash /opt/harbor-console/deploy/update.sh\n" in service
+    assert "[Install]" not in service, "the timer starts the service; it is never enabled itself"
+
+
+UNINSTALL = REPO / "deploy" / "uninstall.sh"
+
+
+def test_the_installer_installs_the_updater_and_enables_only_its_timer():
+    text = INSTALL.read_text(encoding="utf-8")
+
+    assert "harbor-console-update.service" in text
+    assert "systemctl enable --now harbor-console-update.timer" in text
+    assert "systemctl enable harbor-console-update.service" not in text
+    assert "harbor-console-update.service.d/checkout.conf" in text
+    assert 'Environment="HARBOR_CHECKOUT=${REPO_ROOT}"' in text
+    assert 'Environment="PATH=${uv_dir}:' in text
+    assert 'runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD' in text
+    assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
+    assert text.index("deployed-commit") < text.index('harbor-console-check" 2>&1')
+    assert text.index("deployed-commit") < text.index("systemctl enable --now harbor-console-update.timer")
+    assert 'UPDATE_LOCK=/run/harbor-console-update.lock' in text
+    assert 'chown -R root:root "${INSTALL_DIR}/deploy"' in text
+    assert text.index('chown -R harbor:harbor "${INSTALL_DIR}"') < text.index('chown -R root:root "${INSTALL_DIR}/deploy"')
+    assert text.index('chown -R root:root "${INSTALL_DIR}/deploy"') < text.index('chown root:root "${INSTALL_DIR}"')
+
+
+def test_every_prerequisite_check_names_its_command_and_its_hint_separately():
+    # A lost space turned `require_cmd uv "..."` into one argument once, and
+    # every install then failed before touching anything; the suite did not
+    # notice because nothing read these lines.
+    text = INSTALL.read_text(encoding="utf-8")
+    calls = re.findall(r"^require_cmd (.*)$", text, re.MULTILINE)
+
+    assert calls, "install.sh checks its prerequisites with require_cmd"
+    for call in calls:
+        assert re.fullmatch(r'[a-z][\w-]* ".+"', call), call
+    assert 'if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then' in text
+
+
+def test_the_installer_writes_the_dropin_before_the_daemon_reload_that_enables_the_timer():
+    text = INSTALL.read_text(encoding="utf-8")
+
+    assert text.index("checkout.conf") < text.index("systemctl enable --now harbor-console-update.timer")
+
+
+def test_uninstall_removes_the_updater():
+    text = UNINSTALL.read_text(encoding="utf-8")
+
+    assert "harbor-console-update.timer" in text
+    assert "harbor-console-update.service" in text
+    assert "harbor-console-update.service.d" in text
+    assert "/var/lib/harbor-console-update" in text
+    assert "flock 9" in text

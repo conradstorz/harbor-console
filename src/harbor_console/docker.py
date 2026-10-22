@@ -39,12 +39,24 @@ IPV4_ANY = "0.0.0.0"
 
 @dataclass(frozen=True)
 class Container:
-    """One running container: what it publishes and what it declares."""
+    """One running container: what it publishes, what it declares, how it is doing.
+
+    `status` is Docker's `State.Status` (`running`, `restarting`, ...);
+    `restarts` is the cumulative `RestartCount` since the container was
+    created; `exit_code` is the last exit; `health` is the healthcheck's
+    verdict (`healthy`, `unhealthy`, `starting`) or None when the image has
+    none. Defaults describe a container nothing is wrong with, so a caller
+    that does not care about state can leave them out.
+    """
 
     name: str
     published: tuple[tuple[str, int], ...]
     labels: dict[str, str] = field(default_factory=dict)
     networks: frozenset[str] = frozenset()
+    status: str = "running"
+    restarts: int = 0
+    exit_code: int | None = None
+    health: str | None = None
 
 
 def running_containers(
@@ -107,12 +119,33 @@ def _parse(entry: object) -> Container | None:
     )
     ports = settings.get("Ports") if isinstance(settings.get("Ports"), dict) else {}
     networks = settings.get("Networks") if isinstance(settings.get("Networks"), dict) else {}
+    state = entry.get("State") if isinstance(entry.get("State"), dict) else {}
+    health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
     return Container(
         name=name.lstrip("/"),
         published=_publish_pairs(ports),
         labels={str(k): str(v) for k, v in labels.items()},
         networks=frozenset(str(n) for n in networks),
+        status=_text(state.get("Status"), "running") or "running",
+        restarts=_count(entry.get("RestartCount")),
+        exit_code=_int_or_none(state.get("ExitCode")),
+        health=_text(health.get("Status"), None),
     )
+
+
+def _text(value: object, default: str | None) -> str | None:
+    """A non-empty string, or the default."""
+    return value if isinstance(value, str) and value else default
+
+
+def _int_or_none(value: object) -> int | None:
+    """An int, or None. `bool` is an int in Python and is not a count here."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _count(value: object) -> int:
+    parsed = _int_or_none(value)
+    return parsed if parsed is not None and parsed >= 0 else 0
 
 
 def _publish_pairs(ports: dict) -> tuple[tuple[str, int], ...]:
