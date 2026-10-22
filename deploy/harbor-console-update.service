@@ -1,0 +1,13 @@
+[Unit]
+Description=Harbor Console: deploy main when it has moved (ADR 25)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The installed copy, not the checkout: install.sh's rsync replaces this
+# file with the checkout's on every deploy, so a fix to update.sh on main
+# takes effect the run after the one that installs it.
+ExecStart=/bin/bash /opt/harbor-console/deploy/update.sh
+StandardOutput=journal
+StandardError=journal

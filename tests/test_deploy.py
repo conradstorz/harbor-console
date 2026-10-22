@@ -138,3 +138,45 @@ def test_every_container_this_repo_deploys_declares_itself_platform():
         text = path.read_text(encoding="utf-8")
         assert compose_services(path) == expected, path
         assert text.count('harbor.platform: "true"') == len(expected), path
+
+
+UPDATE_SCRIPT = REPO / "deploy" / "update.sh"
+UPDATE_SERVICE = REPO / "deploy" / "harbor-console-update.service"
+UPDATE_TIMER = REPO / "deploy" / "harbor-console-update.timer"
+
+
+def test_the_updater_only_ever_fast_forwards_as_the_checkouts_owner():
+    # ADR 25. The one write to the checkout is a fast-forward pull, run as
+    # whoever owns the checkout so root never touches its objects. Anything
+    # that could discard local work is a plan failure, not a flag.
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "--ff-only" in text
+    assert "runuser -u" in text
+    assert "merge-base --is-ancestor" in text
+    assert "--untracked-files=no" in text
+    assert "flock -n" in text
+    assert "reset --hard" not in text
+    assert "--force" not in text
+    assert "checkout --" not in text
+    assert "\r" not in text, "update.sh must be LF; CRLF shell does not run"
+
+
+def test_the_updater_hands_off_to_the_installer_from_the_checkout():
+    text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'bash "${CHECKOUT}/deploy/install.sh"' in text
+    assert "HARBOR_CHECKOUT" in text
+
+
+def test_the_update_timer_fires_every_five_minutes_and_only_the_timer_is_installed():
+    timer = UPDATE_TIMER.read_text(encoding="utf-8")
+    service = UPDATE_SERVICE.read_text(encoding="utf-8")
+
+    assert "OnBootSec=5min\n" in timer
+    assert "OnUnitActiveSec=5min\n" in timer
+    assert "Persistent=false\n" in timer
+    assert "WantedBy=timers.target\n" in timer
+    assert "Type=oneshot\n" in service
+    assert "ExecStart=/bin/bash /opt/harbor-console/deploy/update.sh\n" in service
+    assert "[Install]" not in service, "the timer starts the service; it is never enabled itself"
