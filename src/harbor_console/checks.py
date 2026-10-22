@@ -4,15 +4,16 @@ Pure policy, like `directory.py`: evidence in, named checks out, so every
 rule is testable with plain values. Nothing here collects or renders.
 
 Platform only. A single declared service being down is a row-level DOWN in
-the directory, never a check here, except for the containers this repository deploys itself,
-which declare `harbor.platform=true` (ADR 24): a banner that is red half the year
+the directory, never a check here: a banner that is red half the year
 because of one dev container stops meaning anything, and the next edge
-outage hides behind it. The checks cover the four outages that have
-already happened -- Traefik's Docker provider dying under a Docker upgrade,
+outage hides behind it. The one exception is a container this repository
+deploys itself, which declares `harbor.platform=true` (ADR 24): the rows
+depend on those. The checks cover the four outages that have already
+happened -- Traefik's Docker provider dying under a Docker upgrade,
 Traefik's default route landing on the wrong network (ADR 17), a reboot
-moving Traefik off the address the firewall rule named (ADR 19) -- and the
-one that has not yet: a certificate renewal failing silently, and a hosted container
-crash-looping for a fortnight unseen (watchtower, 2026-10-21).
+moving Traefik off the address the firewall rule named (ADR 19), a hosted
+container crash-looping for a fortnight unseen (watchtower, 2026-10-21) --
+and the one that has not yet: a certificate renewal failing silently.
 
 `unknown` never trips the banner. A check whose evidence is missing says so
 and stays out of the verdict, the same rule the findings follow (ADR 18):
