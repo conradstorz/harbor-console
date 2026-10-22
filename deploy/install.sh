@@ -163,8 +163,8 @@ echo "==> Pointing the updater at ${REPO_ROOT}"
 install -d -m 0755 "${UPDATE_DROPIN_DIR}"
 cat > "${UNIT_DIR}/harbor-console-update.service.d/checkout.conf" <<EOF
 [Service]
-Environment=HARBOR_CHECKOUT=${REPO_ROOT}
-Environment=PATH=${uv_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment="HARBOR_CHECKOUT=${REPO_ROOT}"
+Environment="PATH=${uv_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EOF
 systemctl daemon-reload
 
@@ -446,12 +446,18 @@ systemctl restart harbor-console-web.service
 # the updater re-run the whole install every five minutes. A failure above
 # this line leaves the old record in place and the updater retries.
 DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit
-if deployed_commit=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null); then
+# As the checkout's owner, the way update.sh runs every git command: git
+# since 2.35.2 refuses a repository owned by someone else ("dubious
+# ownership"), and root almost never owns the checkout. Written atomically
+# so a crash mid-write cannot leave a truncated record.
+checkout_owner=$(stat -c %U "${REPO_ROOT}")
+if deployed_commit=$(runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null)    && [[ ${deployed_commit} =~ ^[0-9a-f]{40}$ ]]; then
   install -d -m 0755 "$(dirname "${DEPLOYED_FILE}")"
   printf '%s
-' "${deployed_commit}" > "${DEPLOYED_FILE}"
+' "${deployed_commit}" > "${DEPLOYED_FILE}.tmp"
+  mv -f "${DEPLOYED_FILE}.tmp" "${DEPLOYED_FILE}"
 else
-  echo "warning: ${REPO_ROOT} is not a git checkout; the updater cannot tell this install is current and will re-run it (ADR 25)." >&2
+  echo "warning: could not read the commit of ${REPO_ROOT} (not a git checkout, or not readable as ${checkout_owner}); the updater cannot tell this install is current and will re-run it (ADR 25)." >&2
 fi
 
 check_status=2

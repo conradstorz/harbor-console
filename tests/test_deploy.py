@@ -209,8 +209,9 @@ def test_the_installer_installs_the_updater_and_enables_only_its_timer():
     assert "systemctl enable --now harbor-console-update.timer" in text
     assert "systemctl enable harbor-console-update.service" not in text
     assert "harbor-console-update.service.d/checkout.conf" in text
-    assert "Environment=HARBOR_CHECKOUT=${REPO_ROOT}" in text
-    assert 'Environment=PATH=${uv_dir}:' in text
+    assert 'Environment="HARBOR_CHECKOUT=${REPO_ROOT}"' in text
+    assert 'Environment="PATH=${uv_dir}:' in text
+    assert 'runuser -u "${checkout_owner}" -- git -C "${REPO_ROOT}" rev-parse HEAD' in text
     assert "DEPLOYED_FILE=/var/lib/harbor-console-update/deployed-commit" in text
     assert text.index("deployed-commit") < text.index('harbor-console-check" 2>&1')
 
