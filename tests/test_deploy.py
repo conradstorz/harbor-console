@@ -220,6 +220,19 @@ def test_the_installer_installs_the_updater_and_enables_only_its_timer():
     assert 'UPDATE_LOCK=/run/harbor-console-update.lock' in text
     assert 'chown -R root:root "${INSTALL_DIR}/deploy"' in text
     assert text.index('chown -R harbor:harbor "${INSTALL_DIR}"') < text.index('chown -R root:root "${INSTALL_DIR}/deploy"')
+    assert text.index('chown -R root:root "${INSTALL_DIR}/deploy"') < text.index('chown root:root "${INSTALL_DIR}"')
+
+
+def test_every_prerequisite_check_names_its_command_and_its_hint_separately():
+    # A lost space turned `require_cmd uv "..."` into one argument once, and
+    # every install then failed before touching anything; the suite did not
+    # notice because nothing read these lines.
+    text = INSTALL.read_text(encoding="utf-8")
+    calls = re.findall(r"^require_cmd (.*)$", text, re.MULTILINE)
+
+    assert calls, "install.sh checks its prerequisites with require_cmd"
+    for call in calls:
+        assert re.fullmatch(r'[a-z][\w-]* ".+"', call), call
     assert 'if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then' in text
 
 

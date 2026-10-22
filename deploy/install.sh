@@ -45,7 +45,7 @@ if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then
   fi
 fi
 
-require_cmd uv"Install it first: https://docs.astral.sh/uv/"
+require_cmd uv "Install it first: https://docs.astral.sh/uv/"
 require_cmd rsync "Install it with your package manager (e.g. apt install rsync)."
 
 if ! getent group docker >/dev/null 2>&1; then
@@ -163,7 +163,10 @@ chown -R harbor:harbor "${INSTALL_DIR}"
 # ADR 25: deploy/ is run by root (update.sh from the timer, and the compose
 # files by install.sh). It must not be writable by the service account the
 # web page runs as; the rest of the tree stays harbor's so uv's venv works.
+# The top-level directory is root's too, or harbor could move deploy/ aside
+# and put its own update.sh where the timer runs one as root.
 chown -R root:root "${INSTALL_DIR}/deploy"
+chown root:root "${INSTALL_DIR}"
 
 for unit in "${UNIT_NAMES[@]}" "${UPDATE_UNITS[@]}"; do
   echo "==> Installing systemd unit to ${UNIT_DIR}/${unit}"
