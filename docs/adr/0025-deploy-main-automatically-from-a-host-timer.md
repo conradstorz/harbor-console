@@ -57,8 +57,12 @@ whatever checkout the installer was last run from.
 - Root on hpz440 runs whatever lands on `main`. That was already true of
   every manual deploy; what goes is the human glance between merge and
   run. The trust boundary is the repository's `main` branch and the
-  accounts that can push to it. The fetch is HTTPS from a public repository
-  and needs no credential on the host.
+  accounts that can push to it. It also includes whoever owns the checkout,
+  since `install.sh` runs from that tree as root and `git status` cannot see
+  every way an owner can alter it; the updater therefore refuses a checkout
+  whose owner is neither root nor in the `sudo` group, so it never gives an
+  account root it did not already have. The fetch is HTTPS from a public
+  repository and needs no credential on the host.
 - A refusal (diverged or dirty checkout) and a network outage both leave
   the old code running correctly and the unit `failed`, every five minutes
   until someone looks; the journal says which. A pull whose install failed

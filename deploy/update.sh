@@ -36,6 +36,13 @@ if ! flock -n 9; then
 fi
 
 owner=$(stat -c %U "${CHECKOUT}")
+# The owner of the checkout can put anything into deploy/install.sh, which
+# runs as root below. Only follow a checkout whose owner could already do
+# that by other means: root, or a member of the sudo group.
+if [[ "${owner}" != "root" ]] && ! id -nG "${owner}" 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
+  echo "Error: ${CHECKOUT} is owned by '${owner}', who is not root and not in the sudo group; refusing to run its install.sh as root" >&2
+  exit 1
+fi
 git_as_owner() {
   runuser -u "${owner}" -- git -C "${CHECKOUT}" "$@"
 }

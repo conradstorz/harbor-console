@@ -185,6 +185,7 @@ def test_the_updater_hands_off_to_the_installer_from_the_checkout():
     assert 'bash "${CHECKOUT}/deploy/install.sh"' in text
     assert "HARBOR_CHECKOUT" in text
     assert "export HARBOR_UPDATE_LOCKED=1" in text
+    assert "grep -qx sudo" in text
 
 
 def test_the_update_timer_fires_every_five_minutes_and_only_the_timer_is_installed():
