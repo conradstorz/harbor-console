@@ -217,6 +217,8 @@ def test_the_installer_installs_the_updater_and_enables_only_its_timer():
     assert text.index("deployed-commit") < text.index('harbor-console-check" 2>&1')
     assert text.index("deployed-commit") < text.index("systemctl enable --now harbor-console-update.timer")
     assert 'UPDATE_LOCK=/run/harbor-console-update.lock' in text
+    assert 'chown -R root:root "${INSTALL_DIR}/deploy"' in text
+    assert text.index('chown -R harbor:harbor "${INSTALL_DIR}"') < text.index('chown -R root:root "${INSTALL_DIR}/deploy"')
     assert 'if [[ -z "${HARBOR_UPDATE_LOCKED:-}" ]]; then' in text
 
 

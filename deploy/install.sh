@@ -160,6 +160,10 @@ usermod -aG docker harbor
 
 echo "==> Setting ownership of ${INSTALL_DIR} to harbor"
 chown -R harbor:harbor "${INSTALL_DIR}"
+# ADR 25: deploy/ is run by root (update.sh from the timer, and the compose
+# files by install.sh). It must not be writable by the service account the
+# web page runs as; the rest of the tree stays harbor's so uv's venv works.
+chown -R root:root "${INSTALL_DIR}/deploy"
 
 for unit in "${UNIT_NAMES[@]}" "${UPDATE_UNITS[@]}"; do
   echo "==> Installing systemd unit to ${UNIT_DIR}/${unit}"
