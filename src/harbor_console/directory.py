@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from harbor_console.docker import DOCKER_UNAVAILABLE, Container
 from harbor_console.listening import (
@@ -45,6 +45,12 @@ STATE_ROUTE_ERROR = "ROUTE ERROR"
 STATE_LISTENING = "LISTENING"
 STATE_INTERNAL = "INTERNAL"
 STATE_UNKNOWN = "UNKNOWN"
+STATE_RESTARTING = "RESTARTING"
+STATE_UNHEALTHY = "UNHEALTHY"
+
+#: Docker's own words for the two conditions `container_finding` reports.
+STATUS_RESTARTING = "restarting"
+HEALTH_UNHEALTHY = "unhealthy"
 
 _RULE_LABEL = re.compile(r"^traefik\.http\.routers\.([^.]+)\.rule$")
 _HOST = re.compile(r"Host\(`([^`]+)`\)")
@@ -124,17 +130,14 @@ def build_rows(
             continue
         description = container.labels.get(LABEL_DESCRIPTION, "")
         if kind == KIND_HTTP:
-            rows.append(
-                _http_row(container, by_name, traefik_available, health, probed, description)
-            )
+            row = _http_row(container, by_name, traefik_available, health, probed, description)
         elif kind == KIND_TCP:
-            rows.append(_tcp_row(container, listeners, description))
+            row = _tcp_row(container, listeners, description)
         elif kind == KIND_EDGE:
-            rows.append(_edge_row(container, listeners, description))
+            row = _edge_row(container, listeners, description)
         else:
-            rows.append(
-                Row(container.name, KIND_INTERNAL, "", container.name, description, STATE_INTERNAL)
-            )
+            row = Row(container.name, KIND_INTERNAL, "", container.name, description, STATE_INTERNAL)
+        rows.append(_with_container_state(row, container))
     return tuple(sorted(rows, key=lambda row: row.name))
 
 
@@ -243,6 +246,8 @@ UNDECLARED_CONTAINER = "undeclared-container"
 BYPASSES_PROXY = "bypasses-proxy"
 ROUTE_ERROR = "route-error"
 UNDECLARED_TAILNET_LISTENER = "undeclared-tailnet-listener"
+CRASH_LOOPING = "crash-looping"
+UNHEALTHY = "unhealthy"
 
 #: Linux's default local port range. A tailnet listener in here is a
 #: kernel-assigned port nobody chose -- tailscaled's own peerapi lands in it
@@ -257,6 +262,36 @@ class Finding:
 
     kind: str
     detail: str
+
+
+def container_finding(container: Container) -> Finding | None:
+    """What Docker itself knows is wrong with this container, or None.
+
+    A restarting container is a crash loop: `restart: always` turning every
+    exit into another start, which is how watchtower ran 637 times without a
+    row or finding to show for it. Restarting wins over unhealthy because a
+    looping container's healthcheck means nothing. The restart count is
+    detail, never the trigger: it is cumulative since the container was
+    created, and one restart a week ago is not a finding.
+    """
+    if container.status == STATUS_RESTARTING:
+        last = f", last exit {container.exit_code}" if container.exit_code is not None else ""
+        return Finding(
+            CRASH_LOOPING,
+            f"container '{container.name}' is restarting ({container.restarts} restarts{last})",
+        )
+    if container.health == HEALTH_UNHEALTHY:
+        return Finding(UNHEALTHY, f"container '{container.name}' fails its own healthcheck")
+    return None
+
+
+def _with_container_state(row: Row, container: Container) -> Row:
+    """Docker's verdict on the container overrides the kind's verdict on the service."""
+    finding = container_finding(container)
+    if finding is None:
+        return row
+    state = STATE_RESTARTING if finding.kind == CRASH_LOOPING else STATE_UNHEALTHY
+    return replace(row, state=state)
 
 
 def find_findings(
@@ -292,6 +327,10 @@ def find_findings(
                         f"container '{container.name}' carries no {LABEL_ENABLE} or {LABEL_KIND} label",
                     )
                 )
+        for container in sorted(containers, key=lambda c: c.name):
+            finding = container_finding(container)
+            if finding is not None:
+                findings.append(finding)
         for container in sorted(containers, key=lambda c: c.name):
             for addr, port in _unaccounted_ports(container):
                 findings.append(
