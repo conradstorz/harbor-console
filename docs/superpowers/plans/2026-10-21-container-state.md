@@ -544,7 +544,7 @@ def _platform_containers(available: bool, containers: Sequence[Container]) -> Ch
     the three containers this repository deploys are the machinery the rows
     depend on, and when one of them loops nothing else on the page says so.
     A platform container that exited with no restart policy is absent from
-    `docker ps` and this check cannot miss it; all three carry a policy.
+    `docker ps` and this check cannot see it; all three carry a policy.
     """
     if not available:
         return Check(CHECK_PLATFORM_CONTAINERS, STATE_UNKNOWN, "Docker could not be read")
@@ -835,7 +835,7 @@ platform". Red still means one thing: the host's own machinery is broken.
   since the container was created, and one restart a week ago would nag
   until the next recreate.
 - A platform container that exits with no restart policy and stays down is
-  absent from `docker ps`, and this check cannot miss it. All three carry a
+  absent from `docker ps`, and this check cannot see it. All three carry a
   policy; Traefik, the `unless-stopped` one, is already covered by
   `traefik-api`, `docker-provider` and `edge-listening`. Reading
   `docker ps -a` to close the gap was rejected: a deliberately stopped

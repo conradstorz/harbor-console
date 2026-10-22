@@ -162,7 +162,7 @@ def _platform_containers(available: bool, containers: Sequence[Container]) -> Ch
     the three containers this repository deploys are the machinery the rows
     depend on, and when one of them loops nothing else on the page says so.
     A platform container that exited with no restart policy is absent from
-    `docker ps` and this check cannot miss it; all three carry a policy.
+    `docker ps` and this check cannot see it; all three carry a policy.
     """
     if not available:
         return Check(CHECK_PLATFORM_CONTAINERS, STATE_UNKNOWN, "Docker could not be read")

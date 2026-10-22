@@ -64,7 +64,7 @@ platform". Red still means one thing: the host's own machinery is broken.
   since the container was created, and one restart a week ago would nag
   until the next recreate.
 - A platform container that exits with no restart policy and stays down is
-  absent from `docker ps`, and this check cannot miss it. All three carry a
+  absent from `docker ps`, and this check cannot see it. All three carry a
   policy; Traefik, the `unless-stopped` one, is already covered by
   `traefik-api`, `docker-provider` and `edge-listening`. Reading
   `docker ps -a` to close the gap was rejected: a deliberately stopped

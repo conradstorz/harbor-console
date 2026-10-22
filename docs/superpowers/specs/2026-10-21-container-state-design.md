@@ -87,7 +87,7 @@ New check `platform-containers`:
 - `ok` otherwise, including when no container carries the label.
 
 Limit, recorded in the ADR: a platform container that exited with no restart
-policy is absent from `docker ps` and this check cannot miss it. All three
+policy is absent from `docker ps` and this check cannot see it. All three
 carry `restart: always` or `unless-stopped`; Traefik, the `unless-stopped`
 one, is already covered by `traefik-api`, `docker-provider` and
 `edge-listening`.
