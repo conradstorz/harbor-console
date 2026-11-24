@@ -1,0 +1,11 @@
+[Unit]
+Description=Harbor Console: check main every five minutes (ADR 25)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+# A missed tick is just the next tick; nothing to catch up on.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

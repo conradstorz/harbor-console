@@ -130,6 +130,22 @@ def test_route_error_is_emphasised():
     assert '<span class="down">ROUTE ERROR</span>' in page
 
 
+def test_restarting_is_emphasised():
+    looping = Row("watchtower", KIND_INTERNAL, "", "watchtower", "", "RESTARTING")
+
+    page = web.render_page(snapshot(rows=(looping,))).decode()
+
+    assert '<span class="down">RESTARTING</span>' in page
+
+
+def test_unhealthy_is_emphasised():
+    sick = Row("gte-db-1", KIND_INTERNAL, "", "gte-db-1", "", "UNHEALTHY")
+
+    page = web.render_page(snapshot(rows=(sick,))).decode()
+
+    assert '<span class="down">UNHEALTHY</span>' in page
+
+
 def test_a_tcp_row_named_like_a_router_gets_no_health_detail():
     """`health` is keyed by router name; only HTTP rows may look in it. A
     tcp or internal container that happens to share a router's name must not

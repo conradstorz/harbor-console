@@ -23,7 +23,14 @@ from harbor_console.checks import (
     is_stale,
     platform_broken,
 )
-from harbor_console.directory import KIND_HTTP, STATE_DOWN, STATE_ROUTE_ERROR, Row
+from harbor_console.directory import (
+    KIND_HTTP,
+    STATE_DOWN,
+    STATE_RESTARTING,
+    STATE_ROUTE_ERROR,
+    STATE_UNHEALTHY,
+    Row,
+)
 from harbor_console.gpu import format_gpu
 from harbor_console.gpu_history import AVERAGES_LABEL, NOT_REPORTED, format_averages, history_key
 from harbor_console.inventory import REACH_LOOPBACK, Entry
@@ -244,7 +251,7 @@ def _target_cell(row: Row) -> str:
 
 
 def _state_cell(row: Row) -> str:
-    if row.state in (STATE_DOWN, STATE_ROUTE_ERROR):
+    if row.state in (STATE_DOWN, STATE_ROUTE_ERROR, STATE_RESTARTING, STATE_UNHEALTHY):
         return f"<span class=\"down\">{escape(row.state)}</span>"
     return escape(row.state)
 

@@ -30,6 +30,7 @@ services:
       # is on `admin` and nothing else here is.
       traefik.docker.network: admin
       harbor.description: "Portainer"
+      harbor.platform: "true"
 
   watchtower:
     # nicholas-fedor/watchtower, the maintained fork. containrrr/watchtower
@@ -50,6 +51,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       harbor.kind: internal
+      # ADR 24: platform. This is the container that looped 637 times unseen.
+      harbor.platform: "true"
       harbor.description: "Watchtower, nightly image updates"
 
 volumes:

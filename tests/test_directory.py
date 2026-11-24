@@ -1,20 +1,27 @@
+from dataclasses import replace
+
 from harbor_console import directory
 from harbor_console.directory import (
     BYPASSES_PROXY,
+    CRASH_LOOPING,
     KIND_EDGE,
     KIND_HTTP,
     KIND_INTERNAL,
     KIND_TCP,
     ROUTE_ERROR,
     STATE_DOWN,
+    STATE_RESTARTING,
+    STATE_UNHEALTHY,
     STATE_UNKNOWN,
     UNDECLARED_CONTAINER,
     UNDECLARED_TAILNET_LISTENER,
+    UNHEALTHY,
     Finding,
     Row,
     _edge_row,
     _tcp_row,
     build_rows,
+    container_finding,
     declared_kind,
     find_findings,
     route_of,
@@ -517,3 +524,99 @@ def test_a_udp_socket_does_not_make_an_edge_row_listening():
 
 def test_a_udp_tailnet_listener_is_not_a_finding():
     assert find_findings((), (), (Listener(TAILNET, 1883, None, "udp"),), TAILNET) == ()
+
+
+LOOPING = Container(
+    "watchtower", (), {"harbor.kind": "internal"}, frozenset(),
+    status="restarting", restarts=637, exit_code=1,
+)
+
+
+def test_a_restarting_container_is_a_crash_looping_finding():
+    assert container_finding(LOOPING) == Finding(
+        CRASH_LOOPING, "container 'watchtower' is restarting (637 restarts, last exit 1)"
+    )
+
+
+def test_crash_looping_detail_stops_after_the_count_without_an_exit_code():
+    assert container_finding(replace(LOOPING, exit_code=None)) == Finding(
+        CRASH_LOOPING, "container 'watchtower' is restarting (637 restarts)"
+    )
+
+
+def test_an_unhealthy_container_is_an_unhealthy_finding():
+    sick = Container("gte-db-1", (), {"harbor.kind": "internal"}, frozenset(), health="unhealthy")
+
+    assert container_finding(sick) == Finding(
+        UNHEALTHY, "container 'gte-db-1' fails its own healthcheck"
+    )
+
+
+def test_a_well_container_has_no_state_finding():
+    for health in (None, "healthy", "starting"):
+        well = Container("gte-db-1", (), {"harbor.kind": "internal"}, frozenset(), health=health)
+        assert container_finding(well) is None
+
+
+def test_restarting_wins_over_unhealthy_in_the_finding():
+    both = replace(LOOPING, health="unhealthy")
+
+    assert container_finding(both).kind == CRASH_LOOPING
+
+
+def test_find_findings_reports_state_findings_for_declared_and_undeclared_containers():
+    undeclared = Container("stray", (), {}, frozenset(), status="restarting", restarts=2, exit_code=137)
+
+    findings = find_findings((LOOPING, undeclared), (), (), None)
+
+    kinds = [(f.kind, f.detail) for f in findings if f.kind == CRASH_LOOPING]
+    assert kinds == [
+        (CRASH_LOOPING, "container 'stray' is restarting (2 restarts, last exit 137)"),
+        (CRASH_LOOPING, "container 'watchtower' is restarting (637 restarts, last exit 1)"),
+    ]
+
+
+def test_state_findings_are_withheld_without_docker():
+    assert find_findings(DOCKER_UNAVAILABLE, (), (), None) == ()
+
+
+def test_a_restarting_internal_container_row_is_restarting():
+    rows = build_rows((LOOPING,), (), (), {}, probed=True)
+
+    assert rows == (Row("watchtower", KIND_INTERNAL, "", "watchtower", "", STATE_RESTARTING),)
+
+
+def test_a_restarting_http_container_row_is_restarting_even_when_traefik_reports_it_live():
+    looping = replace(http_container(), status="restarting", restarts=5, exit_code=1)
+    router = Router("parksmart@docker", HOST, "parksmart", True, None)
+
+    rows = build_rows((looping,), (router,), (), {"parksmart": UP}, probed=True)
+
+    assert rows[0].state == STATE_RESTARTING
+
+
+def test_an_unhealthy_tcp_container_row_is_unhealthy():
+    mqtt = Container(
+        "ice-colder-mqtt", (("0.0.0.0", 1883),), {"harbor.kind": "tcp", "harbor.port": "1883"},
+        frozenset(), health="unhealthy",
+    )
+
+    rows = build_rows((mqtt,), (), (Listener("0.0.0.0", 1883, None),), {}, probed=True)
+
+    assert rows[0].state == STATE_UNHEALTHY
+
+
+def test_restarting_beats_unhealthy_in_the_row():
+    both = replace(LOOPING, health="unhealthy")
+
+    rows = build_rows((both,), (), (), {}, probed=True)
+
+    assert rows[0].state == STATE_RESTARTING
+
+
+def test_starting_health_changes_no_row():
+    warming = Container("gte-db-1", (), {"harbor.kind": "internal"}, frozenset(), health="starting")
+
+    rows = build_rows((warming,), (), (), {}, probed=True)
+
+    assert rows[0].state == "INTERNAL"

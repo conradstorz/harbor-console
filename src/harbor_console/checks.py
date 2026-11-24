@@ -6,11 +6,14 @@ rule is testable with plain values. Nothing here collects or renders.
 Platform only. A single declared service being down is a row-level DOWN in
 the directory, never a check here: a banner that is red half the year
 because of one dev container stops meaning anything, and the next edge
-outage hides behind it. The checks cover the three outages that have
-already happened -- Traefik's Docker provider dying under a Docker upgrade,
+outage hides behind it. The one exception is a container this repository
+deploys itself, which declares `harbor.platform=true` (ADR 24): the rows
+depend on those. The checks cover the four outages that have already
+happened -- Traefik's Docker provider dying under a Docker upgrade,
 Traefik's default route landing on the wrong network (ADR 17), a reboot
-moving Traefik off the address the firewall rule named (ADR 19) -- and the
-one that has not yet: a certificate renewal failing silently.
+moving Traefik off the address the firewall rule named (ADR 19), a hosted
+container crash-looping for a fortnight unseen (watchtower, 2026-10-21) --
+and the one that has not yet: a certificate renewal failing silently.
 
 `unknown` never trips the banner. A check whose evidence is missing says so
 and stays out of the verdict, the same rule the findings follow (ADR 18):
@@ -24,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from harbor_console.certificate import Certificate, CertificateUnavailable
-from harbor_console.directory import KIND_HTTP, declared_kind, route_url
+from harbor_console.directory import KIND_HTTP, container_finding, declared_kind, route_url
 from harbor_console.docker import Container
 from harbor_console.listening import ANY_ADDR, PROTO_TCP, Listener
 from harbor_console.probe import Health
@@ -41,6 +44,12 @@ CHECK_OWN_ROUTE = "own-route"
 CHECK_CERTIFICATE = "certificate"
 CHECK_EDGE_LISTENING = "edge-listening"
 CHECK_PROBER_FRESH = "prober-fresh"
+CHECK_PLATFORM_CONTAINERS = "platform-containers"
+
+#: A container this repository deploys itself declares so with this label
+#: (ADR 24). Traefik, Portainer and Watchtower carry it in deploy/. Nothing
+#: infers it from compose project names.
+LABEL_PLATFORM = "harbor.platform"
 
 #: The page's own route through Traefik, from `deploy/traefik/dynamic/
 #: harbor.yml.in`. Probing it is the one thing the page does not do today,
@@ -114,7 +123,7 @@ def run_checks(
     listeners_available: bool,
     tailnet_address: str | None,
 ) -> tuple[Check, ...]:
-    """Judge the platform from one cycle's evidence. Fixed order, six checks.
+    """Judge the platform from one cycle's evidence. Fixed order, seven checks.
 
     Plain values rather than a `Snapshot`, so this module never imports the
     one that carries its result. `own_route` and `certificate` are `None`
@@ -128,6 +137,7 @@ def run_checks(
         _own_route(own_route),
         _certificate(certificate, now, tailnet_address),
         _edge_listening(listeners, listeners_available, tailnet_address),
+        _platform_containers(docker_available, containers),
     )
 
 
@@ -143,6 +153,31 @@ def _traefik_api(available: bool) -> Check:
             CHECK_TRAEFIK_API, STATE_FAILED, "Traefik's API at 127.0.0.1:8081 could not be read"
         )
     return Check(CHECK_TRAEFIK_API, STATE_OK, "Traefik's API answered")
+
+
+def _platform_containers(available: bool, containers: Sequence[Container]) -> Check:
+    """The repository's own containers are platform (ADR 24).
+
+    A declared project service being down is a row, never a check (ADR 21);
+    the three containers this repository deploys are the machinery the rows
+    depend on, and when one of them loops nothing else on the page says so.
+    A platform container that exited with no restart policy is absent from
+    `docker ps` and this check cannot see it; all three carry a policy.
+    """
+    if not available:
+        return Check(CHECK_PLATFORM_CONTAINERS, STATE_UNKNOWN, "Docker could not be read")
+    platform = sorted(
+        (c for c in containers if c.labels.get(LABEL_PLATFORM) == "true"),
+        key=lambda c: c.name,
+    )
+    for container in platform:
+        finding = container_finding(container)
+        if finding is not None:
+            return Check(CHECK_PLATFORM_CONTAINERS, STATE_FAILED, finding.detail)
+    if not platform:
+        return Check(CHECK_PLATFORM_CONTAINERS, STATE_OK, f"no container declares {LABEL_PLATFORM}")
+    noun = "container" if len(platform) == 1 else "containers"
+    return Check(CHECK_PLATFORM_CONTAINERS, STATE_OK, f"{len(platform)} platform {noun} running")
 
 
 def _docker_provider(
